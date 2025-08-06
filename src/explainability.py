@@ -27,8 +27,9 @@ from .losses import build_optimizer
 
 ###  ###
 
-### Explainability models ###
+### LMAC ###
 
+### Explainability models ###
 
 def listenable_wav_from_n_octaveband(my_3octave_spectrogram_dB, track_name, sampling_rate):
     # Assume you have 'wav_data' and 'sampling_rate' from your original context
@@ -94,9 +95,6 @@ def listenable_wav_from_n_octaveband(my_3octave_spectrogram_dB, track_name, samp
     librosa.output.write(os.path.join(basedir, reconstructed_name), reconstructed_audio_approx, sampling_rate)
 
     print(f"Shape of approximated reconstructed audio: {reconstructed_audio_approx.shape}")
-
-import torch
-import torch.nn as nn
 
 # --- PLACEHOLDER PER VARIABILI GLOBALI O DA PASSARE ---
 # Queste variabili devono essere definite nel tuo ambiente prima di usare le classi.

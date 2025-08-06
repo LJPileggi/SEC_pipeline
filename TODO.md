@@ -13,12 +13,26 @@
 - have to create specific subfolders to basedir_preprocessed
       to account for different octave bands embeddings
 
+
+
 ### 06/08/2025
 
 ### /src/models.py
 
 # CLAP_initializer
 - configure CLAP to multi-GPU training
+
+
+
+### /src/training.py
+
+# Embedding generation
+- configure embedding generation for multi-GPU run
+
+# select_optim_mainloop
+- add saving of results in csv format
+
+
 
 ### src/explainability.py
 

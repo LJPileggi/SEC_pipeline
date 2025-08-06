@@ -29,6 +29,7 @@ center_freqs = np.array([6.30e+00, 8.00e+00, 1.00e+01, 1.25e+01, 1.60e+01, 2.00e
                             4.00e+02, 5.00e+02, 6.30e+02, 8.00e+02, 1.00e+03, 1.25e+03,
                             1.60e+03, 2.00e+03, 2.50e+03, 3.15e+03, 4.00e+03, 5.00e+03,
                             6.30e+03, 8.00e+03, 1.00e+04, 1.25e+04, 1.60e+04, 2.00e+04])
+valid_cut_secs = list(range(10)) + [15, 20, 30]
                             
 ### Directory organisation ###
 # cineca base directory     
