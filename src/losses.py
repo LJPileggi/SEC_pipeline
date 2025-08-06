@@ -56,3 +56,47 @@ def get_scores(model, test_dataloader, train_dataloader=None):
         return ts_loss, ts_accuracy, cm
     print(f'TRAIN => accuracy: {tr_accuracy} - loss: {tr_loss}')
     return tr_loss, ts_loss, tr_accuracy, ts_accuracy, cm
+
+class RR:
+    """
+    Ridge regression loss class.
+    """
+    def __init__(self, model, reg=0):
+        self.A = None
+        self.B = None
+        self.reg = reg
+        self.model = model
+
+    def __call__(self, x, y):
+        A = y.T @ x
+        B = x.T @ x
+        if self.A is None:
+            self.A = A
+            self.B = B
+        else:
+            self.A += A
+            self.B += B
+
+    def set_readout(self):
+        I = torch.eye(self.B.shape[0]).to(self.B.device)
+        weights = self.A @ torch.linalg.pinv(self.B + (self.reg * I))
+        self.model.classifier.weight.data = torch.tensor(weights).to(self.B.device)
+
+def build_optimizer(config, model):
+    """
+    Optimiser builder for torch modules.
+    
+    args:
+     - config: dictionary of optimiser configuration;
+     - model: torch model.
+
+    returns:
+     - torch optimiser;
+     - with_epochs: whether optimiser admits multiple epochs or not.
+    """
+    if config['builder'] == 'RR':
+        return RR(model, config['reg']), False
+    hps = {k: v for k, v in config.items() if k != 'builder'}
+    optim_builder = getattr(torch.optim, config['builder'])
+    return optim_builder(model.parameters(), **hps), True
+

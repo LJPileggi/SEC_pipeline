@@ -2,11 +2,16 @@ import os
 import json
 
 ### TODOs list: ###
+
+### Directory organisation ###
 # change the device to cineca GPUs
+
+### Directory organisation ###
 # insert cineca base directory
 # change basedir_preprocessed dinamically according to audio format to embed;
 # have to create specific subfolders to basedir_preprocessed
 #     to account for different octave bands embeddings
+
 ###  ###
 
 ### Model and sampling parameters ###
@@ -25,7 +30,7 @@ center_freqs = np.array([6.30e+00, 8.00e+00, 1.00e+01, 1.25e+01, 1.60e+01, 2.00e
                             1.60e+03, 2.00e+03, 2.50e+03, 3.15e+03, 4.00e+03, 5.00e+03,
                             6.30e+03, 8.00e+03, 1.00e+04, 1.25e+04, 1.60e+04, 2.00e+04])
                             
-### Directory organisation ###      
+### Directory organisation ###
 # cineca base directory     
 # TODO: insert cineca base directory
 basedir = ''
