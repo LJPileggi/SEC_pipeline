@@ -10,8 +10,9 @@ from tqdm import tqdm
 import random
 import sys
 
-from .utils import patience, epochs, batch_size, device, save_log_every, \
-                        sampling_rate, ref, center_freqs, valid_cut_secs
+# from .utils import patience, epochs, batch_size, device, save_log_every, \
+#                         sampling_rate, ref, center_freqs, valid_cut_secs
+from .utils import get_config_from_yaml
 from .utils import basedir, basedir_raw, basedir_preprocessed, results_validation_filepath_project
 from .utils import extract_all_files_from_dir, gen_log, read_log, delete_log
 from .models import CLAP_initializer, spectrogram_n_octaveband_generator
@@ -19,13 +20,18 @@ from .losses import *
 
 ### TODOs list: ###
 
+### Set configuration ###
+# change configuration file dynamically
+
 ### Embedding generation ###
 # configure embedding generation for multi-GPU run
 
-### select_optim_mainloop ###
-# add saving of results in csv format
-
 ###  ###
+
+
+# Set configuration
+# TODO: change configuration file dynamically
+get_config_from_yaml("config0.yaml")
 
 
 ### Embedding generation ###

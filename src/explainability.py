@@ -7,11 +7,15 @@ import torch.nn.functional as F
 import librosa
 import librosa.display # Often useful for visualization
 
-from .utils import epochs, batch_size, device, sampling_rate, ref, center_freqs
+# from .utils import epochs, batch_size, device, sampling_rate, ref, center_freqs
+from .utils import get_config_from_yaml
 from .models import CLAP_initializer, spectrogram_n_octaveband_generator, FinetunedModel
 from .losses import build_optimizer
 
 ### TODOs list: ###
+
+### Set configuration ###
+# change configuration file dynamically
 
 ### listenable_wav_from_n_octaveband ###
 # set correct directory to save explanations from listenable_wav_from_n_octaveband
@@ -28,6 +32,12 @@ from .losses import build_optimizer
 ###  ###
 
 ### LMAC ###
+
+
+# Set configuration
+# TODO: change configuration file dynamically
+get_config_from_yaml("config0.yaml")
+
 
 ### Explainability models ###
 

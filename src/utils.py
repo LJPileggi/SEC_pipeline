@@ -1,10 +1,9 @@
 import os
 import json
+import yaml
+import numpy as np
 
 ### TODOs list: ###
-
-### Directory organisation ###
-# change the device to cineca GPUs
 
 ### Directory organisation ###
 # insert cineca base directory
@@ -53,7 +52,41 @@ model_filepath = os.path.join(results_filepath_project, 'finetuned_model')
 for dir in [results_filepath_project, results_validation_filepath_project]:
     if not os.path.exists(dir):
         os.mkdir(dir)
-        
+
+
+### Get model, training and spectrogram configuration from yaml ###
+
+def get_config_from_yaml(config_file="config0.yaml"):
+    """
+    Loads configuration from yaml file and yields
+    variables to use in desired namespace.
+
+    args:
+     - config_file: name of config file, to be attached to its relative path.
+    """
+    config_path = os.path.join('..', 'configs', config_file)
+    with open(config_path, 'r') as f:
+        configs = yaml.load(f, Loader=yaml.SafeLoader)
+    global patience
+    global epochs
+    global batch_size
+    global device
+    global save_log_every
+    global sampling_rate
+    global ref
+    global center_freqs
+    global valid_cut_secs
+    patience = data["patience"]
+    epochs = data["epochs"]
+    batch_size = data["batch_size"]
+    device = data["device"]
+    save_log_every = data["save_log_every"]
+    sampling_rate = data["sampling_rate"]
+    ref = data["ref"]
+    center_freqs = data["center_freqs"]
+    valid_cut_secs = data["valid_cut_secs"]
+
+   
 ### Files and directory handling functions ###
 
 def extract_all_files_from_dir(source_class_dir, extension='.wav'):
