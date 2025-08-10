@@ -18,26 +18,6 @@ from .utils import extract_all_files_from_dir, gen_log, read_log, delete_log
 from .models import CLAP_initializer, spectrogram_n_octaveband_generator
 from .losses import *
 
-### TODOs list: ###
-
-### Set configuration ###
-# change configuration file dynamically
-
-### Embedding generation ###
-### split_audio_tracks ###
-# configure embedding generation for multi-GPU run
-# rewrite to support different audio formats (wav, mp3, flac etc.)
-
-### get_embeddings_for_n_octaveband ###
-# pass different audio formats (wav, mp3, flac etc.) to split_audio_tracks
-
-###  ###
-
-
-# Set configuration
-# TODO: change configuration file dynamically
-get_config_from_yaml("config0.yaml")
-
 
 ### Embedding generation ###
 # TODO: configure embedding generation for multi-GPU run

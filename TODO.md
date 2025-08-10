@@ -18,7 +18,6 @@
 --------------------------------------------------------------------------
 ```diff
 + /src/training.py ; Embedding generation ; 06/08/2025 - pending ; configure embedding generation for multi-GPU run
-- /src/training.py ; Set configuration ; 10/08/2025 - pending ; change configuration file dynamically
 - /src/training.py ; Embedding generation -- split_audio_tracks ; 10/08/2025 - pending ; configure embedding generation for
 -    multi-GPU run
 - /src/training.py ; Embedding generation -- split_audio_tracks ; 10/08/2025 - pending ; rewrite to support different audio
@@ -56,3 +55,4 @@
 ### Resolved
 
 - /src/training.py ; select_optim_mainloop ; 06/08/2025 - 10/08/2025 ; add saving of results in csv format
+- /src/training.py ; Set configuration ; 10/08/2025 - 10/08/2025 ; change configuration file dynamically
