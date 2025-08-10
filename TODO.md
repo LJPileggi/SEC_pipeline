@@ -1,36 +1,30 @@
-```diff
-+ text in green
-@ text in yellow
-! text in red
-!! text in brown
-- text in black
-```
 
 # TODO file
 
 ### Pending
 
+```diff
 + /scr/utils.py ; Directory organisation ; 05/08/2025 - pending ; insert cineca base directory
 + /scr/utils.py ; Directory organisation ; 05/08/2025 - pending ; change basedir_preprocessed
 +    dinamically according to audio format to embed
-@ /scr/utils.py ; Directory organisation ; 05/08/2025 - pending ; have to create specific subfolders to basedir_preprocessed
+! /scr/utils.py ; Directory organisation ; 05/08/2025 - pending ; have to create specific subfolders to basedir_preprocessed
     to account for different octave bands embeddings
 --------------------------------------------------------------------------
 + /src/models.py ; CLAP_initializer ; 06/08/2025 - pending ; configure CLAP to multi-GPU training
-@ /src/models.py ; Set configuration ; 10/08/2025 - pending ; change configuration file dynamically
+- /src/models.py ; Set configuration ; 10/08/2025 - pending ; change configuration file dynamically
 --------------------------------------------------------------------------
 + /src/training.py ; Embedding generation ; 06/08/2025 - pending ; configure embedding generation for multi-GPU run
-@ /src/training.py ; Set configuration ; 10/08/2025 - pending ; change configuration file dynamically
-! /src/training.py ; Embedding generation -- split_audio_tracks ; 10/08/2025 - pending ; configure embedding generation for
+- /src/training.py ; Set configuration ; 10/08/2025 - pending ; change configuration file dynamically
+- /src/training.py ; Embedding generation -- split_audio_tracks ; 10/08/2025 - pending ; configure embedding generation for
     multi-GPU run
-! /src/training.py ; Embedding generation -- split_audio_tracks ; 10/08/2025 - pending ; rewrite to support different audio
+- /src/training.py ; Embedding generation -- split_audio_tracks ; 10/08/2025 - pending ; rewrite to support different audio
     formats (wav, mp3, flac etc.)
-! /src/training.py ; Embedding generation -- get_embeddings_for_n_octaveband ; 10/08/2025 - pending ; pass different audio
+- /src/training.py ; Embedding generation -- get_embeddings_for_n_octaveband ; 10/08/2025 - pending ; pass different audio
     formats (wav, mp3, flac etc.) to split_audio_tracks
 --------------------------------------------------------------------------
-@ /src/explainability.py ; listenable_wav_from_n_octaveband ; 06/08/2025 - pending ; set correct directory to save explanations
+! /src/explainability.py ; listenable_wav_from_n_octaveband ; 06/08/2025 - pending ; set correct directory to save explanations
     from listenable_wav_from_n_octaveband
-@ /src/explainability.py ; LMAC -- generate_listenable_interpretation ; 06/08/2025 - pending ; set correct reconstructed audio
+! /src/explainability.py ; LMAC -- generate_listenable_interpretation ; 06/08/2025 - pending ; set correct reconstructed audio
     path for generate_listenable_interpretations
 + /src/explainability.py ; LMAC_explainer ; 06/08/2025 - pending ; finish fixing and honing the pipeline
 + /src/explainability.py ; LMAC_explainer ; 06/08/2025 - pending ; correctly set up multi-GPU mode
@@ -38,6 +32,7 @@
 + /src/explainability.py ; Set configuration ; 10/08/2025 - pending ; change configuration file dynamically
 --------------------------------------------------------------------------
 + /configs/config0.yaml ; ; 10/08/2025 - pending ; change the device to cineca GPUs
+```
 
 ### Resolved
 
