@@ -17,15 +17,9 @@
 ```
 --------------------------------------------------------------------------
 ```diff
-+ /src/training.py ; Embedding generation ; 06/08/2025 - pending ; configure embedding generation for multi-GPU run
-- /src/training.py ; Embedding generation -- split_audio_tracks ; 10/08/2025 - pending ; configure embedding generation for
+! /src/training.py ; Embedding generation -- split_audio_tracks ; 06/08/2025 - pending ; configure embedding generation for
 -    multi-GPU run
-- /src/training.py ; Embedding generation -- split_audio_tracks ; 10/08/2025 - pending ; rewrite to support different audio
--    formats (wav, mp3, flac etc.)
-- /src/training.py ; Embedding generation -- get_embeddings_for_n_octaveband ; 10/08/2025 - pending ; pass different audio
--    formats (wav, mp3, flac etc.) to split_audio_tracks
-- /src/training.py ; Finetuned classifier training -- select_optim_mainloop ; 10/08/2025 - pending ; pass
--    results_validation_filepath_project dynamically to account for different octaveband folders
++ /src/training.py ; Embedding generation -- split_audio_tracks ; 10/08/2025 - pending ; add support for other audio files like flac etc.
 ```
 --------------------------------------------------------------------------
 ```diff
@@ -42,17 +36,17 @@
 ```diff
 + /configs/config0.yaml ; ; 10/08/2025 - pending ; change the device to cineca GPUs
 ```
---------------------------------------------------------------------------
-```diff
-! /scripts/get_clap_embeddings.py ; main ; 10/08/2025 - pending ; add args.audio_format to get_embeddings_for_n_octaveband
-```
---------------------------------------------------------------------------
-```diff
-! /scripts/classifier_finetuning.py ; main ; 10/08/2025 - pending ; add args.validation_filepath argument to
-!    select_optim_mainloop
-```
 
 ### Resolved
 
 - /src/training.py ; select_optim_mainloop ; 06/08/2025 - 10/08/2025 ; add saving of results in csv format
 - /src/training.py ; Set configuration ; 10/08/2025 - 10/08/2025 ; change configuration file dynamically
+- /scripts/get_clap_embeddings.py ; main ; 10/08/2025 - pending ; add args.audio_format to get_embeddings_for_n_octaveband
+- /src/training.py ; Embedding generation -- split_audio_tracks ; 10/08/2025 - 10/08/2025 ; rewrite to support different audio
+-    formats (wav, mp3, flac etc.)
+- /src/training.py ; Embedding generation -- get_embeddings_for_n_octaveband ; 10/08/2025 - 10/08/2025 ; pass different audio
+-    formats (wav, mp3, flac etc.) to split_audio_tracks
+- /src/training.py ; Finetuned classifier training -- select_optim_mainloop ; 10/08/2025 - 10/08/2025 ; pass
+-    results_validation_filepath_project dynamically to account for different octaveband folders
+- /scripts/classifier_finetuning.py ; main ; 10/08/2025 - 10/08/2025 ; add args.validation_filepath argument to
+-    select_optim_mainloop

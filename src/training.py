@@ -1,11 +1,12 @@
 import os
-import librosa
 import math
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import torch
 import pydub
+import librosa
+import soundfile as sf
 from tqdm import tqdm
 import random
 import sys
@@ -13,7 +14,7 @@ import sys
 # from .utils import patience, epochs, batch_size, device, save_log_every, \
 #                         sampling_rate, ref, center_freqs, valid_cut_secs
 from .utils import get_config_from_yaml
-from .utils import basedir, basedir_raw, basedir_preprocessed, results_validation_filepath_project
+from .utils import basedir_preprocessed # basedir, basedir_raw, results_validation_filepath_project
 from .utils import extract_all_files_from_dir, gen_log, read_log, delete_log
 from .models import CLAP_initializer, spectrogram_n_octaveband_generator
 from .losses import *
@@ -21,9 +22,10 @@ from .losses import *
 
 ### Embedding generation ###
 # TODO: configure embedding generation for multi-GPU run
-# TODO: rewrite to support different audio formats (wav, mp3, flac etc.)
+# TODO: add support for other audio files like flac etc.
 
 def split_audio_tracks(
+    audio_format: str,
     root_source: str,
     root_target: str,
     clap_model: CLAP,
@@ -40,6 +42,7 @@ def split_audio_tracks(
     con conteggi esatti, supportando la ripresa da un log.
 
     Args:
+        audio_format (str): Formato dell'audio da analizzare.
         root_source (str): Percorso della directory radice contenente le classi audio.
         root_target (str): Percorso della directory dove verranno salvati audio ed embedding elaborati.
         clap_model (CLAP): Un'istanza del modello CLAP per l'elaborazione audio.
@@ -117,7 +120,7 @@ def split_audio_tracks(
                 dir_trvlts_paths_for_class.append(div_path)
 
             # Ottieni tutti i file audio per la classe corrente
-            audio_fp_list = extract_all_files_from_dir(source_class_dir, extension='.mp3') # O '.wav'
+            audio_fp_list = extract_all_files_from_dir(source_class_dir, extension=audio_format) # O '.wav'
             if not audio_fp_list:
                 # print(f"Nessun file audio trovato in {source_class_dir}. Salto.")
                 continue
@@ -191,7 +194,7 @@ def split_audio_tracks(
                     base_name = os.path.splitext(audio_fp_name)[0].replace("/", "_")
                     new_fp_base = f'{base_name}_{cut_secs}s_({b}_{round_})' # Aggiunto round_ al nome del file
                     trg_audio_path = os.path.join(dir_trvlts_paths_for_class[current_division_idx_for_this_cut],
-                                                                                    f'{new_fp_base}.mp3')
+                                                                                    f'{new_fp_base}.{audio_format}')
                     trg_pt_path = os.path.join(dir_trvlts_paths_for_class[current_division_idx_for_this_cut],
                                                                                     f'{new_fp_base}.pt')
                     trg_spec3o_path = os.path.join(dir_trvlts_paths_for_class[current_division_idx_for_this_cut],
@@ -213,13 +216,22 @@ def split_audio_tracks(
                         new_audio = (1 - noise_perc) * cut_data + noise_perc * noise
 
                         # Esporta il segmento audio temporaneamente
-                        audio_segment = pydub.AudioSegment(
-                            new_audio.astype("float32").tobytes(),
-                            frame_rate=sr,
-                            sample_width=4, # float32 è 4 byte
-                            channels=1
-                        )
-                        audio_segment.export(trg_audio_path, format="mp3", bitrate="128k")
+                        if audio_format == "mp3":
+                            audio_segment = pydub.AudioSegment(
+                                new_audio.astype("float32").tobytes(),
+                                frame_rate=sr,
+                                sample_width=4, # float32 è 4 byte
+                                channels=1
+                            )
+                            audio_segment.export(trg_audio_path, format="mp3", bitrate="128k")
+                        elif audio_format == "wav":
+                            sf.write(trg_path, new_audio, sr, subtype='PCM_24')
+                        elif audio_format == "flac":
+                            raise NotImplementedError(f"NotImplementedError: {audio_format} audio format "
+                                                      f"not yet implemented.")
+                        else:
+                            raise NotImplementedError(f"NotImplementedError: {audio_format} audio format "
+                                                      f"not yet implemented.")
 
                         # Genera lo spettrogramma
                         spec3o = spectrogram_3octaveband_generator(new_audio, sr, integration_seconds=0.1)
@@ -284,8 +296,7 @@ def split_audio_tracks(
 
     return current_counts
 
-# TODO: pass different audio formats (wav, mp3, flac etc.) to split_audio_tracks
-def get_embeddings_for_n_octaveband(basedir_n_octave):
+def get_embeddings_for_n_octaveband(basedir_raw, n_octave_dir, audio_format):
     clap_model, _, _ = CLAP_initializer()
 
     # Definisci le dimensioni delle divisioni desiderate
@@ -316,7 +327,7 @@ def get_embeddings_for_n_octaveband(basedir_n_octave):
 
     # Esempio di configurazione fittizia per la dimostrazione:
     # basedir_raw = './dummy_raw_audio'
-    # basedir_n_octave = './dummy_preprocessed_embeddings'
+    # n_octave_dir = './dummy_preprocessed_embeddings'
     # os.makedirs(os.path.join(basedir_raw, 'class_1'), exist_ok=True)
     # os.makedirs(os.path.join(basedir_raw, 'class_2'), exist_ok=True)
     # # Crea alcuni file audio fittizi (file vuoti, solo per la simulazione del percorso)
@@ -331,13 +342,15 @@ def get_embeddings_for_n_octaveband(basedir_n_octave):
     for cut_secs in range(start_cut_secs, 31): # Esegui per i valori di cut_secs desiderati
         if cut_secs in valid_cut_secs:
             print(f'\nAVVIO TAGLIO SUONI CON SECONDI {cut_secs}')
-            new_dir = os.path.join(basedir_n_octave, f'{cut_secs}_secs')
+            # new_dir composta secondo formato audio e n octave
+            new_dir = os.path.join(basedir_preprocessed, audio_format, n_octave_dir, f'{cut_secs}_secs')
             if not os.path.exists(new_dir):
                 os.makedirs(new_dir)
 
             # Se si riprende per lo stesso cut_secs, usa i parametri loggati
             if cut_secs == start_cut_secs and 'pars_split' in locals():
                 split_audio_tracks(
+                    audio_format=audio_format
                     root_source=basedir_raw,
                     root_target=new_dir,
                     clap_model=clap_model,
@@ -351,6 +364,7 @@ def get_embeddings_for_n_octaveband(basedir_n_octave):
             else:
                 # Per i nuovi valori di cut_secs, avvia da zero
                 split_audio_tracks(
+                    audio_format=audio_format
                     root_source=basedir_raw,
                     root_target=new_dir,
                     clap_model=clap_model,
@@ -422,7 +436,7 @@ def train(tr_set, es_set, config, epochs, callback=None):
     model.eval()
     return model
 
-def select_optim(configs, dataloaders, epochs=10, patience=0):
+def select_optim(configs, validation_filepath, dataloaders, epochs=10, patience=0):
     """
     Model selection pipeline to get best configuration for a given n-octaveband
     dataset. The hyperparameters explored are cut_secs, optimiser and learning rate
@@ -460,19 +474,20 @@ def select_optim(configs, dataloaders, epochs=10, patience=0):
 
             plt.tight_layout()
 
-            plt.savefig(os.path.join(results_validation_filepath_project, f'{k}_{config_label}.png'))
+            plt.savefig(os.path.join(validation_filepath, f'{k}_{config_label}.png'))
 
             results[k].append(dict(metrics=dict(type_learning='finetuning', accuracy=vl_accuracy,
                                                 loss=vl_loss, cm=cm.tolist()), hyperparams=config))
     return results
 
-# TODO: pass results_validation_filepath_project dynamically to account for different octaveband folders
-def select_optim_mainloop():
+def select_optim_mainloop(validation_filepath):
     """
     Runs the model selection loop with desired hyperparameters.
-    Dumps results into json file
+    Dumps results into json file.
+
+    args:
+     - validation_filepath: path where to store validation results.
     """
-    # TODO: add saving of results in csv format
     ms_results = select_optim([
             *[
                 {
@@ -491,13 +506,13 @@ def select_optim_mainloop():
                 } for builder in ['SGD', 'Adam'] for lr in [0.1, 0.01, 0.001, 0.0001]
             ],
             ],
-            build_model,
+            validation_filepath,
             dataloaders,
             epochs=epochs,
             patience=patience,
     )
 
-    json.dump(ms_results, open(os.path.join(results_validation_filepath_project, 'validation_ms_results.json'), 'w'))
+    json.dump(ms_results, open(os.path.join(validation_filepath, 'validation_ms_results.json'), 'w'))
 
     for k, results in ms_results.items():
         results.sort(key=lambda x: x['metrics']['accuracy'], reverse=True)
@@ -516,7 +531,7 @@ def select_optim_mainloop():
 
     df = df.sort_values('accuracy', ascending=False)
 
-    df.to_csv(os.path.join(results_validation_filepath_project, 'validation_ms_results.csv'))
+    df.to_csv(os.path.join(validation_filepath, 'validation_ms_results.csv'))
 
 
     for k, results in ms_results.items():

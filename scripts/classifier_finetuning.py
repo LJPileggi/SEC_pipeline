@@ -13,11 +13,10 @@ def parsing():
     args = parser.parse_args()
     return args
 
-# TODO: add args.validation_filepath argument to select_optim_mainloop
 def main():
     args = parsing()
     get_config_from_yaml(args.config_file)
-    select_optim_mainloop()
+    select_optim_mainloop(validation_filepath)
 
 if __name__ == "__main__":
     main()
