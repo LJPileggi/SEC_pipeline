@@ -24,7 +24,12 @@ from .losses import *
 # change configuration file dynamically
 
 ### Embedding generation ###
+### split_audio_tracks ###
 # configure embedding generation for multi-GPU run
+# rewrite to support different audio formats (wav, mp3, flac etc.)
+
+### get_embeddings_for_n_octaveband ###
+# pass different audio formats (wav, mp3, flac etc.) to split_audio_tracks
 
 ###  ###
 
@@ -36,6 +41,7 @@ get_config_from_yaml("config0.yaml")
 
 ### Embedding generation ###
 # TODO: configure embedding generation for multi-GPU run
+# TODO: rewrite to support different audio formats (wav, mp3, flac etc.)
 
 def split_audio_tracks(
     root_source: str,
@@ -298,6 +304,7 @@ def split_audio_tracks(
 
     return current_counts
 
+# TODO: pass different audio formats (wav, mp3, flac etc.) to split_audio_tracks
 def get_embeddings_for_n_octaveband(basedir_n_octave):
     clap_model, _, _ = CLAP_initializer()
 
@@ -479,6 +486,7 @@ def select_optim(configs, dataloaders, epochs=10, patience=0):
                                                 loss=vl_loss, cm=cm.tolist()), hyperparams=config))
     return results
 
+# TODO: pass results_validation_filepath_project dynamically to account for different octaveband folders
 def select_optim_mainloop():
     """
     Runs the model selection loop with desired hyperparameters.
