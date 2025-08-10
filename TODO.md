@@ -47,7 +47,6 @@
 ```diff
 ! /scripts/get_clap_embeddings.py ; main ; 10/08/2025 - pending ; add args.audio_format to get_embeddings_for_n_octaveband
 ```
-```
 --------------------------------------------------------------------------
 ```diff
 ! /scripts/classifier_finetuning.py ; main ; 10/08/2025 - pending ; add args.validation_filepath argument to

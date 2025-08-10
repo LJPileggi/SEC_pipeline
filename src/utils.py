@@ -83,7 +83,7 @@ def get_config_from_yaml(config_file="config0.yaml"):
     save_log_every = data["save_log_every"]
     sampling_rate = data["sampling_rate"]
     ref = data["ref"]
-    center_freqs = data["center_freqs"]
+    center_freqs = np.array(data["center_freqs"])
     valid_cut_secs = data["valid_cut_secs"]
 
    
