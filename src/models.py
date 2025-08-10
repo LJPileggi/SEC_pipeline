@@ -4,26 +4,11 @@ import scipy
 from msclap import CLAP
 
 # from .utils import device, center_freqs
-from .utils import get_config_from_yaml
-
-### TODOs list: ###
-
-### Set configuration ###
-# change configuration file dynamically
-
-### CLAP_initializer ###
-# configure CLAP to multi-GPU training
-
-###  ###
-
-# Set configuration
-# TODO: change configuration file dynamically
-get_config_from_yaml("config0.yaml")
 
 
 ### CLAP models and classifiers ###
 
-def CLAP_initializer():
+def CLAP_initializer(device='cpu'):
     """
     CLAP model initialiser
     

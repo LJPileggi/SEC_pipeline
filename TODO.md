@@ -13,12 +13,11 @@
 --------------------------------------------------------------------------
 ```diff
 + /src/models.py ; CLAP_initializer ; 06/08/2025 - pending ; configure CLAP to multi-GPU training
-- /src/models.py ; Set configuration ; 10/08/2025 - pending ; change configuration file dynamically
 ```
 --------------------------------------------------------------------------
 ```diff
 ! /src/training.py ; Embedding generation -- split_audio_tracks ; 06/08/2025 - pending ; configure embedding generation for
--    multi-GPU run
+!    multi-GPU run
 + /src/training.py ; Embedding generation -- split_audio_tracks ; 10/08/2025 - pending ; add support for other audio files like flac etc.
 ```
 --------------------------------------------------------------------------
@@ -50,3 +49,4 @@
 -    results_validation_filepath_project dynamically to account for different octaveband folders
 - /scripts/classifier_finetuning.py ; main ; 10/08/2025 - 10/08/2025 ; add args.validation_filepath argument to
 -    select_optim_mainloop
+- /src/models.py ; Set configuration ; 10/08/2025 - 10/08/2025 ; change configuration file dynamically

@@ -26,6 +26,9 @@ from .losses import *
 
 def split_audio_tracks(
     audio_format: str,
+    sampling_rate: str,
+    center_freqs: np.array,
+    ref: float,
     root_source: str,
     root_target: str,
     clap_model: CLAP,
@@ -43,6 +46,9 @@ def split_audio_tracks(
 
     Args:
         audio_format (str): Formato dell'audio da analizzare.
+        sampling_rate: sampling rate da config file.
+        center_freqs: frequenze centrali delle bande d'ottava.
+        ref: valore di ref da config file.
         root_source (str): Percorso della directory radice contenente le classi audio.
         root_target (str): Percorso della directory dove verranno salvati audio ed embedding elaborati.
         clap_model (CLAP): Un'istanza del modello CLAP per l'elaborazione audio.
@@ -148,7 +154,7 @@ def split_audio_tracks(
 
                 filepath = os.path.join(source_class_dir, audio_fp_name)
                 try:
-                    data, sr = librosa.load(filepath, sr=None) # Carica con SR originale
+                    data, sr = librosa.load(filepath, sr=sampling_rate) # Carica con SR originale
                     target_sr = 52100
                     if sr != target_sr:
                         data = librosa.resample(data, orig_sr=sr, target_sr=target_sr)
@@ -234,7 +240,8 @@ def split_audio_tracks(
                                                       f"not yet implemented.")
 
                         # Genera lo spettrogramma
-                        spec3o = spectrogram_3octaveband_generator(new_audio, sr, integration_seconds=0.1)
+                        spec3o = spectrogram_n_octaveband_generator(new_audio, sr, integration_seconds=0.1,
+                                                                        center_freqs=center_freqs, ref=ref)
                         np.save(trg_spec3o_path, spec3o)
 
                         # Preprocessing audio per CLAP e generazione embedding
@@ -296,8 +303,8 @@ def split_audio_tracks(
 
     return current_counts
 
-def get_embeddings_for_n_octaveband(basedir_raw, n_octave_dir, audio_format):
-    clap_model, _, _ = CLAP_initializer()
+def get_embeddings_for_n_octaveband(basedir_raw, n_octave_dir, audio_format, sampling_rate, center_freqs, ref):
+    clap_model, _, _ = CLAP_initializer(device)
 
     # Definisci le dimensioni delle divisioni desiderate
     my_divisions = [('train', 500), ('val', 100), ('es', 100), ('test', 100)]
@@ -350,7 +357,10 @@ def get_embeddings_for_n_octaveband(basedir_raw, n_octave_dir, audio_format):
             # Se si riprende per lo stesso cut_secs, usa i parametri loggati
             if cut_secs == start_cut_secs and 'pars_split' in locals():
                 split_audio_tracks(
-                    audio_format=audio_format
+                    audio_format=audio_format,
+                    sampling_rate=sampling_rate,
+                    center_freqs=center_freqs,
+                    ref=ref,
                     root_source=basedir_raw,
                     root_target=new_dir,
                     clap_model=clap_model,
@@ -364,7 +374,10 @@ def get_embeddings_for_n_octaveband(basedir_raw, n_octave_dir, audio_format):
             else:
                 # Per i nuovi valori di cut_secs, avvia da zero
                 split_audio_tracks(
-                    audio_format=audio_format
+                    audio_format=audio_format,
+                    sampling_rate=sampling_rate,
+                    center_freqs=center_freqs,
+                    ref=ref,
                     root_source=basedir_raw,
                     root_target=new_dir,
                     clap_model=clap_model,
