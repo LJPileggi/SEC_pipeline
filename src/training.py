@@ -2,6 +2,7 @@ import os
 import librosa
 import math
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import torch
 import pydub
@@ -507,6 +508,22 @@ def select_optim_mainloop():
     for k, results in ms_results.items():
         results.sort(key=lambda x: x['metrics']['accuracy'], reverse=True)
     ms_results = {k: ms_results[k] for k in sorted(ms_results, key=lambda x: ms_results[x][0]['metrics']['accuracy'], reverse=True)}
+    
+    values = []
+    for k, v in ms_results.items():
+        for t in v:
+            values.append(dict(
+                time=k,
+                **(t['hyperparams']['optimizer'] if 'hyperparams' in t else {}),
+                **t['metrics'],
+            ))
+
+    df = pd.DataFrame(values)
+
+    df = df.sort_values('accuracy', ascending=False)
+
+    df.to_csv(os.path.join(results_validation_filepath_project, 'validation_ms_results.csv'))
+
 
     for k, results in ms_results.items():
         print(k, results)

@@ -1,5 +1,7 @@
 # TODO file
 
+# Pending
+
 # 05/08/2025
 
 # /scr/utils.py
@@ -29,9 +31,6 @@
 ### Embedding generation
 - configure embedding generation for multi-GPU run
 
-### select_optim_mainloop
-- add saving of results in csv format
-
 
 
 # src/explainability.py
@@ -47,3 +46,15 @@
 - finish fixing and honing the pipeline
 - correctly set up multi-GPU mode
 - finish writing comments
+
+------------------------------------------------------------------------------------
+
+# Resolved
+
+### select_optim_mainloop
+### 06/08/2025; solved 10/08/2025
+
+# /src/training.py
+
+### Embedding generation
+- add saving of results in csv format
