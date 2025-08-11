@@ -9,16 +9,24 @@
 +    dinamically according to audio format to embed
 ! /scr/utils.py ; Directory organisation ; 05/08/2025 - pending ; have to create specific subfolders to basedir_preprocessed
 !    to account for different octave bands embeddings
+! /src/utils.py ; Log file functions for embedding calculation ; 11/08/2025 - pending ; change log file name and path to
+!    allow for multiple loggings relative to different configurations (n octave bands, audio formats) to exist; save them
+!    in appropriate directory
++ /scr/utils.py ; Model and sampling parameters ; 11/08/2025 - delete old parameters already yielded by config.yaml
 ```
 --------------------------------------------------------------------------
 ```diff
-+ /src/models.py ; CLAP_initializer ; 06/08/2025 - pending ; configure CLAP to multi-GPU training
-```
---------------------------------------------------------------------------
-```diff
-! /src/training.py ; Embedding generation -- split_audio_tracks ; 06/08/2025 - pending ; configure embedding generation for
-!    multi-GPU run
 + /src/training.py ; Embedding generation -- split_audio_tracks ; 10/08/2025 - pending ; add support for other audio files like flac etc.
+```
+--------------------------------------------------------------------------
+```diff
++ /src/distributed_training.py ; Saving functions -- save_audio_segment ; 11/08/2025 - pending ; add support for other audio
++    files like flac etc.
++ /src/distributed_training.py ; Embedding generation -- split_audio_tracks ; 11/08/2025 - pending ; add support for
++    other audio files like flac etc.
+! /src/distributed_training.py ; main ; 11/08/2025 - pending ; put main in appropriate main file
+! /src/distributed_training.py ; main ; 11/08/2025 - pending ; change log file name and path to allow for multiple loggings
+!    relative to different configurations (n octave bands, audio formats) to exist; save them in appropriate directory
 ```
 --------------------------------------------------------------------------
 ```diff
@@ -50,3 +58,6 @@
 - /scripts/classifier_finetuning.py ; main ; 10/08/2025 - 10/08/2025 ; add args.validation_filepath argument to
 -    select_optim_mainloop
 - /src/models.py ; Set configuration ; 10/08/2025 - 10/08/2025 ; change configuration file dynamically
+! /src/training.py ; Embedding generation -- split_audio_tracks ; 06/08/2025 - 11/08/2025 ; configure embedding generation for
+!    multi-GPU run
++ /src/models.py ; CLAP_initializer ; 06/08/2025 - 11/08/2025 ; configure CLAP to multi-GPU training

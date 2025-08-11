@@ -17,7 +17,6 @@ def CLAP_initializer(device='cpu'):
      - audio_embedding: CLAP audio encoder;
      - original_parameters: CLAP original parameters.
     """
-    # TODO: configure CLAP to multi-GPU training
     clap_model = CLAP(version = '2023', use_cuda=False)
     original_parameters = clap_model.clap.audio_encoder.to('cpu').state_dict()
     clap_model.clap.audio_encoder = clap_model.clap.audio_encoder.to(device)

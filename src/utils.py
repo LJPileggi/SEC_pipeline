@@ -3,22 +3,13 @@ import json
 import yaml
 import numpy as np
 
-### TODOs list: ###
-
-### Directory organisation ###
-# insert cineca base directory
-# change basedir_preprocessed dinamically according to audio format to embed;
-# have to create specific subfolders to basedir_preprocessed
-#     to account for different octave bands embeddings
-
-###  ###
 
 ### Model and sampling parameters ###
+# TODO: delete old parameters already yielded by config.yaml
 patience = 10
 epochs = 100
 batch_size = 128
-# TODO: change the device to cineca GPUs
-device = 'cpu'
+device = 'gpu'
 save_log_every = 1000
 sampling_rate = 52100
 ref = 2e-5
@@ -117,6 +108,8 @@ def extract_all_files_from_dir(source_class_dir, extension='.wav'):
     return sorted(audio_fp_list)
 
 ### Log file functions for embedding calculation ###
+# TODO: change log file name and path to allow for multiple loggings relative to different configurations (n octave bands,
+#    audio formats) to exist; save them in appropriate directory
 
 def gen_log(cut_secs, ic, di, results, round_, finish_class, divisions_xc_sizes_names, noise_perc, seed):
     """
@@ -148,7 +141,7 @@ def gen_log(cut_secs, ic, di, results, round_, finish_class, divisions_xc_sizes_
         "ic" : ic,
         "di" : di,
         "results" : results,
-        "round" : round,
+        "round" : round_,
         "finish_class" : finish_class,
         "divisions_xc_sizes_names" : divisions_xc_sizes_names,
         "noise_perc" : noise_perc,

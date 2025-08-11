@@ -21,7 +21,6 @@ from .losses import *
 
 
 ### Embedding generation ###
-# TODO: configure embedding generation for multi-GPU run
 # TODO: add support for other audio files like flac etc.
 
 def split_audio_tracks(
@@ -102,7 +101,7 @@ def split_audio_tracks(
         print(f"\n--- Avvio del Round {round_} per la generazione degli embedding ---")
 
         # Mescola le classi per ogni round per ottenere nuove combinazioni/ordine
-        random.shuffle(all_classes_in_source)
+        # random.shuffle(all_classes_in_source)
 
         # Itera attraverso ogni classe (sottodirectory) nella sorgente
         for class_name in tqdm(all_classes_in_source, desc=f'Elaborazione Classi (Round {round_})'):
