@@ -1,11 +1,11 @@
 patience: 10
 epochs: 100
 batch_size: 128
-# TODO: change the device to cineca GPUs
-device: 'cpu'
 save_log_every: 1000
 sampling_rate: 52100
 ref: 2e-5
+noise_perc: 0.3
+seed: 1
 center_freqs:
  - 6.30e+00
  - 8.00e+00

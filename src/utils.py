@@ -22,24 +22,33 @@ center_freqs = np.array([6.30e+00, 8.00e+00, 1.00e+01, 1.25e+01, 1.60e+01, 2.00e
 valid_cut_secs = list(range(10)) + [15, 20, 30]
                             
 ### Directory organisation ###
+# TODO: implement a script that generates correct directory tree for project when installing the repo
+
 # cineca base directory     
 # TODO: insert cineca base directory
 basedir = ''
+
 # raw audio files directory
 basedir_raw = os.path.join(basedir, 'RAW_DATASET')
+
 # directory for audio embeddings
 # TODO: change basedir_preprocessed dinamically according to audio format to embed;
 # TODO: have to create specific subfolders to basedir_preprocessed
 #     to account for different octave bands embeddings
-basedir_preprocessed = os.path.join(basedir, 'PREPROCESSED_DATASET') 
+basedir_preprocessed = os.path.join(basedir, 'PREPROCESSED_DATASET')
+ 
 if not os.path.exists(basedir_preprocessed):
     os.mkdir(basedir_preprocessed)
+    
 # diretory with model selection results
 results_filepath_project = os.path.join(basedir, 'results')
+
 # validation results directory
 results_validation_filepath_project = os.path.join(results_filepath_project, 'validation')
+
 # directory for the saved model
 model_filepath = os.path.join(results_filepath_project, 'finetuned_model')
+
 for dir in [results_filepath_project, results_validation_filepath_project]:
     if not os.path.exists(dir):
         os.mkdir(dir)
@@ -65,6 +74,8 @@ def get_config_from_yaml(config_file="config0.yaml"):
     global save_log_every
     global sampling_rate
     global ref
+    global noise_perc
+    global seed
     global center_freqs
     global valid_cut_secs
     patience = data["patience"]
@@ -74,6 +85,8 @@ def get_config_from_yaml(config_file="config0.yaml"):
     save_log_every = data["save_log_every"]
     sampling_rate = data["sampling_rate"]
     ref = data["ref"]
+    noise_perc = data["noise_perc"]
+    seed = data["seed"]
     center_freqs = np.array(data["center_freqs"])
     valid_cut_secs = data["valid_cut_secs"]
 

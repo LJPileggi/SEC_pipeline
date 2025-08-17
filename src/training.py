@@ -80,33 +80,21 @@ def split_audio_tracks(
     if not os.path.exists(root_target):
         os.makedirs(root_target)
 
-    # Determina se tutte le divisioni sono già state riempite dai conteggi iniziali
-    all_divisions_filled = all(current_counts[name] >= target_counts_dict[name] for name in division_names)
-
-    # Se tutte le divisioni erano già piene nel log, abbiamo finito.
-    if all_divisions_filled:
-        print("Tutte le divisioni erano già state riempite nella precedente esecuzione. Uscita.")
-        audio_embedding.to(device)
-        delete_log()
-        return current_counts
-
     # Ottieni la lista di tutte le classi (sottodirectory) nella sorgente
     all_classes_in_source = os.listdir(root_source)
 
     round_ = initial_round # Inizializza il round dal log
 
-    # Ciclo esterno per continuare a generare tagli finché tutte le divisioni non sono piene
-    while not all_divisions_filled:
-        round_ += 1
-        print(f"\n--- Avvio del Round {round_} per la generazione degli embedding ---")
+    # Determina se tutte le divisioni sono già state riempite dai conteggi iniziali
+    all_divisions_filled = all(current_counts[name] >= target_counts_dict[name] for name in division_names)
 
-        # Mescola le classi per ogni round per ottenere nuove combinazioni/ordine
-        # random.shuffle(all_classes_in_source)
+    # Itera attraverso ogni classe (sottodirectory) nella sorgente
+    for class_name in tqdm(all_classes_in_source, desc=f'Elaborazione Classi (Round {round_})'):
 
-        # Itera attraverso ogni classe (sottodirectory) nella sorgente
-        for class_name in tqdm(all_classes_in_source, desc=f'Elaborazione Classi (Round {round_})'):
-            if all_divisions_filled:
-                break # Tutti i target globali raggiunti, interrompi l'elaborazione delle classi
+        # Ciclo interno per continuare a generare tagli finché tutte le divisioni non sono piene
+        while not all_divisions_filled:
+            round_ += 1
+            print(f"\n--- Avvio del Round {round_} per la generazione degli embedding ---")
 
             source_class_dir = os.path.join(root_source, class_name)
             if not os.path.isdir(source_class_dir):
@@ -131,7 +119,7 @@ def split_audio_tracks(
                 continue
 
             # Mescola i file audio all'interno della classe per randomizzare la selezione
-            random.shuffle(audio_fp_list)
+            # random.shuffle(audio_fp_list)
 
             # Itera attraverso i file audio per generare tagli ed embedding
             for audio_fp_name in tqdm(audio_fp_list, desc=f'File in {class_name} (Round {round_})', leave=False):

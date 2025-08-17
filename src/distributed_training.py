@@ -12,9 +12,13 @@ import logging
 import random
 import pydub
 
-from models import CLAP_initializer
-from utils import get_config_from_yaml, gen_log, read_log, delete_log, extract_all_files_from_dir, spectrogram_n_octaveband_generator
+from .models import CLAP_initializer
+from .utils import get_config_from_yaml, gen_log, read_log, delete_log, extract_all_files_from_dir, spectrogram_n_octaveband_generator
+from .utils import basedir_raw, basedir_preprocessed
 
+
+# TODO: change log file name and path to allow for multiple loggings relative to different configurations (n octave bands,
+#    audio formats) to exist; save them in appropriate directory
 
 ### Saving functions ###
 # TODO: add support for other audio files like flac etc.
@@ -59,227 +63,166 @@ def save_embedding(embedding, path):
 ### Embedding generation ###
 # TODO: add support for other audio files like flac etc.
 
-
-def split_audio_tracks(clap_model, config, cut_secs, **kwargs):
+def process_class_with_cut_secs(clap_model, config, cut_secs, n_octave, device, rank, start_log_data, class_to_process):
     """
-    Funzione principale per il preprocessing e la generazione di embedding,
-    adattata per il calcolo distribuito.
-    """
-    logging.info(f"Avvio split_audio_tracks per {cut_secs} secondi, su GPU {rank}")
+    Main job to submit to GPU workers to generate CLAP embeddings for a given class and
+    cut_secs value. Each track gets split into multiple segments of length cut_secs * sr
+    and applied random noise for data augmentation. If the required number of embeddings
+    per set is not met, mutliple runs of the class tracks are performed, varying offset
+    start for segments and noise. Spectrograms for the audio segments are generated as well.
 
+    args:
+     - clap_model: instance of CLAP model used for embedding generation;
+     - config (dict): dictionary containing configuration subdictionaries for 'dirs',
+       'audio', 'spectrogram',  'log';
+     - cut_secs (int): duration of audio segments to be generated, in seconds;
+     - n_octave (int): number of octave bands for the spectrogram;
+     - device (torch.device): PyTorch device (e.g., 'cuda:0') to use for computation;
+     - rank (int): rank of the current distributed process. Used for logging and progress bars;
+     - start_log_data (dict): dictionary containing log data to resume processing from a specific checkpoint;
+     - class_to_process (str): the name of the audio class to be processed.
+    """
     root_source = config['dirs']['root_source']
     root_target = config['dirs']['root_target']
     audio_format = config['audio']['audio_format']
-    window_size = int(cut_secs * config['audio']['sr'])
+    sr = config['spectrogram']['sr']
+    ref = config['spectrogram']['ref']
+    center_freqs = config['spectrogram']['center_freqs']
     noise_perc = config['audio']['noise_perc']
     seed = config['audio']['seed']
     save_log_every = config['log']['save_log_every']
     
-    division_names = ["train". "es", "valid", "test"]
-    target_counts = config['data']['target_counts']
-    target_counts_dict = {name: count for name, count in zip(division_names, target_counts)}
+    division_names = [d[0] for d in config['data']['divisions_xc_sizes_names']]
+    target_counts_list = [d[1] for d in config['data']['divisions_xc_sizes_names']]
 
-    n_octave = kwargs["n_octave"]
+    di = 0
+    results = 0
+    round_ = 0
+    finish_class = False
 
-    # kwargs relative a parallelismo
-    device = kwargs["device"]
-    rank = kwargs["rank"]
-    world_size = kwargs["world_size"]
-
-    # Recupero delle variabili dal log
-    ic = kwargs["start_ic"]
-    di = kwargs["start_di"]
-    round_ = kwargs["start_round"]
-    results = kwargs["start_results"]
-    finish_class = kwargs["start_finish_class"]
-    
-    # ---------------------------------------------------------------------
-    # 📍 USO DELLE VARIABILI RECUPERATE
-    # Le variabili 'ic', 'di', 'round_', etc., vengono usate come stato iniziale
-    # per il ciclo principale, permettendo di riprendere da dove ci si era interrotti.
-    # ---------------------------------------------------------------------
-
-    all_files = extract_all_files_from_dir(root_source)
-    random.seed(seed)
-    random.shuffle(all_files)
-    
-    sampler = DistributedSampler(all_files, num_replicas=world_size, rank=rank, shuffle=False)
-    
-    all_divisions_filled = False
-    
-    # Questo ciclo principale ora continua da `start_round`
-    while not all_divisions_filled:
-        files_to_process = [all_files[i] for i in list(sampler)]
+    # Se stiamo riprendendo da un log, carichiamo i valori salvati
+    if start_log_data and start_log_data.get('cut_secs') == cut_secs and start_log_data.get('class_name') == class_to_process:
+        di = start_log_data.get('di', 0)
+        results = start_log_data.get('results', 0)
+        round_ = start_log_data.get('round', 0)
+        finish_class = start_log_data.get('finish_class', False)
         
-        with tqdm(files_to_process, desc=f"GPU {rank} Processing (Round {round_})", disable=(rank != 0)) as pbar:
-            for filepath in pbar:
-                audio_fp_name = filepath.replace(root_source, "")
+    target_class_dir = os.path.join(root_target, class_to_process)
+    dir_trvlts_paths = [os.path.join(target_class_dir, p) for p in division_names]
+    
+    for path in [target_class_dir] + dir_trvlts_paths:
+        os.makedirs(path, exist_ok=True)
+        
+    source_class_dir = os.path.join(root_source, class_to_process)
+    audio_fp_list = extract_all_files_from_dir(source_class_dir, extension=f'.{audio_format}')
+    
+    if len(audio_fp_list) > 0:
+        perms = np.random.RandomState(seed=seed).permutation(len(audio_fp_list))
+        
+        while not finish_class:
+            round_ += 1
+            for p in tqdm(perms, desc=f'GPU {rank} Processing {class_to_process} ({round_})', disable=(rank != 0)):
+                audio_fp = audio_fp_list[p]
+                filepath = os.path.join(source_class_dir, audio_fp)
                 
                 try:
-                    data, sr = librosa.load(filepath, sr=None, mono=True)
-                    if len(data) < window_size:
-                        continue
+                    data, current_sr = librosa.load(filepath, sr=sr, mono=True)
+                    window_size = int(cut_secs * sr)
+                    n_buckets = math.ceil(len(data) / window_size)
                     
-                    n_buckets = len(data) // window_size
-                    n_buckets_with_offset = n_buckets
                     offset = 0
-                    
-                    for b in range(int(n_buckets_with_offset)):
-                        current_division_name = None
-                        current_division_idx_for_this_cut = -1
-                        for idx, div_name in enumerate(division_names):
-                            if results < target_counts_dict[div_name]:
-                                current_division_name = div_name
-                                current_division_idx_for_this_cut = idx
+                    if round_ > 1:
+                        offset = random.randint(0, min(len(data) // 2, window_size))
+
+                    for b in range(n_buckets):
+                        # Controllo per passare alla prossima divisione
+                        if results >= target_counts_list[di]:
+                            di += 1
+                            if di >= len(division_names):
+                                finish_class = True
                                 break
-
-                        if current_division_name is None:
-                            all_divisions_filled = True
-                            break
-
-                        base_name = os.path.splitext(audio_fp_name)[0].replace("/", "_")
-                        new_fp_base = f'{base_name}_{cut_secs}s_({b}_{round_})'
+                            else:
+                                results = 0
                         
-                        target_division_dir = os.path.join(root_target, current_division_name)
+                        trg_audio_path, trg_pt_path, trg_spec3o_path = None, None, None
+                        try:
+                            base_name = os.path.splitext(os.path.basename(audio_fp))[0]
+                            new_fp_base = f'{base_name}_{cut_secs}s_({b}_{round_})'
+                            trg_audio_path = os.path.join(dir_trvlts_paths[di], f'{new_fp_base}.{audio_format}')
+                            trg_pt_path = os.path.join(dir_trvlts_paths[di], f'{new_fp_base}.pt')
+                            trg_spec3o_path = os.path.join(dir_trvlts_paths[di], f'{new_fp_base}_spec3o.npy')
 
-                        os.makedirs(target_division_dir, exist_ok=True)
-                        
-                        trg_pt_path = os.path.join(target_division_dir, f'{new_fp_base}.pt')
-                        trg_spec3o_path = os.path.join(target_division_dir, f'{new_fp_base}_spec3o.npy')
-                        trg_audio_path = os.path.join(target_division_dir, f'{new_fp_base}.{audio_format}')
+                            if os.path.exists(trg_pt_path) and os.path.exists(trg_spec3o_path):
+                                results += 1
+                                continue
 
-                        if os.path.exists(trg_pt_path) and os.path.exists(trg_spec3o_path):
+                            start = b * window_size + offset
+                            end = start + window_size
+                            cut_data = data[start:end]
+
+                            if len(cut_data) < window_size:
+                                continue
+
+                            abs_cutdata = np.abs(cut_data)
+                            max_threshold = np.mean(abs_cutdata)
+                            noise = (np.random.rand(*cut_data.shape) * 2 - 1) * max_threshold
+                            new_audio = (1 - noise_perc) * cut_data + noise_perc * noise
+                            
+                            save_audio_segment(new_audio, sr, trg_audio_path, audio_format)
+                            spec3o = spectrogram_n_octaveband_generator(new_audio, sr, integration_seconds=0.1, n_octave=n_octave)
+                            save_spectrogram(spec3o, trg_spec3o_path)
+
+                            preprocessed_audio = clap_model.preprocess_audio([trg_audio_path], True)
+                            preprocessed_audio = preprocessed_audio.reshape(preprocessed_audio.shape[0], preprocessed_audio.shape[2])
+                            x = preprocessed_audio.to(device)
+                            with torch.no_grad():
+                                embedding = audio_embedding(x)[0][0]
+                            
+                            save_embedding(embedding, trg_pt_path)
+                            os.remove(trg_audio_path)
+                            
                             results += 1
+
+                            if rank == 0 and results % save_log_every == 0:
+                                # Il log è gestito solo dal rank 0
+                                classes_list = sorted([d for d in os.listdir(root_source) if os.path.isdir(os.path.join(root_source, d))])
+                                ic = classes_list.index(class_to_process)
+                                gen_log(cut_secs, ic, di, results, round_, finish_class, config['data']['divisions_xc_sizes_names'], noise_perc, seed)
+                                logging.info(f"Log salvato. Stato attuale per classe {class_to_process}: results={results}")
+
+                        except Exception as e:
+                            logging.error(f"Errore durante l'elaborazione del bucket {b} da {filepath}: {e}. Tentativo di pulizia.")
+                            for file_path in [trg_audio_path, trg_pt_path, trg_spec3o_path]:
+                                if file_path and os.path.exists(file_path):
+                                    os.remove(file_path)
                             continue
 
-                        start = b * window_size + offset
-                        cut_data = data[start:start + window_size]
-
-                        abs_cutdata = np.abs(cut_data)
-                        max_threshold = np.mean(abs_cutdata)
-                        noise = (np.random.rand(*cut_data.shape) * 2 - 1) * max_threshold
-                        new_audio = (1 - noise_perc) * cut_data + noise_perc * noise
-                        
-                        save_audio_segment(new_audio, sr, trg_audio_path, audio_format)
-                        spec3o = spectrogram_n_octaveband_generator(new_audio, sr, integration_seconds=0.1, n_octave=n_octave)
-                        save_spectrogram(spec3o, trg_spec3o_path)
-
-                        preprocessed_audio = clap_model.preprocess_audio([trg_audio_path], True)
-                        preprocessed_audio = preprocessed_audio.reshape(preprocessed_audio.shape[0], preprocessed_audio.shape[2])
-                        x = preprocessed_audio.to(device)
-                        with torch.no_grad():
-                            embedding = clap_model.clap.audio_encoder(x)[0][0]
-                        
-                        save_embedding(embedding, trg_pt_path)
-                        
-                        os.remove(trg_audio_path)
-                        
-                        results += 1
-
-                        if rank == 0:
-                            if results % save_log_every == 0:
-                                # ---------------------------------------------------------------------
-                                # 📍 PUNTO DI SALVATAGGIO 2: Salvataggio periodico del log
-                                # ---------------------------------------------------------------------
-                                gen_log(cut_secs, ic, di, results, round_, finish_class, list(zip(division_names, target_counts)), noise_perc, seed)
-                                logging.info(f"Log salvato. Stato attuale: results={results}")
-
-                except KeyboardInterrupt:
-                    print("\nProcesso interrotto dall'utente.")
-                    if rank == 0:
-                        gen_log(cut_secs, ic, di, results, round_, finish_class, list(zip(division_names, target_counts)), noise_perc, seed)
-                    sys.exit(0)
-                except Exception as e:
-                    logging.error(f"Errore durante l'elaborazione del file {filepath} (Round {round_}): {e}. Salto questo file.")
-                    continue
-            
-            if all_divisions_filled:
-                break
+                    if finish_class:
+                        break
+                if finish_class:
+                    break
         
-        round_ += 1
-        
-    logging.info(f"Tutte le divisioni per {cut_secs}s sono state riempite. Round {round_} completato.")
+        logging.info(f"Classe '{class_to_process}' elaborata. Creazioni totali: {results}")
 
-def get_embeddings_for_n_octaveband(clap_model, config, device, rank, world_size):
+
+def worker_process(audio_format, n_octave, rank, world_size, task_queue, start_log_data):
     """
-    Loop più esterno che itera sui diversi valori di cut_secs.
-    """
-    cut_secs_list = config['data']['cut_secs']
-    n_octave = config['audio']['n_octave']
-    noise_perc = config['audio']['noise_perc']
-    seed = config['audio']['seed']
-    division_names = ["training", "validation", "test"]
-    target_counts = config['data']['target_counts']
+    Worker process for distributed training.
 
-    start_cut_secs = None
-    start_ic, start_di, start_round, start_results, start_finish_class = 0, 0, 0, 0, False
+    This function is executed by each process (on its dedicated GPU) in the distributed setup. It is responsible for:
+    - Initializing the PyTorch distributed backend and setting up the GPU.
+    - Continuously fetching tasks (defined as a combination of `cut_secs` and `class_name`) from a shared `task_queue`.
+    - Calling the `process_class_with_cut_secs` function to handle the data generation for the assigned task.
+    - Handling `Queue.Empty` exceptions to gracefully stop when no more tasks are available.
+    - Providing clear logging messages to track the progress of each worker.
 
-    # ---------------------------------------------------------------------
-    # 📍 PUNTO DI RECUPERO 1: Recupero delle variabili dal log
-    # Questo blocco viene eseguito solo dal rank 0
-    # ---------------------------------------------------------------------
-    if rank == 0:
-        try:
-            log_data = read_log()
-            # Recupera i parametri dal log
-            start_cut_secs = log_data.get("cut_secs")
-            start_ic = log_data.get("ic")
-            start_di = log_data.get("di")
-            start_results = log_data.get("results")
-            start_round = log_data.get("round")
-            start_finish_class = log_data.get("finish_class")
-            logging.info(f"Ripresa da log. cut_secs={start_cut_secs}, round={start_round}")
-        except FileNotFoundError:
-            logging.info("Nessun log trovato, avvio una nuova esecuzione.")
-            
-    # Sincronizza i parametri del log tra tutti i processi
-    start_cut_secs_tensor = torch.tensor([start_cut_secs if start_cut_secs is not None else -1.0]).to(device)
-    dist.broadcast(start_cut_secs_tensor, src=0)
-    if start_cut_secs is None:
-        start_cut_secs = -1.0 if start_cut_secs_tensor.item() == -1.0 else start_cut_secs_tensor.item()
-    
-    start_params = torch.tensor([start_ic, start_di, start_results, start_round, int(start_finish_class)], dtype=torch.float32).to(device)
-    dist.broadcast(start_params, src=0)
-    start_ic, start_di, start_results, start_round, start_finish_class = start_params.int().tolist()
-    start_finish_class = bool(start_finish_class)
-    
-    start_index = 0
-    if start_cut_secs is not None:
-        try:
-            start_index = cut_secs_list.index(start_cut_secs)
-        except ValueError:
-            logging.warning(f"Il cut_secs dal log ({start_cut_secs}) non si trova nella lista. Avvio da capo.")
-    
-    for i in range(start_index, len(cut_secs_list)):
-        cut_secs = cut_secs_list[i]
-        
-        # Inizializza i parametri per il nuovo `cut_secs` se non stiamo riprendendo
-        current_ic, current_di, current_results, current_round, current_finish_class = (0, 0, 0, 0, False)
-        
-        if cut_secs == start_cut_secs and i == start_index:
-            current_ic = start_ic
-            current_di = start_di
-            current_results = start_results
-            current_round = start_round
-            current_finish_class = start_finish_class
-
-        split_audio_tracks_kwargs = {
-                    "n_octave"            : n_octave,
-                    "device"              : device,
-                    "rank"                : rank,
-                    "world_size"          : world_size,
-                    "start_ic"            : current_ic,
-                    "start_di"            : current_di,
-                    "start_round"         : current_round,
-                    "start_finish_class"  : current_finish_class
-            }
-        split_audio_tracks(clap_model, config, cut_secs, **split_audio_tracks_kwargs)
-
-# TODO: change log file name and path to allow for multiple loggings relative to different configurations (n octave bands,
-#    audio formats) to exist; save them in appropriate directory
-def setup_and_run(rank, world_size):
-    """
-    Funzione di avvio per ogni processo.
+    args:
+     - audio_format: format of the audio to embed from shell;
+     - n_octave: octave band split for the spectrogram from shell;
+     - rank (int): unique rank (ID) of current process;
+     - world_size (int): total number of processes in the distributed group;
+     - task_queue (mp.Queue): shared queue containing tuples of (cut_secs, class_name) to be processed;
+     - start_log_data (dict): dictionary containing log data to resume processing from a specific checkpoint.
     """
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'
@@ -287,28 +230,95 @@ def setup_and_run(rank, world_size):
     torch.cuda.set_device(rank)
     device = torch.device(f'cuda:{rank}')
 
-    log_file_path = 'log.json'
-    if rank == 0:
-        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', handlers=[logging.StreamHandler(), logging.FileHandler(log_file_path)])
-    else:
-        logging.basicConfig(level=logging.WARNING)
+    clap_model, _, _ = CLAP_initializer()
 
+    config = {
+            'dirs' : {},
+            'audio' : {},
+            'spectrogram' : {},
+            'log' : {}
+        }
+    config['dirs']['root_source'] = os.path.join(basedir_raw, , f'{audio_format}')
+    config['dirs']['root_target'] = os.path.join(basedir_preprocessed, , f'{audio_format}', f'{n_octave}_octave')
+    if not os.path.exists(config['dirs']['root_target']):
+        os.makedir(config['dirs']['root_target'])
+    config['audio']['audio_format'] = audio_format
+    config['spectrogram']['sr'] = sr
+    config['spectrogram']['ref'] = ref
+    config['spectrogram']['center_freqs'] = center_freqs
+    config['audio']['noise_perc'] = noise_perc
+    config['audio']['seed'] = seed
+    config['log']['save_log_every'] = save_log_every
+
+    config['audio']['n_octave'] = n_octave
+    audio_embedding = clap_model.clap.audio_encoder
+    audio_embedding.to(device)
+    
     logging.info(f"Processo {rank} avviato su GPU {rank}.")
 
-    clap_model, _, _ = CLAP_initializer()
-    config = get_config_from_yaml('config.yaml')
-
-    get_embeddings_for_n_octaveband(clap_model, config, device, rank, world_size)
-    
-    dist.barrier()
-    if rank == 0:
-        logging.info("Tutti i processi hanno terminato il loro lavoro.")
-        delete_log()
+    while not task_queue.empty():
+        try:
+            cut_secs, class_name = task_queue.get(timeout=1)
+            logging.info(f"Processo {rank} sta elaborando: cut_secs={cut_secs}, classe={class_name}")
+            process_class_with_cut_secs(clap_model, config, cut_secs, n_octave, device, rank, start_log_data, class_name)
+        except mp.queues.Empty:
+            logging.info(f"Processo {rank} ha terminato, coda vuota.")
+            break
+        except Exception as e:
+            logging.error(f"Errore critico nel processo {rank}: {e}")
+            sys.exit(1)
 
     dist.destroy_process_group()
 
-# TODO: put main in appropriate main file
-if __name__ == "__main__":
-    world_size = 4
-    mp.spawn(setup_and_run, args=(world_size,), nprocs=world_size, join=True)
+
+def setup_and_run(config_file, audio_format, n_octave, world_size):
+    """
+    Sets up and launches the distributed data generation pipeline.
+
+    This is the main entry point for the entire distributed process. Its responsibilities include:
+    - Loading the configuration from the YAML file.
+    - Reading the log file to check for a previous checkpoint and resume if necessary.
+    - Populating a shared `task_queue` with all the tasks (cut_secs and class combinations) that need to be processed.
+    - Spawning multiple worker processes, one for each available GPU, using `mp.Process`.
+    - Managing the main process's lifecycle, waiting for all worker processes to complete their tasks.
+    - Cleaning up the log file upon successful completion of all tasks.
+
+    args:
+     - config_file: name of the config file from shell;
+     - audio_format: format of the audio to embed from shell;
+     - n_octave: octave band split for the spectrogram from shell;
+     - world_size (int): total number of GPU devices to use for parallel processing.
+    """
+    mp.set_start_method('spawn', force=True)
+
+    log_data = {}
+    try:
+        log_data = read_log()
+        logging.info(f"Ripresa da log: {log_data}")
+    except FileNotFoundError:
+        logging.info("Nessun log trovato, avvio una nuova esecuzione.")
+
+    get_config_from_yaml(config_file)
+    cut_secs_list = valid_cut_secs
+    basedir_raw_format = os.path.join(basedir_raw, f'{audio_format}')
+    classes_list = sorted([d for d in os.listdir(basedir_raw_format) if os.path.isdir(os.path.join(basedir_raw_format, d))])
+
+    # Popola la coda dei task
+    task_queue = mp.Queue()
+    for cut_secs in cut_secs_list:
+        for class_name in classes_list:
+            task_queue.put((cut_secs, class_name))
+            
+    # Avvia i processi worker
+    processes = []
+    for rank in range(world_size):
+        p = mp.Process(target=worker_process, args=(audio_format, n_octave, rank, world_size, task_queue, log_data))
+        p.start()
+        processes.append(p)
+
+    for p in processes:
+        p.join()
+    
+    delete_log()
+    logging.info("Tutti i processi hanno terminato il loro lavoro.")
 

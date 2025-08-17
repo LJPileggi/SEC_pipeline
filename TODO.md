@@ -13,6 +13,8 @@
 !    allow for multiple loggings relative to different configurations (n octave bands, audio formats) to exist; save them
 !    in appropriate directory
 + /scr/utils.py ; Model and sampling parameters ; 11/08/2025 - delete old parameters already yielded by config.yaml
++ /scr/utils.py ; Directory organisation ; 17/08/2025 - pending ; implement a script that generates correct directory tree
++    for project when installing the repo
 ```
 --------------------------------------------------------------------------
 ```diff
