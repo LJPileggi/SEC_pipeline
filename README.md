@@ -7,4 +7,4 @@ An easy-to-use interface to train a Sound-Event Classificatio (SEC) pipeline by 
 2. Set working directory:
    `cd tuo-repo`
 3. Execute setup script to create working directories:
-   `./setup.sh` (Linux/macOS)
+   `./setup.sh`

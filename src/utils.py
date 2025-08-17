@@ -36,10 +36,7 @@ basedir_raw = os.path.join(basedir, 'RAW_DATASET')
 # TODO: have to create specific subfolders to basedir_preprocessed
 #     to account for different octave bands embeddings
 basedir_preprocessed = os.path.join(basedir, 'PREPROCESSED_DATASET')
- 
-if not os.path.exists(basedir_preprocessed):
-    os.mkdir(basedir_preprocessed)
-    
+
 # diretory with model selection results
 results_filepath_project = os.path.join(basedir, 'results')
 
@@ -48,10 +45,6 @@ results_validation_filepath_project = os.path.join(results_filepath_project, 'va
 
 # directory for the saved model
 model_filepath = os.path.join(results_filepath_project, 'finetuned_model')
-
-for dir in [results_filepath_project, results_validation_filepath_project]:
-    if not os.path.exists(dir):
-        os.mkdir(dir)
 
 
 ### Get model, training and spectrogram configuration from yaml ###
