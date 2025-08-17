@@ -1,7 +1,9 @@
 import argparse
 
-from .utils import get_config_from_yaml
-from src.training import get_embeddings_for_n_octaveband
+from src.utils import get_config_from_yaml, basedir_preprocessed
+from src.data_handler import load_octaveband_embeddings
+from src.models import CLAP_initializer
+from src.distributed_finetuning import select_optim_distributed
 
 def parsing():
     parser = argparse.ArgumentParser(description='Finetune classifier on CLAP embeddings from audio files')
@@ -9,14 +11,61 @@ def parsing():
             help='config file to load to get model and training params.')
     parser.add_argument('--validation_filepath', metavar='validation_filepath', dest='validation_filepath',
             help='directory for validation results.')
+    parser.add_argument('--n_octave', metavar='n_octave', dest='n_octave',
+            help='octaveband split for the spectrograms.')
+    parser.add_argument('--audio_format', metavar='audio_format', dest='audio_format',
+            help='audio format to embed; choose between \'wav\', \'mp3\', \'flac\'.')
     parser.set_defaults(config_file='config0.yaml')
+    parser.set_defaults(audio_format='wav')
     args = parser.parse_args()
     return args
 
+
+def main_worker(rank, world_size, validation_filepath, dataloaders, classes, epochs, patience, clap_model):
+    """
+    The main function for each process.
+    """
+    select_optim_distributed(
+        rank=rank, 
+        world_size=world_size, 
+        validation_filepath=validation_filepath, 
+        dataloaders=dataloaders,
+        classes=classes, 
+        epochs=epochs, 
+        patience=patience, 
+        clap_model=clap_model
+    )
+
 def main():
+    # Define your parameters here
     args = parsing()
     get_config_from_yaml(args.config_file)
-    select_optim_mainloop(validation_filepath)
+    world_size = 4
+    
+    # Percorso dove si trovano gli embedding
+    octaveband_dir = os.path.join(basedir_preprocessed, f'{args.audio_format}', f'{args.n_octave}')
+
+    # 1. Carica i dataloader e i dataset
+    print("Caricamento degli embeddings in corso...")
+    dataloaders_dict, _ = load_octaveband_embeddings(octaveband_dir)
+    print("Caricamento completato.")
+    
+    # 2. Ottieni la lista delle classi dal primo dataset caricato
+    first_dataset = list(dataloaders_dict.values())[0][0].dataset
+    classes = first_dataset.classes
+    
+    # 3. Inizializza il modello CLAP su CPU, sarà spostato su GPU dai processi
+    clap_model, _, _ = CLAP_initializer(device='cpu')
+
+    # 4. Avvia il processo distribuito
+    import torch.multiprocessing as mp
+    mp.spawn(
+        main_worker,
+        args=(world_size, args.validation_filepath, dataloaders_dict, classes, epochs, patience, clap_model),
+        nprocs=world_size,
+        join=True
+    )
+
 
 if __name__ == "__main__":
     main()

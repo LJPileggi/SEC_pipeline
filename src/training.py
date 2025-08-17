@@ -11,8 +11,6 @@ from tqdm import tqdm
 import random
 import sys
 
-# from .utils import patience, epochs, batch_size, device, save_log_every, \
-#                         sampling_rate, ref, center_freqs, valid_cut_secs
 from .utils import get_config_from_yaml
 from .utils import basedir_preprocessed # basedir, basedir_raw, results_validation_filepath_project
 from .utils import extract_all_files_from_dir, gen_log, read_log, delete_log

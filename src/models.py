@@ -3,8 +3,6 @@ import numpy as np
 import scipy
 from msclap import CLAP
 
-# from .utils import device, center_freqs
-
 
 ### CLAP models and classifiers ###
 
