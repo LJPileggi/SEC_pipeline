@@ -1,7 +1,7 @@
 import argparse
 
 from src.utils import get_config_from_yaml
-from src.distributed_training import setup_and_run
+from src.distributed_clap_embeddings import setup_and_run
 
 def parsing():
     parser = argparse.ArgumentParser(description='Get CLAP embeddings from audio files')

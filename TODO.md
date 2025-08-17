@@ -45,6 +45,10 @@
 ```diff
 + /configs/config0.yaml ; ; 10/08/2025 - pending ; change the device to cineca GPUs
 ```
+--------------------------------------------------------------------------
+```diff
++ /setup.sh ; ; 17/08/2025 - pending ; adjust filepath to correct cineca filepath
+```
 
 ### Resolved
 

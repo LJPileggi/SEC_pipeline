@@ -179,7 +179,7 @@ def process_class_with_cut_secs(clap_model, config, cut_secs, n_octave, device, 
                                 embedding = audio_embedding(x)[0][0]
                             
                             save_embedding(embedding, trg_pt_path)
-                            os.remove(trg_audio_path)
+                            # os.remove(trg_audio_path)
                             
                             results += 1
 
