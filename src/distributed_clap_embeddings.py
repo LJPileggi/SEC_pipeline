@@ -239,7 +239,7 @@ def worker_process(audio_format, n_octave, rank, world_size, task_queue, start_l
             'spectrogram' : {},
             'log' : {}
         }
-    config['dirs']['root_source'] = os.path.join(basedir_raw, , f'{audio_format}')
+    config['dirs']['root_source'] = os.path.join(basedir_raw if not test else basedir_raw_test, f'{audio_format}')
     config['dirs']['root_target'] = os.path.join(basedir_preprocessed if not test else basedir_preprocessed_test,
                                                                 f'{audio_format}', f'{n_octave}_octave')
     if not os.path.exists(config['dirs']['root_target']):
@@ -303,7 +303,7 @@ def setup_and_run(config_file, audio_format, n_octave, world_size, test=False):
 
     get_config_from_yaml(config_file)
     cut_secs_list = valid_cut_secs
-    basedir_raw_format = os.path.join(basedir_raw, f'{audio_format}')
+    basedir_raw_format = os.path.join(basedir_raw if not test else basedir_raw_test, f'{audio_format}')
     classes_list = sorted([d for d in os.listdir(basedir_raw_format) if os.path.isdir(os.path.join(basedir_raw_format, d))])
 
     # Popola la coda dei task

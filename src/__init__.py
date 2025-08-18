@@ -14,6 +14,7 @@ __all__ = ["basedir",
            "results_validation_filepath_project",
            "model_filepath",
 
+           "basedir_raw_test",
            "basedir_preprocessed_test",
            "results_filepath_project_test",
            "results_validation_filepath_project_test",

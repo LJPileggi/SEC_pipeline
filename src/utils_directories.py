@@ -6,6 +6,7 @@ __all__ = ["basedir",
            "results_filepath_project",
            "results_validation_filepath_project",
            "model_filepath",
+           "basedir_raw_test",
            "basedir_preprocessed_test",
            "results_filepath_project_test",
            "results_validation_filepath_project_test",
@@ -34,6 +35,7 @@ results_validation_filepath_project = os.path.join(results_filepath_project, 'va
 model_filepath = os.path.join(results_filepath_project, 'finetuned_model')
 
 # testing directories
+basedir_raw_test = os.path.join(basedir_testing, 'RAW_DATASET')
 basedir_preprocessed_test = os.path.join(basedir_testing, 'PREPROCESSED_DATASET')
 results_filepath_project_test = os.path.join(basedir_testing, 'results')
 results_validation_filepath_project_test = os.path.join(results_filepath_project_test, 'validation')

@@ -88,6 +88,7 @@ def cleanup_distributed_environment():
     """Cleanup the distributed environment."""
     dist.destroy_process_group()
 
+# TODO: implement test mode
 def select_optim_distributed(rank, world_size, validation_filepath, dataloaders, classes, epochs, patience, clap_model):
     """
     Model selection pipeline to find the best optimizer configuration for a given
