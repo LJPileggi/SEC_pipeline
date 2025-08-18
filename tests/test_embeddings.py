@@ -14,6 +14,7 @@ def parsing():
     args = parser.parse_args()
     return args
 
+# TODO: expand testing by checking file generation and well functioning of functions
 def main():
     args = parsing()
     world_size = 4

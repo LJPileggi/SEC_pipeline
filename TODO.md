@@ -34,7 +34,15 @@
 ```
 --------------------------------------------------------------------------
 ```diff
+! /script/test_embeddings.py ; ; 18/08/2025 - pending ; expand testing by checking file generation and well functioning of functions
+```
+--------------------------------------------------------------------------
+```diff
 + /setup.sh ; ; 17/08/2025 - pending ; adjust filepath to correct cineca filepath
+```
+--------------------------------------------------------------------------
+```diff
++ /run_tests.sh ; ; 18/08/2025 - pending ; add other tests and implement correctness check
 ```
 --------------------------------------------------------------------------
 ```diff
