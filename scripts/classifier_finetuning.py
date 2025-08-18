@@ -1,4 +1,6 @@
 import argparse
+import sys
+sys.path.append('../')
 
 from src.utils import get_config_from_yaml, basedir_preprocessed
 from src.data_handler import load_octaveband_embeddings

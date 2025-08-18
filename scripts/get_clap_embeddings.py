@@ -1,4 +1,6 @@
 import argparse
+import sys
+sys.path.append('../')
 
 from src.utils import get_config_from_yaml, basedir
 from src.distributed_clap_embeddings import setup_and_run
