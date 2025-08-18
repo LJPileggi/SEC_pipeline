@@ -14,7 +14,7 @@ import pydub
 
 from .models import CLAP_initializer
 from .utils import get_config_from_yaml, gen_log, read_log, delete_log, extract_all_files_from_dir, spectrogram_n_octaveband_generator
-from .utils import basedir_raw, basedir_preprocessed
+from .utils_directories import *
 
 
 # TODO: change log file name and path to allow for multiple loggings relative to different configurations (n octave bands,
@@ -205,7 +205,7 @@ def process_class_with_cut_secs(clap_model, config, cut_secs, n_octave, device, 
         logging.info(f"Classe '{class_to_process}' elaborata. Creazioni totali: {results}")
 
 
-def worker_process(audio_format, n_octave, rank, world_size, task_queue, start_log_data):
+def worker_process(audio_format, n_octave, rank, world_size, task_queue, start_log_data, test=False):
     """
     Worker process for distributed training.
 
@@ -222,7 +222,8 @@ def worker_process(audio_format, n_octave, rank, world_size, task_queue, start_l
      - rank (int): unique rank (ID) of current process;
      - world_size (int): total number of processes in the distributed group;
      - task_queue (mp.Queue): shared queue containing tuples of (cut_secs, class_name) to be processed;
-     - start_log_data (dict): dictionary containing log data to resume processing from a specific checkpoint.
+     - start_log_data (dict): dictionary containing log data to resume processing from a specific checkpoint;
+     - test (bool): whether to execute process for dummy testing dataset; defaul to False.
     """
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'
@@ -239,7 +240,8 @@ def worker_process(audio_format, n_octave, rank, world_size, task_queue, start_l
             'log' : {}
         }
     config['dirs']['root_source'] = os.path.join(basedir_raw, , f'{audio_format}')
-    config['dirs']['root_target'] = os.path.join(basedir_preprocessed, , f'{audio_format}', f'{n_octave}_octave')
+    config['dirs']['root_target'] = os.path.join(basedir_preprocessed if not test else basedir_preprocessed_test,
+                                                                f'{audio_format}', f'{n_octave}_octave')
     if not os.path.exists(config['dirs']['root_target']):
         os.makedir(config['dirs']['root_target'])
     config['audio']['audio_format'] = audio_format
@@ -271,7 +273,7 @@ def worker_process(audio_format, n_octave, rank, world_size, task_queue, start_l
     dist.destroy_process_group()
 
 
-def setup_and_run(config_file, audio_format, n_octave, world_size):
+def setup_and_run(config_file, audio_format, n_octave, world_size, test=False):
     """
     Sets up and launches the distributed data generation pipeline.
 
@@ -287,7 +289,8 @@ def setup_and_run(config_file, audio_format, n_octave, world_size):
      - config_file: name of the config file from shell;
      - audio_format: format of the audio to embed from shell;
      - n_octave: octave band split for the spectrogram from shell;
-     - world_size (int): total number of GPU devices to use for parallel processing.
+     - world_size (int): total number of GPU devices to use for parallel processing;
+     - test (bool): whether to execute pipeline for dummy testing dataset; default to False.
     """
     mp.set_start_method('spawn', force=True)
 
@@ -312,7 +315,7 @@ def setup_and_run(config_file, audio_format, n_octave, world_size):
     # Avvia i processi worker
     processes = []
     for rank in range(world_size):
-        p = mp.Process(target=worker_process, args=(audio_format, n_octave, rank, world_size, task_queue, log_data))
+        p = mp.Process(target=worker_process, args=(audio_format, n_octave, rank, world_size, task_queue, log_data, test))
         p.start()
         processes.append(p)
 

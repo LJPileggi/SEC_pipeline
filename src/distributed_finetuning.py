@@ -9,15 +9,16 @@ from tqdm import tqdm
 from sklearn.metrics import ConfusionMatrixDisplays
 
 from .utils import *
+from .utils_directories import *
 from .losses import *
 from .models import *
-from .data_handler import load_octaveband_embeddings, create_dataset, CustomDataset # Nuovo import
+from .data_handler import load_octaveband_embeddings, create_dataset, CustomDataset
 
 
 ### Finetuned classifier training ###
 
 def build_model():
-    return FinetunedModel(classes, device=device)
+    return FinetunedModel(classes, device='cpu')
 
 def train(tr_set, es_set, config, epochs, callback=None):
     """

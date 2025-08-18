@@ -3,50 +3,6 @@ import json
 import yaml
 import numpy as np
 
-
-### Model and sampling parameters ###
-# TODO: delete old parameters already yielded by config.yaml
-patience = 10
-epochs = 100
-batch_size = 128
-device = 'gpu'
-save_log_every = 1000
-sampling_rate = 52100
-ref = 2e-5
-center_freqs = np.array([6.30e+00, 8.00e+00, 1.00e+01, 1.25e+01, 1.60e+01, 2.00e+01,
-                            2.50e+01, 3.15e+01, 4.00e+01, 5.00e+01, 6.30e+01, 8.00e+01,
-                            1.00e+02, 1.25e+02, 1.60e+02, 2.00e+02, 2.50e+02, 3.15e+02,
-                            4.00e+02, 5.00e+02, 6.30e+02, 8.00e+02, 1.00e+03, 1.25e+03,
-                            1.60e+03, 2.00e+03, 2.50e+03, 3.15e+03, 4.00e+03, 5.00e+03,
-                            6.30e+03, 8.00e+03, 1.00e+04, 1.25e+04, 1.60e+04, 2.00e+04])
-valid_cut_secs = list(range(10)) + [15, 20, 30]
-                            
-### Directory organisation ###
-# TODO: implement a script that generates correct directory tree for project when installing the repo
-
-# cineca base directory     
-# TODO: insert cineca base directory
-basedir = ''
-
-# raw audio files directory
-basedir_raw = os.path.join(basedir, 'RAW_DATASET')
-
-# directory for audio embeddings
-# TODO: change basedir_preprocessed dinamically according to audio format to embed;
-# TODO: have to create specific subfolders to basedir_preprocessed
-#     to account for different octave bands embeddings
-basedir_preprocessed = os.path.join(basedir, 'PREPROCESSED_DATASET')
-
-# diretory with model selection results
-results_filepath_project = os.path.join(basedir, 'results')
-
-# validation results directory
-results_validation_filepath_project = os.path.join(results_filepath_project, 'validation')
-
-# directory for the saved model
-model_filepath = os.path.join(results_filepath_project, 'finetuned_model')
-
-
 ### Get model, training and spectrogram configuration from yaml ###
 
 def get_config_from_yaml(config_file="config0.yaml"):
@@ -63,7 +19,6 @@ def get_config_from_yaml(config_file="config0.yaml"):
     global patience
     global epochs
     global batch_size
-    global device
     global save_log_every
     global sampling_rate
     global ref
@@ -74,7 +29,6 @@ def get_config_from_yaml(config_file="config0.yaml"):
     patience = data["patience"]
     epochs = data["epochs"]
     batch_size = data["batch_size"]
-    device = data["device"]
     save_log_every = data["save_log_every"]
     sampling_rate = data["sampling_rate"]
     ref = data["ref"]

@@ -4,17 +4,9 @@
 ### Pending
 
 ```diff
-+ /scr/utils.py ; Directory organisation ; 05/08/2025 - pending ; insert cineca base directory
-+ /scr/utils.py ; Directory organisation ; 05/08/2025 - pending ; change basedir_preprocessed
-+    dinamically according to audio format to embed
-! /scr/utils.py ; Directory organisation ; 05/08/2025 - pending ; have to create specific subfolders to basedir_preprocessed
-!    to account for different octave bands embeddings
 ! /src/utils.py ; Log file functions for embedding calculation ; 11/08/2025 - pending ; change log file name and path to
 !    allow for multiple loggings relative to different configurations (n octave bands, audio formats) to exist; save them
 !    in appropriate directory
-+ /scr/utils.py ; Model and sampling parameters ; 11/08/2025 - delete old parameters already yielded by config.yaml
-+ /scr/utils.py ; Directory organisation ; 17/08/2025 - pending ; implement a script that generates correct directory tree
-+    for project when installing the repo
 ```
 --------------------------------------------------------------------------
 ```diff
@@ -26,7 +18,6 @@
 +    files like flac etc.
 + /src/distributed_training.py ; Embedding generation -- split_audio_tracks ; 11/08/2025 - pending ; add support for
 +    other audio files like flac etc.
-! /src/distributed_training.py ; main ; 11/08/2025 - pending ; put main in appropriate main file
 ! /src/distributed_training.py ; main ; 11/08/2025 - pending ; change log file name and path to allow for multiple loggings
 !    relative to different configurations (n octave bands, audio formats) to exist; save them in appropriate directory
 ```
@@ -40,10 +31,6 @@
 + /src/explainability.py ; LMAC_explainer ; 06/08/2025 - pending ; correctly set up multi-GPU mode
 + /src/explainability.py ; LMAC_explainer ; 06/08/2025 - pending ; finish writing comments
 + /src/explainability.py ; Set configuration ; 10/08/2025 - pending ; change configuration file dynamically
-```
---------------------------------------------------------------------------
-```diff
-+ /configs/config0.yaml ; ; 10/08/2025 - pending ; change the device to cineca GPUs
 ```
 --------------------------------------------------------------------------
 ```diff
@@ -68,6 +55,16 @@
 - /scripts/classifier_finetuning.py ; main ; 10/08/2025 - 10/08/2025 ; add args.validation_filepath argument to
 -    select_optim_mainloop
 - /src/models.py ; Set configuration ; 10/08/2025 - 10/08/2025 ; change configuration file dynamically
-! /src/training.py ; Embedding generation -- split_audio_tracks ; 06/08/2025 - 11/08/2025 ; configure embedding generation for
-!    multi-GPU run
-+ /src/models.py ; CLAP_initializer ; 06/08/2025 - 11/08/2025 ; configure CLAP to multi-GPU training
+- /src/training.py ; Embedding generation -- split_audio_tracks ; 06/08/2025 - 11/08/2025 ; configure embedding generation for
+-    multi-GPU run
+- /src/models.py ; CLAP_initializer ; 06/08/2025 - 11/08/2025 ; configure CLAP to multi-GPU training
+- /scr/utils.py ; Directory organisation ; 05/08/2025 - 18/08/2025 ; insert cineca base directory
+- /scr/utils.py ; Directory organisation ; 05/08/2025 - 18/08/2025 ; change basedir_preprocessed
+-    dinamically according to audio format to embed
+- /scr/utils.py ; Directory organisation ; 05/08/2025 - 18/08/2025 ; have to create specific subfolders to basedir_preprocessed
+-    to account for different octave bands embeddings
+- /scr/utils.py ; Model and sampling parameters ; 11/08/2025 - 18/08/2025 ; delete old parameters already yielded by config.yaml
+- /scr/utils.py ; Directory organisation ; 17/08/2025 - 18/08/2025 ; implement a script that generates correct directory tree
+-    for project when installing the repo
+- /src/distributed_training.py ; main ; 11/08/2025 - 18/08/2025 ; put main in appropriate main file
++ /configs/config0.yaml ; ; 10/08/2025 - 18/08/2025 ; change the device to cineca GPUs

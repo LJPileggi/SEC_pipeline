@@ -5,10 +5,10 @@ from scipy import signal
 import torch
 import torch.nn.functional as F
 import librosa
-import librosa.display # Often useful for visualization
+import librosa.display
 
-# from .utils import epochs, batch_size, device, sampling_rate, ref, center_freqs
 from .utils import get_config_from_yaml
+from .utils_directories import *
 from .models import CLAP_initializer, spectrogram_n_octaveband_generator, FinetunedModel
 from .losses import build_optimizer
 
@@ -404,7 +404,7 @@ def LMAC_explainer(tr_spectrograms, tr_audio_waveforms, tr_y_true_labels, learni
     # Inizializza il dummy CLAP model
     clap_model, audio_embedding, _ = CLAP_initializer()
 
-    finetuned_classifier = FinetunedModel(classes=dummy_classes, device=device)
+    finetuned_classifier = FinetunedModel(classes=dummy_classes, device='cpu')
 
     # Decoder_output_spectrogram_shape è la forma desiderata della maschera,
     # che deve corrispondere alla forma degli spettrogrammi a 3 bande d'ottava.
