@@ -49,6 +49,10 @@
 ```diff
 + /setup.sh ; ; 17/08/2025 - pending ; adjust filepath to correct cineca filepath
 ```
+--------------------------------------------------------------------------
+```diff
++ /.gitignore ; ; 18/08/2025 - pending ; insert data, embeddings and results folders and files to .gitignore
+```
 
 ### Resolved
 
