@@ -11,7 +11,8 @@
 ```
 --------------------------------------------------------------------------
 ```diff
-! /src/distributed_finetuning.py ; ; 18/08/2025 - pending ; implement test mode
+- /src/distributed_finetuning.py ; ; 18/08/2025 - pending ; implement test mode
+- /src/distributed_finetuning.py ; ; 20/08/2025 - pending ; develop support for other classifier models
 ```
 --------------------------------------------------------------------------
 ```diff
@@ -23,10 +24,6 @@
 + /src/explainability.py ; LMAC_explainer ; 06/08/2025 - pending ; correctly set up multi-GPU mode
 + /src/explainability.py ; LMAC_explainer ; 06/08/2025 - pending ; finish writing comments
 + /src/explainability.py ; Set configuration ; 10/08/2025 - pending ; change configuration file dynamically
-```
---------------------------------------------------------------------------
-```diff
-! /script/test_embeddings.py ; ; 20/08/2025 - pending ; complete testing
 ```
 --------------------------------------------------------------------------
 ```diff
@@ -74,4 +71,5 @@
 -    in appropriate directory
 - /src/distributed_training.py ; main ; 11/08/2025 - 20/08/2025 ; change log file name and path to allow for multiple loggings
 -    relative to different configurations (n octave bands, audio formats) to exist; save them in appropriate directory
-- /script/test_embeddings.py ; ; 18/08/2025 - pending ; expand testing by checking file generation and well functioning of functions
+- /script/test_embeddings.py ; ; 18/08/2025 - 20/08/2025 ; expand testing by checking file generation and well functioning of functions
+- /script/test_embeddings.py ; ; 20/08/2025 - 20/08/2025 ; complete testing

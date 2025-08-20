@@ -14,6 +14,7 @@ from .losses import *
 from .models import *
 from .data_handler import load_octaveband_embeddings, create_dataset, CustomDataset
 
+# TODO: develop support for other classifier models
 
 ### Finetuned classifier training ###
 
