@@ -26,7 +26,7 @@
 ```
 --------------------------------------------------------------------------
 ```diff
-! /script/test_embeddings.py ; ; 18/08/2025 - pending ; expand testing by checking file generation and well functioning of functions
+! /script/test_embeddings.py ; ; 20/08/2025 - pending ; complete testing
 ```
 --------------------------------------------------------------------------
 ```diff
@@ -74,3 +74,4 @@
 -    in appropriate directory
 - /src/distributed_training.py ; main ; 11/08/2025 - 20/08/2025 ; change log file name and path to allow for multiple loggings
 -    relative to different configurations (n octave bands, audio formats) to exist; save them in appropriate directory
+- /script/test_embeddings.py ; ; 18/08/2025 - pending ; expand testing by checking file generation and well functioning of functions
