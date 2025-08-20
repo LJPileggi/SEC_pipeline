@@ -57,3 +57,7 @@ valid_cut_secs:
  - 15
  - 20
  - 30
+train_size: 500
+es_size: 100
+valid_size: 100
+test_size: 100

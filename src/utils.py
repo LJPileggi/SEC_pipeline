@@ -26,6 +26,7 @@ def get_config_from_yaml(config_file="config0.yaml"):
     global seed
     global center_freqs
     global valid_cut_secs
+    global divisions_xc_sizes_names
     patience = data["patience"]
     epochs = data["epochs"]
     batch_size = data["batch_size"]
@@ -36,6 +37,10 @@ def get_config_from_yaml(config_file="config0.yaml"):
     seed = data["seed"]
     center_freqs = np.array(data["center_freqs"])
     valid_cut_secs = data["valid_cut_secs"]
+    divisions_xc_sizes_names = [("train", data["train_size"]),
+                                ("es", data["es_size"]),
+                                ("valid", data["valid_size"]),
+                                ("test", data["test_size"])]
 
    
 ### Files and directory handling functions ###
@@ -68,10 +73,8 @@ def extract_all_files_from_dir(source_class_dir, extension='.wav'):
     return sorted(audio_fp_list)
 
 ### Log file functions for embedding calculation ###
-# TODO: change log file name and path to allow for multiple loggings relative to different configurations (n octave bands,
-#    audio formats) to exist; save them in appropriate directory
 
-def gen_log(cut_secs, ic, di, results, round_, finish_class, divisions_xc_sizes_names, noise_perc, seed):
+def gen_log(log_path, cut_secs, ic, di, results, round_, finish_class, divisions_xc_sizes_names, noise_perc, seed):
     """
     Generates a log file to set up a check point for embedding generation.
     This function is called every #save_log_every embedding creations or
@@ -107,7 +110,7 @@ def gen_log(cut_secs, ic, di, results, round_, finish_class, divisions_xc_sizes_
         "noise_perc" : noise_perc,
         "seed" : seed
     }
-    with open(os.path.join(basedir, "log.json"), 'w') as f:
+    with open(os.path.join(log_path, "log.json"), 'w') as f:
         json.dump(log, f)
     print("Logfile saved successfully.\n"
           f"cut_secs: {cut_secs}\n"
@@ -121,22 +124,22 @@ def gen_log(cut_secs, ic, di, results, round_, finish_class, divisions_xc_sizes_
           f"seed: {seed}\n"
     )
 
-def read_log():
+def read_log(log_path):
     """
     Reads the log generated through gen_log.
     
     returns:
      - log: a dictionary containing the logging information.
     """
-    with open(os.path.join(basedir, "log.json"), 'r') as f:
+    with open(os.path.join(log_path, "log.json"), 'r') as f:
         log = json.load(f)
     return log
 
-def delete_log():
+def delete_log(log_path):
     """
     Deletes the log file (if exists) after a complete embedding run.
     """
     try:
-        os.remove(os.path.join(basedir, "log.json"))
+        os.remove(os.path.join(log_path, "log.json"))
     except FileNotFoundError:
         return

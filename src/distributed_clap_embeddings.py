@@ -17,9 +17,6 @@ from .utils import get_config_from_yaml, gen_log, read_log, delete_log, extract_
 from .utils_directories import *
 
 
-# TODO: change log file name and path to allow for multiple loggings relative to different configurations (n octave bands,
-#    audio formats) to exist; save them in appropriate directory
-
 ### Saving functions ###
 # TODO: add support for other audio files like flac etc.
 
@@ -91,7 +88,10 @@ def process_class_with_cut_secs(clap_model, config, cut_secs, n_octave, device, 
     noise_perc = config['audio']['noise_perc']
     seed = config['audio']['seed']
     save_log_every = config['log']['save_log_every']
-    
+
+    if (start_log_data.get("divisions_xc_sizes_names")) & \
+      ((start_log_data.get("divisions_xc_sizes_names")) != config['data']['divisions_xc_sizes_names']):
+        raise ValueError("ValueError: divisions_xc_sizes_names between config and log doesn't match.")
     division_names = [d[0] for d in config['data']['divisions_xc_sizes_names']]
     target_counts_list = [d[1] for d in config['data']['divisions_xc_sizes_names']]
 
@@ -187,7 +187,8 @@ def process_class_with_cut_secs(clap_model, config, cut_secs, n_octave, device, 
                                 # Il log è gestito solo dal rank 0
                                 classes_list = sorted([d for d in os.listdir(root_source) if os.path.isdir(os.path.join(root_source, d))])
                                 ic = classes_list.index(class_to_process)
-                                gen_log(cut_secs, ic, di, results, round_, finish_class, config['data']['divisions_xc_sizes_names'], noise_perc, seed)
+                                gen_log(root_target, cut_secs, ic, di, results, round_, finish_class,
+                                        config['data']['divisions_xc_sizes_names'], noise_perc, seed)
                                 logging.info(f"Log salvato. Stato attuale per classe {class_to_process}: results={results}")
 
                         except Exception as e:
@@ -205,7 +206,7 @@ def process_class_with_cut_secs(clap_model, config, cut_secs, n_octave, device, 
         logging.info(f"Classe '{class_to_process}' elaborata. Creazioni totali: {results}")
 
 
-def worker_process(audio_format, n_octave, rank, world_size, task_queue, start_log_data, test=False):
+def worker_process(audio_format, n_octave, divisions_xc_sizes_names, rank, world_size, task_queue, start_log_data, test=False):
     """
     Worker process for distributed training.
 
@@ -219,6 +220,7 @@ def worker_process(audio_format, n_octave, rank, world_size, task_queue, start_l
     args:
      - audio_format: format of the audio to embed from shell;
      - n_octave: octave band split for the spectrogram from shell;
+     - divisions_xc_sizes_names: list of tuples (split_name, #data);
      - rank (int): unique rank (ID) of current process;
      - world_size (int): total number of processes in the distributed group;
      - task_queue (mp.Queue): shared queue containing tuples of (cut_secs, class_name) to be processed;
@@ -237,7 +239,8 @@ def worker_process(audio_format, n_octave, rank, world_size, task_queue, start_l
             'dirs' : {},
             'audio' : {},
             'spectrogram' : {},
-            'log' : {}
+            'log' : {},
+            'data' : {}
         }
     config['dirs']['root_source'] = os.path.join(basedir_raw if not test else basedir_raw_test, f'{audio_format}')
     config['dirs']['root_target'] = os.path.join(basedir_preprocessed if not test else basedir_preprocessed_test,
@@ -251,8 +254,9 @@ def worker_process(audio_format, n_octave, rank, world_size, task_queue, start_l
     config['audio']['noise_perc'] = noise_perc
     config['audio']['seed'] = seed
     config['log']['save_log_every'] = save_log_every
-
     config['audio']['n_octave'] = n_octave
+    config['data']['divisions_xc_sizes_names'] = divisions_xc_sizes_names
+
     audio_embedding = clap_model.clap.audio_encoder
     audio_embedding.to(device)
     
@@ -294,17 +298,20 @@ def setup_and_run(config_file, audio_format, n_octave, world_size, test=False):
     """
     mp.set_start_method('spawn', force=True)
 
-    log_data = {}
-    try:
-        log_data = read_log()
-        logging.info(f"Ripresa da log: {log_data}")
-    except FileNotFoundError:
-        logging.info("Nessun log trovato, avvio una nuova esecuzione.")
 
     get_config_from_yaml(config_file)
     cut_secs_list = valid_cut_secs
     basedir_raw_format = os.path.join(basedir_raw if not test else basedir_raw_test, f'{audio_format}')
     classes_list = sorted([d for d in os.listdir(basedir_raw_format) if os.path.isdir(os.path.join(basedir_raw_format, d))])
+
+    log_data = {}
+    log_path = os.path.join(basedir_preprocessed if not test else basedir_preprocessed_test,
+                                                    f'{audio_format}', f'{n_octave}_octave')
+    try:
+        log_data = read_log(log_path)
+        logging.info(f"Ripresa da log: {log_data}")
+    except FileNotFoundError:
+        logging.info("Nessun log trovato, avvio una nuova esecuzione.")
 
     # Popola la coda dei task
     task_queue = mp.Queue()
@@ -315,13 +322,14 @@ def setup_and_run(config_file, audio_format, n_octave, world_size, test=False):
     # Avvia i processi worker
     processes = []
     for rank in range(world_size):
-        p = mp.Process(target=worker_process, args=(audio_format, n_octave, rank, world_size, task_queue, log_data, test))
+        p = mp.Process(target=worker_process, args=(audio_format, n_octave, divisions_xc_sizes_names,
+                                                        rank, world_size, task_queue, log_data, test))
         p.start()
         processes.append(p)
 
     for p in processes:
         p.join()
     
-    delete_log()
+    delete_log(log_path)
     logging.info("Tutti i processi hanno terminato il loro lavoro.")
 

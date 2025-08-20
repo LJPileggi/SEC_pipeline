@@ -4,18 +4,10 @@
 ### Pending
 
 ```diff
-! /src/utils.py ; Log file functions for embedding calculation ; 11/08/2025 - pending ; change log file name and path to
-!    allow for multiple loggings relative to different configurations (n octave bands, audio formats) to exist; save them
-!    in appropriate directory
-```
---------------------------------------------------------------------------
-```diff
 + /src/distributed_training.py ; Saving functions -- save_audio_segment ; 11/08/2025 - pending ; add support for other audio
 +    files like flac etc.
 + /src/distributed_training.py ; Embedding generation -- split_audio_tracks ; 11/08/2025 - pending ; add support for
 +    other audio files like flac etc.
-! /src/distributed_training.py ; main ; 11/08/2025 - pending ; change log file name and path to allow for multiple loggings
-!    relative to different configurations (n octave bands, audio formats) to exist; save them in appropriate directory
 ```
 --------------------------------------------------------------------------
 ```diff
@@ -77,3 +69,8 @@
 - /src/distributed_training.py ; main ; 11/08/2025 - 18/08/2025 ; put main in appropriate main file
 - /configs/config0.yaml ; ; 10/08/2025 - 18/08/2025 ; change the device to cineca GPUs
 - /src/training.py ; Embedding generation -- split_audio_tracks ; 10/08/2025 - 18/08/2025 ; add support for other audio files like flac etc.
+- /src/utils.py ; Log file functions for embedding calculation ; 11/08/2025 - 20/08/2025 ; change log file name and path to
+-    allow for multiple loggings relative to different configurations (n octave bands, audio formats) to exist; save them
+-    in appropriate directory
+- /src/distributed_training.py ; main ; 11/08/2025 - 20/08/2025 ; change log file name and path to allow for multiple loggings
+-    relative to different configurations (n octave bands, audio formats) to exist; save them in appropriate directory

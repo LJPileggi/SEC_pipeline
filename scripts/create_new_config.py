@@ -21,11 +21,16 @@ def main():
     while freq != None:
         center_freqs.append(freq)
         freq = input()
+    print("Insert valid_cut_secs")
     valid_cut_secs = []
     cut_secs = input()
     while cut_secs != None:
         valid_cut_secs.append(cut_secs)
         cut_secs = input()
+    train_size = input("Insert train set size")
+    es_size = input("Insert es set size")
+    valid_size = input("Insert valid set size")
+    test_size = input("Insert test set size")
     config = {
         "patience" : patience,
         "epochs" : epochs,
@@ -37,6 +42,10 @@ def main():
         "seed" : seed,
         "center_freqs" : center_freqs,
         "valid_cut_secs" : valid_cut_secs
+        "train_size": train_size,
+        "es_size": es_size,
+        "valid_size": valid_size,
+        "test_size": test_size
     }
     with open(os.path.join("configs", config_file), 'w') as outfile:
         yaml.dump(config, outfile, default_flow_style=False)
