@@ -16,14 +16,14 @@
 ```
 --------------------------------------------------------------------------
 ```diff
-! /src/explainability.py ; listenable_wav_from_n_octaveband ; 06/08/2025 - pending ; set correct directory to save explanations
+! /src/explainability/LMAC.py ; listenable_wav_from_n_octaveband ; 06/08/2025 - pending ; set correct directory to save explanations
 !    from listenable_wav_from_n_octaveband
-! /src/explainability.py ; LMAC -- generate_listenable_interpretation ; 06/08/2025 - pending ; set correct reconstructed audio
+! /src/explainability/LMAC.py ; LMAC -- generate_listenable_interpretation ; 06/08/2025 - pending ; set correct reconstructed audio
 !    path for generate_listenable_interpretations
-+ /src/explainability.py ; LMAC_explainer ; 06/08/2025 - pending ; finish fixing and honing the pipeline
-+ /src/explainability.py ; LMAC_explainer ; 06/08/2025 - pending ; correctly set up multi-GPU mode
-+ /src/explainability.py ; LMAC_explainer ; 06/08/2025 - pending ; finish writing comments
-+ /src/explainability.py ; Set configuration ; 10/08/2025 - pending ; change configuration file dynamically
++ /src/explainability/LMAC.py ; LMAC_explainer ; 06/08/2025 - pending ; finish fixing and honing the pipeline
++ /src/explainability/LMAC.py ; LMAC_explainer ; 06/08/2025 - pending ; correctly set up multi-GPU mode
++ /src/explainability/LMAC.py ; LMAC_explainer ; 06/08/2025 - pending ; finish writing comments
++ /src/explainability/LMAC.py ; Set configuration ; 10/08/2025 - pending ; change configuration file dynamically
 ```
 --------------------------------------------------------------------------
 ```diff
