@@ -18,7 +18,6 @@ from .utils_directories import *
 
 
 ### Saving functions ###
-# TODO: add support for other audio files like flac etc.
 
 def save_audio_segment(data, sr, path, audio_format="wav"):
     """
@@ -34,14 +33,14 @@ def save_audio_segment(data, sr, path, audio_format="wav"):
     """
     if audio_format == "wav":
         sf.write(path, data, sr, subtype='PCM_24')
-    elif audio_format == "mp3":
+    elif audio_format in ("mp3", "flac"):
         audio_segment = pydub.AudioSegment(
             data.astype("float32").tobytes(),
             frame_rate=sr,
             sample_width=4,
             channels=1
         )
-        audio_segment.export(path, format="mp3", bitrate="128k")
+        audio_segment.export(path, format=audio_format, bitrate="128k")
     else:
         raise NotImplementedError(f"Formato audio {audio_format} non implementato.")
 
@@ -58,7 +57,6 @@ def save_embedding(embedding, path):
     torch.save(embedding.cpu(), path)
 
 ### Embedding generation ###
-# TODO: add support for other audio files like flac etc.
 
 def process_class_with_cut_secs(clap_model, config, cut_secs, n_octave, device, rank, start_log_data, class_to_process):
     """

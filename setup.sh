@@ -1,13 +1,13 @@
 #!/bin/bash
 
 echo "Creating virtual environment..."
-python -m venv .venv
+python3 -m venv .venv
 
 echo "Activating virtual environment..."
 source .venv/bin/activate
 
 echo "Installing dependencies..."
-pip install -r requirements.txt
+pip3 install -r requirements.txt
 
 echo "Creation of working directories..."
 mkdir -p ../dataSEC

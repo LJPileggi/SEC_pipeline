@@ -4,13 +4,6 @@
 ### Pending
 
 ```diff
-+ /src/distributed_training.py ; Saving functions -- save_audio_segment ; 11/08/2025 - pending ; add support for other audio
-+    files like flac etc.
-+ /src/distributed_training.py ; Embedding generation -- split_audio_tracks ; 11/08/2025 - pending ; add support for
-+    other audio files like flac etc.
-```
---------------------------------------------------------------------------
-```diff
 - /src/distributed_finetuning.py ; ; 18/08/2025 - pending ; implement test mode
 - /src/distributed_finetuning.py ; ; 20/08/2025 - pending ; develop support for other classifier models
 ```
@@ -65,5 +58,9 @@
 -    relative to different configurations (n octave bands, audio formats) to exist; save them in appropriate directory
 - /script/test_embeddings.py ; ; 18/08/2025 - 20/08/2025 ; expand testing by checking file generation and well functioning of functions
 - /script/test_embeddings.py ; ; 20/08/2025 - 20/08/2025 ; complete testing
-+ /setup.sh ; ; 17/08/2025 - 29/08/2025 ; adjust filepath to correct cineca filepath
-+ /.gitignore ; ; 18/08/2025 - 29/08/2025 ; insert data, embeddings and results folders and files to .gitignore
+- /setup.sh ; ; 17/08/2025 - 29/08/2025 ; adjust filepath to correct cineca filepath
+- /.gitignore ; ; 18/08/2025 - 29/08/2025 ; insert data, embeddings and results folders and files to .gitignore
+- /src/distributed_training.py ; Saving functions -- save_audio_segment ; 11/08/2025 - 29/08/2025 ; add support for other audio
+-    files like flac etc.
+- /src/distributed_training.py ; Embedding generation -- split_audio_tracks ; 11/08/2025 - 29/08/2025 ; add support for
+-    other audio files like flac etc.
