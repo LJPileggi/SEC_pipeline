@@ -9,7 +9,6 @@ source .venv/bin/activate
 echo "Installing dependencies..."
 pip install -r requirements.txt
 
-# TODO: adjust filepath to correct ../dataSEC filepath
 echo "Creation of working directories..."
 mkdir -p ../dataSEC
 mkdir -p ../dataSEC/PREPROCESSED_DATASET

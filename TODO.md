@@ -27,15 +27,7 @@
 ```
 --------------------------------------------------------------------------
 ```diff
-+ /setup.sh ; ; 17/08/2025 - pending ; adjust filepath to correct cineca filepath
-```
---------------------------------------------------------------------------
-```diff
 + /run_tests.sh ; ; 18/08/2025 - pending ; add other tests and implement correctness check
-```
---------------------------------------------------------------------------
-```diff
-+ /.gitignore ; ; 18/08/2025 - pending ; insert data, embeddings and results folders and files to .gitignore
 ```
 
 ### Resolved
@@ -73,3 +65,5 @@
 -    relative to different configurations (n octave bands, audio formats) to exist; save them in appropriate directory
 - /script/test_embeddings.py ; ; 18/08/2025 - 20/08/2025 ; expand testing by checking file generation and well functioning of functions
 - /script/test_embeddings.py ; ; 20/08/2025 - 20/08/2025 ; complete testing
++ /setup.sh ; ; 17/08/2025 - 29/08/2025 ; adjust filepath to correct cineca filepath
++ /.gitignore ; ; 18/08/2025 - 29/08/2025 ; insert data, embeddings and results folders and files to .gitignore
