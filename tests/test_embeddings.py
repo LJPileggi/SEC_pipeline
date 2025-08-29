@@ -27,10 +27,12 @@ class EmbeddingTestCase(unittest.TestCase):
         self._audio_formats = ['wav', 'mp3', 'flac']
         for audio_format in self._audio_formats:
             print(f'Testing {audio_format} format:')
+            embed_dir = os.path.join(basedir_preprocessed_test, f'{audio_format}', f'{self._n_octave}_octave')
+            if not os.path.exists(embed_dir):
+                os.mkdir(embed_dir)
             logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s',
                                                     handlers=[logging.StreamHandler(),
-                                                    logging.FileHandler(os.path.join(basedir_preprocessed_test,
-                                                    f'{audio_format}', f'{self._n_octave}_octave'), "log.txt"))])
+                                                    logging.FileHandler(embed_dir, "log.txt"))])
             setup_and_run(self.test_config, n_octave, audio_format, _world_size)
 
     def test_number_of_embeddings(self):

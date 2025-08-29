@@ -9,17 +9,17 @@ source .venv/bin/activate
 echo "Installing dependencies..."
 pip install -r requirements.txt
 
-# TODO: adjust filepath to correct cineca filepath
+# TODO: adjust filepath to correct ../dataSEC filepath
 echo "Creation of working directories..."
-mkdir -p cineca
-mkdir -p cineca/PREPROCESSED_DATASET
-mkdir -p cineca/results
-mkdir -p cineca/results/validation
-mkdir -p cineca/results/finetuned_model
-mkdir -p cineca/testing
-mkdir -p cineca/testing/PREPROCESSED_DATASET
-mkdir -p cineca/testing/results
-mkdir -p cineca/testing/results/validation
-mkdir -p cineca/testing/results/finetuned_model
+mkdir -p ../dataSEC
+mkdir -p ../dataSEC/PREPROCESSED_DATASET
+mkdir -p ../dataSEC/results
+mkdir -p ../dataSEC/results/validation
+mkdir -p ../dataSEC/results/finetuned_model
+mkdir -p ../dataSEC/testing
+mkdir -p ../dataSEC/testing/PREPROCESSED_DATASET
+mkdir -p ../dataSEC/testing/results
+mkdir -p ../dataSEC/testing/results/validation
+mkdir -p ../dataSEC/testing/results/finetuned_model
 
 echo "Installation completed successfully. Virtual environment correctly set up."

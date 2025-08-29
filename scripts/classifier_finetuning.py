@@ -2,7 +2,8 @@ import argparse
 import sys
 sys.path.append('../')
 
-from src.utils import get_config_from_yaml, basedir_preprocessed
+from src.utils import get_config_from_yaml
+from src.utils_directories import basedir_preprocessed
 from src.data_handler import load_octaveband_embeddings
 from src.models import CLAP_initializer
 from src.distributed_finetuning import select_optim_distributed

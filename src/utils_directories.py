@@ -14,7 +14,7 @@ __all__ = ["basedir",
            ]
 
 # cineca base directory     
-basedir = 'cineca'
+basedir = os.path.join('..', 'dataSEC')
 
 # raw audio files directory
 basedir_raw = os.path.join(basedir, 'RAW_DATASET')
