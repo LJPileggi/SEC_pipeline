@@ -231,9 +231,13 @@ def worker_process(audio_format, n_octave, config, rank, world_size, task_queue,
     """
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'
-    dist.init_process_group("nccl", rank=rank, world_size=world_size)
-    torch.cuda.set_device(rank)
-    device = torch.device(f'cuda:{rank}')
+    if torch.cuda.is_available():
+        dist.init_process_group("nccl", rank=rank, world_size=world_size)
+        torch.cuda.set_device(rank)
+        device = torch.device(f'cuda:{rank}')
+    else:
+        dist.init_process_group("gloo", rank=rank, world_size=world_size)
+        device = torch.device('cpu')
 
     clap_model, _, _ = CLAP_initializer()
 
@@ -294,7 +298,7 @@ def setup_and_run(config_file, audio_format, n_octave, world_size, test=False):
             'data' : {}
         }
 
-    _, _, _, save_log_every, sampling_rate, ref, noise_perc, seed, center_freqs, cut_secs_list,
+    _, _, _, save_log_every, sampling_rate, ref, noise_perc, seed, center_freqs, cut_secs_list, \
                                     divisions_xc_sizes_names = get_config_from_yaml(config_file)
 
     config['spectrogram']['sr'] = sampling_rate
