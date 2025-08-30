@@ -1,8 +1,9 @@
 import argparse
 import sys
-sys.path.append('../')
+import os
+import logging
+sys.path.append('.')
 
-from src.utils import get_config_from_yaml
 from src.utils_directories import basedir_preprocessed
 from src.distributed_clap_embeddings import setup_and_run
 
@@ -24,7 +25,7 @@ def main():
     world_size = 4
     embed_folder = os.path.join(basedir_preprocessed, f'{args.audio_format}', f'{args.n_octave}_octave')
     if not os.path.exists(embed_folder):
-        os.mkdir(embed_folder)
+        os.makedirs(embed_folder)
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s',
                                              handlers=[logging.StreamHandler(),
                    logging.FileHandler(os.path.join(embed_folder, "log.txt"))])

@@ -113,13 +113,14 @@ def data_stats(dataset):
     print(f'stats: min={np.min(list_blc)}, max={np.max(list_blc)}, ' \
           f'mean={np.mean(list_blc)}, std={np.std(list_blc)}')
 
-def load_octaveband_embeddings(octaveband_dir):
+def load_octaveband_embeddings(octaveband_dir, batch_size):
     """
     Generates lists of DataLoaders and CustomDatasets for embeddings
     of a given octaveband run.
     
     args:
-     - octaveband_dir: directory for a given octaveband run.
+     - octaveband_dir: directory for a given octaveband run;
+     - batch_size: batch size for DataLoaders.
 
     returns:
      - dataloaders: list of DataLoader objects containing the datasets;

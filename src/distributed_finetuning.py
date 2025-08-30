@@ -6,13 +6,11 @@ import matplotlib.pyplot as plt
 import torch
 import torch.distributed as dist
 from tqdm import tqdm
-from sklearn.metrics import ConfusionMatrixDisplays
 
 from .utils import *
 from .utils_directories import *
 from .losses import *
 from .models import *
-from .data_handler import load_octaveband_embeddings, create_dataset, CustomDataset
 
 # TODO: develop support for other classifier models
 

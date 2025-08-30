@@ -13,34 +13,25 @@ def get_config_from_yaml(config_file="config0.yaml"):
     args:
      - config_file: name of config file, to be attached to its relative path.
     """
-    config_path = os.path.join('..', 'configs', config_file)
+    config_path = os.path.join('configs', config_file)
     with open(config_path, 'r') as f:
         configs = yaml.load(f, Loader=yaml.SafeLoader)
-    global patience
-    global epochs
-    global batch_size
-    global save_log_every
-    global sampling_rate
-    global ref
-    global noise_perc
-    global seed
-    global center_freqs
-    global valid_cut_secs
-    global divisions_xc_sizes_names
-    patience = data["patience"]
-    epochs = data["epochs"]
-    batch_size = data["batch_size"]
-    save_log_every = data["save_log_every"]
-    sampling_rate = data["sampling_rate"]
-    ref = data["ref"]
-    noise_perc = data["noise_perc"]
-    seed = data["seed"]
-    center_freqs = np.array(data["center_freqs"])
-    valid_cut_secs = data["valid_cut_secs"]
-    divisions_xc_sizes_names = [("train", data["train_size"]),
-                                ("es", data["es_size"]),
-                                ("valid", data["valid_size"]),
-                                ("test", data["test_size"])]
+    patience = configs["patience"]
+    epochs = configs["epochs"]
+    batch_size = configs["batch_size"]
+    save_log_every = configs["save_log_every"]
+    sampling_rate = configs["sampling_rate"]
+    ref = configs["ref"]
+    noise_perc = configs["noise_perc"]
+    seed = configs["seed"]
+    center_freqs = np.array(configs["center_freqs"])
+    valid_cut_secs = configs["valid_cut_secs"]
+    divisions_xc_sizes_names = [("train", configs["train_size"]),
+                                ("es", configs["es_size"]),
+                                ("valid", configs["valid_size"]),
+                                ("test", configs["test_size"])]
+    return patience, epochs, batch_size, save_log_every, sampling_rate, ref, noise_perc, \
+                            seed, center_freqs, valid_cut_secs, divisions_xc_sizes_names
 
    
 ### Files and directory handling functions ###

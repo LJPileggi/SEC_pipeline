@@ -12,8 +12,8 @@ import logging
 import random
 import pydub
 
-from .models import CLAP_initializer
-from .utils import get_config_from_yaml, gen_log, read_log, delete_log, extract_all_files_from_dir, spectrogram_n_octaveband_generator
+from .models import CLAP_initializer, spectrogram_n_octaveband_generator
+from .utils import get_config_from_yaml, gen_log, read_log, delete_log, extract_all_files_from_dir
 from .utils_directories import *
 
 
@@ -87,7 +87,7 @@ def process_class_with_cut_secs(clap_model, config, cut_secs, n_octave, device, 
     seed = config['audio']['seed']
     save_log_every = config['log']['save_log_every']
 
-    if (start_log_data.get("divisions_xc_sizes_names")) & \
+    if (start_log_data.get("divisions_xc_sizes_names")) and \
       ((start_log_data.get("divisions_xc_sizes_names")) != config['data']['divisions_xc_sizes_names']):
         raise ValueError("ValueError: divisions_xc_sizes_names between config and log doesn't match.")
     division_names = [d[0] for d in config['data']['divisions_xc_sizes_names']]
@@ -177,7 +177,7 @@ def process_class_with_cut_secs(clap_model, config, cut_secs, n_octave, device, 
                                 embedding = audio_embedding(x)[0][0]
                             
                             save_embedding(embedding, trg_pt_path)
-                            # os.remove(trg_audio_path)
+                            os.remove(trg_audio_path)
                             
                             results += 1
 
@@ -198,13 +198,17 @@ def process_class_with_cut_secs(clap_model, config, cut_secs, n_octave, device, 
 
                     if finish_class:
                         break
+
+                except Exception as e:
+                    logging.error(f"Errore durante il caricamento del file {filepath}: {e}. Skippo il file.")
+                    continue
+
                 if finish_class:
                     break
         
         logging.info(f"Classe '{class_to_process}' elaborata. Creazioni totali: {results}")
 
-
-def worker_process(audio_format, n_octave, divisions_xc_sizes_names, rank, world_size, task_queue, start_log_data, test=False):
+def worker_process(audio_format, n_octave, config, rank, world_size, task_queue, start_log_data, test=False):
     """
     Worker process for distributed training.
 
@@ -218,7 +222,7 @@ def worker_process(audio_format, n_octave, divisions_xc_sizes_names, rank, world
     args:
      - audio_format: format of the audio to embed from shell;
      - n_octave: octave band split for the spectrogram from shell;
-     - divisions_xc_sizes_names: list of tuples (split_name, #data);
+     - config: incomplete config dictionary; info about audio format and n octave is added inside the function;
      - rank (int): unique rank (ID) of current process;
      - world_size (int): total number of processes in the distributed group;
      - task_queue (mp.Queue): shared queue containing tuples of (cut_secs, class_name) to be processed;
@@ -233,27 +237,13 @@ def worker_process(audio_format, n_octave, divisions_xc_sizes_names, rank, world
 
     clap_model, _, _ = CLAP_initializer()
 
-    config = {
-            'dirs' : {},
-            'audio' : {},
-            'spectrogram' : {},
-            'log' : {},
-            'data' : {}
-        }
     config['dirs']['root_source'] = os.path.join(basedir_raw if not test else basedir_raw_test, f'{audio_format}')
     config['dirs']['root_target'] = os.path.join(basedir_preprocessed if not test else basedir_preprocessed_test,
                                                                 f'{audio_format}', f'{n_octave}_octave')
     if not os.path.exists(config['dirs']['root_target']):
-        os.makedir(config['dirs']['root_target'])
+        os.makedirs(config['dirs']['root_target'])
     config['audio']['audio_format'] = audio_format
-    config['spectrogram']['sr'] = sr
-    config['spectrogram']['ref'] = ref
-    config['spectrogram']['center_freqs'] = center_freqs
-    config['audio']['noise_perc'] = noise_perc
-    config['audio']['seed'] = seed
-    config['log']['save_log_every'] = save_log_every
     config['audio']['n_octave'] = n_octave
-    config['data']['divisions_xc_sizes_names'] = divisions_xc_sizes_names
 
     audio_embedding = clap_model.clap.audio_encoder
     audio_embedding.to(device)
@@ -296,9 +286,25 @@ def setup_and_run(config_file, audio_format, n_octave, world_size, test=False):
     """
     mp.set_start_method('spawn', force=True)
 
+    config = {
+            'dirs' : {},
+            'audio' : {},
+            'spectrogram' : {},
+            'log' : {},
+            'data' : {}
+        }
 
-    get_config_from_yaml(config_file)
-    cut_secs_list = valid_cut_secs
+    _, _, _, save_log_every, sampling_rate, ref, noise_perc, seed, center_freqs, cut_secs_list,
+                                    divisions_xc_sizes_names = get_config_from_yaml(config_file)
+
+    config['spectrogram']['sr'] = sampling_rate
+    config['spectrogram']['ref'] = ref
+    config['spectrogram']['center_freqs'] = center_freqs
+    config['audio']['noise_perc'] = noise_perc
+    config['audio']['seed'] = seed
+    config['log']['save_log_every'] = save_log_every
+    config['data']['divisions_xc_sizes_names'] = divisions_xc_sizes_names
+
     basedir_raw_format = os.path.join(basedir_raw if not test else basedir_raw_test, f'{audio_format}')
     classes_list = sorted([d for d in os.listdir(basedir_raw_format) if os.path.isdir(os.path.join(basedir_raw_format, d))])
 
@@ -320,8 +326,8 @@ def setup_and_run(config_file, audio_format, n_octave, world_size, test=False):
     # Avvia i processi worker
     processes = []
     for rank in range(world_size):
-        p = mp.Process(target=worker_process, args=(audio_format, n_octave, divisions_xc_sizes_names,
-                                                        rank, world_size, task_queue, log_data, test))
+        p = mp.Process(target=worker_process, args=(audio_format, n_octave, config,
+                                      rank, world_size, task_queue, log_data, test))
         p.start()
         processes.append(p)
 

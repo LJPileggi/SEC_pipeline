@@ -1,10 +1,11 @@
 import argparse
+import os
 import sys
 import unittest
 import shutil
-sys.path.append('../')
+import logging
+sys.path.append('.')
 
-from src.utils import get_config_from_yaml
 from src.utils_directories import *
 from src.distributed_clap_embeddings import setup_and_run
 
@@ -17,11 +18,12 @@ class EmbeddingTestCase(unittest.TestCase):
         self._gen_test_embeddings()
 
     def tearDown(self):
-        for d in os.listdir(basedir_preprocessed_test) if os.path.isdir(os.path.join(basedir_preprocessed_test, d)):
-            shutil.rmtree(d)
+        for d in os.listdir(basedir_preprocessed_test):
+            if os.path.isdir(os.path.join(basedir_preprocessed_test, d)):
+                shutil.rmtree(d)
 
     def _gen_test_embeddings(self):
-        self.test_config = os.path.join('..', 'configs', 'test_config.yaml')
+        self.test_config = 'test_config.yaml'
         _world_size = 4
         self._n_octave = 3
         self._audio_formats = ['wav', 'mp3', 'flac']
@@ -29,11 +31,11 @@ class EmbeddingTestCase(unittest.TestCase):
             print(f'Testing {audio_format} format:')
             embed_dir = os.path.join(basedir_preprocessed_test, f'{audio_format}', f'{self._n_octave}_octave')
             if not os.path.exists(embed_dir):
-                os.mkdir(embed_dir)
+                os.makedirs(embed_dir)
             logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s',
                                                     handlers=[logging.StreamHandler(),
-                                                    logging.FileHandler(embed_dir, "log.txt"))])
-            setup_and_run(self.test_config, n_octave, audio_format, _world_size)
+                                                    logging.FileHandler(os.path.join(embed_dir, "log.txt"))])
+            setup_and_run(self.test_config, self._n_octave, audio_format, _world_size)
 
     def test_number_of_embeddings(self):
         correct_n = self.n_classes * sum(div[1] for div in divisions_xc_sizes_names)

@@ -1,6 +1,6 @@
 import argparse
 import sys
-sys.path.append('../')
+sys.path.append('.')
 
 from src.utils import get_config_from_yaml
 from src.utils_directories import basedir_preprocessed
@@ -42,7 +42,7 @@ def main_worker(rank, world_size, validation_filepath, dataloaders, classes, epo
 def main():
     # Define your parameters here
     args = parsing()
-    get_config_from_yaml(args.config_file)
+    patience, epochs, batch_size, _, _, _, _, _, _, _, _ = get_config_from_yaml(config_file)
     world_size = 4
     
     # Percorso dove si trovano gli embedding
@@ -50,7 +50,7 @@ def main():
 
     # 1. Carica i dataloader e i dataset
     print("Caricamento degli embeddings in corso...")
-    dataloaders_dict, _ = load_octaveband_embeddings(octaveband_dir)
+    dataloaders_dict, _ = load_octaveband_embeddings(octaveband_dir, batch_size)
     print("Caricamento completato.")
     
     # 2. Ottieni la lista delle classi dal primo dataset caricato
