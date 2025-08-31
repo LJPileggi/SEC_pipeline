@@ -4,6 +4,10 @@
 ### Pending
 
 ```diff
+- /src/distributed_clap_embeddings.py ; process_class_with_cut_secs ; 31/08/2025 - pending ; find solution for conflicting logs
+```
+--------------------------------------------------------------------------
+```diff
 - /src/distributed_finetuning.py ; ; 18/08/2025 - pending ; implement test mode
 - /src/distributed_finetuning.py ; ; 20/08/2025 - pending ; develop support for other classifier models
 ```

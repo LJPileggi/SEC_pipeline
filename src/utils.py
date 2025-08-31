@@ -108,7 +108,7 @@ def gen_log(log_path, cut_secs, ic, di, results, round_, finish_class, divisions
           f"ic: {ic}\n"
           f"di: {di}\n"
           f"results: {results}\n"
-          f"round: {round}\n"
+          f"round: {round_}\n"
           f"finish_class: {finish_class}\n"
           f"divisions_xc_sizes_names: {divisions_xc_sizes_names}\n"
           f"noise_perc: {noise_perc}\n"

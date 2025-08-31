@@ -60,6 +60,7 @@ def save_embedding(embedding, path):
     torch.save(embedding.cpu(), path)
 
 ### Embedding generation ###
+# TODO: find solution for conflicting logs
 
 def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n_octave, device, rank, start_log_data, class_to_process):
     """
@@ -202,12 +203,13 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
                         except KeyboardInterrupt:
                             print("\nProcesso interrotto dall'utente. Pulizia ed uscita.")
                             # Salva lo stato corrente prima di uscire
-                            classes_list = sorted([d for d in os.listdir(root_source) if os.path.isdir(os.path.join(root_source, d))])
-                            ic = classes_list.index(class_to_process)
-                            gen_log(root_target, cut_secs, ic, di, results, round_, finish_class,
-                                    config['data']['divisions_xc_sizes_names'], noise_perc, seed)
-                            if os.path.exists(trg_audio_path):
-                                os.remove(trg_audio_path)
+                            if rank == 0:
+                                classes_list = sorted([d for d in os.listdir(root_source) if os.path.isdir(os.path.join(root_source, d))])
+                                ic = classes_list.index(class_to_process)
+                                gen_log(root_target, cut_secs, ic, di, results, round_, finish_class,
+                                        config['data']['divisions_xc_sizes_names'], noise_perc, seed)
+                                if os.path.exists(trg_audio_path):
+                                    os.remove(trg_audio_path)
                             sys.exit(0)
 
                         except Exception as e:
