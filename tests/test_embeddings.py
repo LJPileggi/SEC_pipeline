@@ -10,6 +10,7 @@ from src.utils import get_config_from_yaml
 from src.utils_directories import *
 from src.distributed_clap_embeddings import setup_and_run
 
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 class EmbeddingTestCase(unittest.TestCase):
     def setUp(self):

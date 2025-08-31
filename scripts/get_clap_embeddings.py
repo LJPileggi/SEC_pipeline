@@ -7,6 +7,8 @@ sys.path.append('.')
 from src.utils_directories import basedir_preprocessed
 from src.distributed_clap_embeddings import setup_and_run
 
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+
 def parsing():
     parser = argparse.ArgumentParser(description='Get CLAP embeddings from audio files')
     parser.add_argument('--config_file', metavar='config_file', dest='config_file',

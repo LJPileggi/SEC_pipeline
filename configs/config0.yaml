@@ -3,7 +3,7 @@ epochs: 100
 batch_size: 128
 save_log_every: 1000
 sampling_rate: 52100
-ref: 2e-5
+ref: 2.e-05
 noise_perc: 0.3
 seed: 1
 center_freqs:

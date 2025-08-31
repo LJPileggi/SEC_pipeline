@@ -1,14 +1,17 @@
 import os
 import sys
+import math
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
+from queue import Empty
 from torch.utils.data.distributed import DistributedSampler
 import numpy as np
 import soundfile as sf
 import librosa
 from tqdm import tqdm
 import logging
+import traceback
 import random
 import pydub
 
@@ -58,7 +61,7 @@ def save_embedding(embedding, path):
 
 ### Embedding generation ###
 
-def process_class_with_cut_secs(clap_model, config, cut_secs, n_octave, device, rank, start_log_data, class_to_process):
+def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n_octave, device, rank, start_log_data, class_to_process):
     """
     Main job to submit to GPU workers to generate CLAP embeddings for a given class and
     cut_secs value. Each track gets split into multiple segments of length cut_secs * sr
@@ -68,6 +71,7 @@ def process_class_with_cut_secs(clap_model, config, cut_secs, n_octave, device, 
 
     args:
      - clap_model: instance of CLAP model used for embedding generation;
+     - audio_embedding: CLAP audio encoder for embedding generation;
      - config (dict): dictionary containing configuration subdictionaries for 'dirs',
        'audio', 'spectrogram',  'log';
      - cut_secs (int): duration of audio segments to be generated, in seconds;
@@ -119,6 +123,7 @@ def process_class_with_cut_secs(clap_model, config, cut_secs, n_octave, device, 
         
         while not finish_class:
             round_ += 1
+            n_corrupt_files = 0
             for p in tqdm(perms, desc=f'GPU {rank} Processing {class_to_process} ({round_})', disable=(rank != 0)):
                 audio_fp = audio_fp_list[p]
                 filepath = os.path.join(source_class_dir, audio_fp)
@@ -150,6 +155,9 @@ def process_class_with_cut_secs(clap_model, config, cut_secs, n_octave, device, 
                             trg_pt_path = os.path.join(dir_trvlts_paths[di], f'{new_fp_base}.pt')
                             trg_spec3o_path = os.path.join(dir_trvlts_paths[di], f'{new_fp_base}_spec3o.npy')
 
+                            # if rank == 0:
+                            #     print(class_to_process, di, results, round_)
+
                             if os.path.exists(trg_pt_path) and os.path.exists(trg_spec3o_path):
                                 results += 1
                                 continue
@@ -159,7 +167,8 @@ def process_class_with_cut_secs(clap_model, config, cut_secs, n_octave, device, 
                             cut_data = data[start:end]
 
                             if len(cut_data) < window_size:
-                                continue
+                                pad_length = window_size - len(cut_data)
+                                cut_data = np.pad(cut_data, (0, pad_length), 'constant')
 
                             abs_cutdata = np.abs(cut_data)
                             max_threshold = np.mean(abs_cutdata)
@@ -167,7 +176,8 @@ def process_class_with_cut_secs(clap_model, config, cut_secs, n_octave, device, 
                             new_audio = (1 - noise_perc) * cut_data + noise_perc * noise
                             
                             save_audio_segment(new_audio, sr, trg_audio_path, audio_format)
-                            spec3o = spectrogram_n_octaveband_generator(new_audio, sr, integration_seconds=0.1, n_octave=n_octave)
+                            spec3o = spectrogram_n_octaveband_generator(new_audio, sr, integration_seconds=0.1,
+                                                        n_octave=n_octave, center_freqs=center_freqs, ref=ref)
                             save_spectrogram(spec3o, trg_spec3o_path)
 
                             preprocessed_audio = clap_model.preprocess_audio([trg_audio_path], True)
@@ -189,8 +199,20 @@ def process_class_with_cut_secs(clap_model, config, cut_secs, n_octave, device, 
                                         config['data']['divisions_xc_sizes_names'], noise_perc, seed)
                                 logging.info(f"Log salvato. Stato attuale per classe {class_to_process}: results={results}")
 
+                        except KeyboardInterrupt:
+                            print("\nProcesso interrotto dall'utente. Pulizia ed uscita.")
+                            # Salva lo stato corrente prima di uscire
+                            classes_list = sorted([d for d in os.listdir(root_source) if os.path.isdir(os.path.join(root_source, d))])
+                            ic = classes_list.index(class_to_process)
+                            gen_log(root_target, cut_secs, ic, di, results, round_, finish_class,
+                                    config['data']['divisions_xc_sizes_names'], noise_perc, seed)
+                            if os.path.exists(trg_audio_path):
+                                os.remove(trg_audio_path)
+                            sys.exit(0)
+
                         except Exception as e:
                             logging.error(f"Errore durante l'elaborazione del bucket {b} da {filepath}: {e}. Tentativo di pulizia.")
+                            traceback.print_exc(file=sys.stderr)
                             for file_path in [trg_audio_path, trg_pt_path, trg_spec3o_path]:
                                 if file_path and os.path.exists(file_path):
                                     os.remove(file_path)
@@ -201,6 +223,14 @@ def process_class_with_cut_secs(clap_model, config, cut_secs, n_octave, device, 
 
                 except Exception as e:
                     logging.error(f"Errore durante il caricamento del file {filepath}: {e}. Skippo il file.")
+                    n_corrupt_files += 1
+                    if n_corrupt_files >= len(perms):
+                        print(f"Can\'t open any file in {class_to_process} class directory. Training is aborted.")
+                        classes_list = sorted([d for d in os.listdir(root_source) if os.path.isdir(os.path.join(root_source, d))])
+                        ic = classes_list.index(class_to_process)
+                        gen_log(root_target, cut_secs, ic, di, results, round_, finish_class,
+                                config['data']['divisions_xc_sizes_names'], noise_perc, seed)
+                        sys.exit(0)
                     continue
 
                 if finish_class:
@@ -258,8 +288,8 @@ def worker_process(audio_format, n_octave, config, rank, world_size, task_queue,
         try:
             cut_secs, class_name = task_queue.get(timeout=1)
             logging.info(f"Processo {rank} sta elaborando: cut_secs={cut_secs}, classe={class_name}")
-            process_class_with_cut_secs(clap_model, config, cut_secs, n_octave, device, rank, start_log_data, class_name)
-        except mp.queues.Empty:
+            process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n_octave, device, rank, start_log_data, class_name)
+        except Empty:
             logging.info(f"Processo {rank} ha terminato, coda vuota.")
             break
         except Exception as e:
