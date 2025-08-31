@@ -192,12 +192,12 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
                             
                             results += 1
 
-                            if rank == 0 and results % save_log_every == 0:
+                            if results % save_log_every == 0:
                                 # Il log è gestito solo dal rank 0
                                 classes_list = sorted([d for d in os.listdir(root_source) if os.path.isdir(os.path.join(root_source, d))])
                                 ic = classes_list.index(class_to_process)
                                 gen_log(root_target, cut_secs, ic, di, results, round_, finish_class,
-                                        config['data']['divisions_xc_sizes_names'], noise_perc, seed)
+                                    config['data']['divisions_xc_sizes_names'], noise_perc, seed, rank)
                                 logging.info(f"Log salvato. Stato attuale per classe {class_to_process}: results={results}")
 
                         except KeyboardInterrupt:
@@ -207,7 +207,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
                                 classes_list = sorted([d for d in os.listdir(root_source) if os.path.isdir(os.path.join(root_source, d))])
                                 ic = classes_list.index(class_to_process)
                                 gen_log(root_target, cut_secs, ic, di, results, round_, finish_class,
-                                        config['data']['divisions_xc_sizes_names'], noise_perc, seed)
+                                    config['data']['divisions_xc_sizes_names'], noise_perc, seed, rank)
                                 if os.path.exists(trg_audio_path):
                                     os.remove(trg_audio_path)
                             sys.exit(0)
@@ -231,7 +231,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
                         classes_list = sorted([d for d in os.listdir(root_source) if os.path.isdir(os.path.join(root_source, d))])
                         ic = classes_list.index(class_to_process)
                         gen_log(root_target, cut_secs, ic, di, results, round_, finish_class,
-                                config['data']['divisions_xc_sizes_names'], noise_perc, seed)
+                            config['data']['divisions_xc_sizes_names'], noise_perc, seed, rank)
                         sys.exit(0)
                     continue
 

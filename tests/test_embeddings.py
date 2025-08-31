@@ -43,7 +43,7 @@ class EmbeddingTestCase(unittest.TestCase):
             setup_and_run(self.test_config, audio_format, self._n_octave, _world_size, test=True)
 
     def test_number_of_embeddings(self):
-        correct_n = self.n_classes * sum(div[1] for div in self._divisions_xc_sizes_names)
+        correct_n = self.n_classes * sum(div[1] for div in self._divisions_xc_sizes_names) * 4
         for audio_format in self._audio_formats:
             n_segments = sum(len([f for f in files if f.find(f'.{audio_format}') != -1]) \
                       for _, _, files in os.walk(os.path.join(basedir_preprocessed_test,

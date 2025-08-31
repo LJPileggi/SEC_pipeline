@@ -1,6 +1,8 @@
 import os
 import json
 import yaml
+import glob
+import logging
 import numpy as np
 
 ### Get model, training and spectrogram configuration from yaml ###
@@ -65,7 +67,8 @@ def extract_all_files_from_dir(source_class_dir, extension='.wav'):
 
 ### Log file functions for embedding calculation ###
 
-def gen_log(log_path, cut_secs, ic, di, results, round_, finish_class, divisions_xc_sizes_names, noise_perc, seed):
+def gen_log(log_path, cut_secs, ic, di, results, round_, finish_class, \
+                    divisions_xc_sizes_names, noise_perc, seed, rank):
     """
     Generates a log file to set up a check point for embedding generation.
     This function is called every #save_log_every embedding creations or
@@ -86,7 +89,9 @@ def gen_log(log_path, cut_secs, ic, di, results, round_, finish_class, divisions
      - divisions_xc_sizes_names: a list containing tuples of ('split_name', #samples);
        the usual one is [('train', 500), ('es', 100), ('valid', 100), ('test', 100)];
      - noise_perc: intensity of noise for data augmentation;
-     - seed: random seed for track permutations inside the same class.
+     - seed: random seed for track permutations inside the same class;
+     - rank: rank of the log generating process to confront different logs and
+       sort them lexicographically.
     """
     lengths = list(zip(*divisions_xc_sizes_names))[1]
     results = sum(lengths[:di]) if di > 0 else 0
@@ -101,8 +106,8 @@ def gen_log(log_path, cut_secs, ic, di, results, round_, finish_class, divisions
         "noise_perc" : noise_perc,
         "seed" : seed
     }
-    with open(os.path.join(log_path, "log.json"), 'w') as f:
-        json.dump(log, f)
+    with open(os.path.join(log_path, f"log_rank_{rank}.json"), 'w') as f:
+        json.dump(log, f, indent=4)
     print("Logfile saved successfully.\n"
           f"cut_secs: {cut_secs}\n"
           f"ic: {ic}\n"
@@ -117,14 +122,54 @@ def gen_log(log_path, cut_secs, ic, di, results, round_, finish_class, divisions
 
 def read_log(log_path):
     """
-    Reads the log generated through gen_log.
-    
+    Reads all log files, finds the one lexicographically earliest, and returns its content.
     returns:
-     - log: a dictionary containing the logging information.
+     - best_log_data: a dictionary containing the lexicographically earliest logging information.
     """
-    with open(os.path.join(log_path, "log.json"), 'r') as f:
-        log = json.load(f)
-    return log
+    all_logs = glob.glob(os.path.join(log_path, "log_rank_*.json"))
+    
+    if not all_logs:
+        raise FileNotFoundError
+
+    # Inizializza con un valore che sarà sicuramente superato
+    best_log_data = None
+    best_log_score = (float('inf'), float('inf'), float('inf'), float('inf'), float('inf')) # Imposta il valore iniziale più alto
+    
+    for log_file in all_logs:
+        try:
+            with open(log_file, 'r') as f:
+                current_log_data = json.load(f)
+            
+            # Crea un "punteggio" lessicografico per il confronto
+            current_log_score = (
+                current_log_data.get("cut_secs", float('inf')),
+                current_log_data.get("ic", float('inf')),
+                current_log_data.get("di", float('inf')),
+                current_log_data.get("results", float('inf')),
+                current_log_data.get("round", float('inf'))
+            )
+
+            # Confronta e trova il log più avanzato
+            if current_log_score < best_log_score:
+                best_log_score = current_log_score
+                best_log_data = current_log_data
+        except Exception as e:
+            logging.error(f"Errore nella lettura del file di log {log_file}: {e}")
+            continue
+
+    if best_log_data:
+        logging.info("Trovato il log più recente. Proseguo dal punto di interruzione.")
+    else:
+        logging.info("Nessun log valido trovato. Avvio da zero.")
+
+    # Opzionale: pulisci i file temporanei dopo la lettura
+    for log_file in all_logs:
+        try:
+            os.remove(log_file)
+        except OSError as e:
+            logging.error(f"Errore nella rimozione del file {log_file}: {e}")
+
+    return best_log_data
 
 def delete_log(log_path):
     """
