@@ -42,18 +42,25 @@ class EmbeddingTestCase(unittest.TestCase):
                                                     logging.FileHandler(os.path.join(embed_dir, "log.txt"))])
             setup_and_run(self.test_config, audio_format, self._n_octave, _world_size, test=True)
 
+    def _n_files_within_subfolders(self, extension, audio_format):
+        all_files = []
+        # 1. Itera su tutte le directory e i file a partire dal percorso specificato
+        for dirpath, dirnames, filenames in os.walk(os.path.join(basedir_preprocessed_test, f'{audio_format}', f'{self._n_octave}_octave')):
+            # 2. Itera su tutti i file trovati nella directory corrente
+            for filename in filenames:
+                # 3. Controlla l'estensione del file
+                if filename.endswith(f'{extension}'):
+                    # 4. Aggiungi il percorso completo del file alla lista
+                    full_path = os.path.join(dirpath, filename)
+                    all_files.append(full_path)
+        return len(all_files)
+
     def test_number_of_embeddings(self):
         correct_n = self.n_classes * sum(div[1] for div in self._divisions_xc_sizes_names) * 4
         for audio_format in self._audio_formats:
-            n_segments = sum(len([f for f in files if f.find(f'.{audio_format}') != -1]) \
-                      for _, _, files in os.walk(os.path.join(basedir_preprocessed_test,
-                                        f'{audio_format}', f'{self._n_octave}_octave')))
-            n_spec = sum(len([f for f in files if f.find('.npy') != -1]) for _, _, files \
-                                      in os.walk(os.path.join(basedir_preprocessed_test,
-                                        f'{audio_format}', f'{self._n_octave}_octave')))
-            n_embeddings = sum(len([f for f in files if f.find('.pt') != -1]) for _, _, files \
-                                      in os.walk(os.path.join(basedir_preprocessed_test,
-                                        f'{audio_format}', f'{self._n_octave}_octave')))
+            n_segments = self._n_files_within_subfolders(audio_format, audio_format)
+            n_spec = self._n_files_within_subfolders('npy', audio_format)
+            n_embeddings = self._n_files_within_subfolders('pt', audio_format)
             self.assertEqual(correct_n, n_segments)
             self.assertEqual(correct_n, n_spec)
             self.assertEqual(correct_n, n_embeddings)

@@ -9,7 +9,7 @@ from torch.utils.data.distributed import DistributedSampler
 import numpy as np
 import soundfile as sf
 import librosa
-from tqdm import tqdm
+from tqdm_multiprocess.tqdm_multiprocess import MultiProcessTqdm
 import logging
 import traceback
 import random
@@ -60,9 +60,11 @@ def save_embedding(embedding, path):
     torch.save(embedding.cpu(), path)
 
 ### Embedding generation ###
-# TODO: find solution for conflicting logs
+# TODO: fix folder generation and create cut_secs subfolders
+# TODO: add flag to choose whether or not to delete audio cuts after embedding generation
 
-def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n_octave, device, rank, start_log_data, class_to_process):
+def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, \
+                    n_octave, device, rank, start_log_data, class_to_process):
     """
     Main job to submit to GPU workers to generate CLAP embeddings for a given class and
     cut_secs value. Each track gets split into multiple segments of length cut_secs * sr
@@ -125,7 +127,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
         while not finish_class:
             round_ += 1
             n_corrupt_files = 0
-            for p in tqdm(perms, desc=f'GPU {rank} Processing {class_to_process} ({round_})', disable=(rank != 0)):
+            for p in perms:
                 audio_fp = audio_fp_list[p]
                 filepath = os.path.join(source_class_dir, audio_fp)
                 
@@ -155,9 +157,6 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
                             trg_audio_path = os.path.join(dir_trvlts_paths[di], f'{new_fp_base}.{audio_format}')
                             trg_pt_path = os.path.join(dir_trvlts_paths[di], f'{new_fp_base}.pt')
                             trg_spec3o_path = os.path.join(dir_trvlts_paths[di], f'{new_fp_base}_spec3o.npy')
-
-                            # if rank == 0:
-                            #     print(class_to_process, di, results, round_)
 
                             if os.path.exists(trg_pt_path) and os.path.exists(trg_spec3o_path):
                                 results += 1
@@ -201,15 +200,13 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
                                 logging.info(f"Log salvato. Stato attuale per classe {class_to_process}: results={results}")
 
                         except KeyboardInterrupt:
-                            print("\nProcesso interrotto dall'utente. Pulizia ed uscita.")
                             # Salva lo stato corrente prima di uscire
-                            if rank == 0:
-                                classes_list = sorted([d for d in os.listdir(root_source) if os.path.isdir(os.path.join(root_source, d))])
-                                ic = classes_list.index(class_to_process)
-                                gen_log(root_target, cut_secs, ic, di, results, round_, finish_class,
-                                    config['data']['divisions_xc_sizes_names'], noise_perc, seed, rank)
-                                if os.path.exists(trg_audio_path):
-                                    os.remove(trg_audio_path)
+                            classes_list = sorted([d for d in os.listdir(root_source) if os.path.isdir(os.path.join(root_source, d))])
+                            ic = classes_list.index(class_to_process)
+                            gen_log(root_target, cut_secs, ic, di, results, round_, finish_class,
+                                config['data']['divisions_xc_sizes_names'], noise_perc, seed, rank)
+                            if os.path.exists(trg_audio_path):
+                                os.remove(trg_audio_path)
                             sys.exit(0)
 
                         except Exception as e:
@@ -227,7 +224,6 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
                     logging.error(f"Errore durante il caricamento del file {filepath}: {e}. Skippo il file.")
                     n_corrupt_files += 1
                     if n_corrupt_files >= len(perms):
-                        print(f"Can\'t open any file in {class_to_process} class directory. Training is aborted.")
                         classes_list = sorted([d for d in os.listdir(root_source) if os.path.isdir(os.path.join(root_source, d))])
                         ic = classes_list.index(class_to_process)
                         gen_log(root_target, cut_secs, ic, di, results, round_, finish_class,
@@ -237,7 +233,6 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
 
                 if finish_class:
                     break
-        
         logging.info(f"Classe '{class_to_process}' elaborata. Creazioni totali: {results}")
 
 def worker_process(audio_format, n_octave, config, rank, world_size, task_queue, start_log_data, test=False):
@@ -290,7 +285,8 @@ def worker_process(audio_format, n_octave, config, rank, world_size, task_queue,
         try:
             cut_secs, class_name = task_queue.get(timeout=1)
             logging.info(f"Processo {rank} sta elaborando: cut_secs={cut_secs}, classe={class_name}")
-            process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n_octave, device, rank, start_log_data, class_name)
+            process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs,
+                                    n_octave, device, rank, start_log_data, class_name)
         except Empty:
             logging.info(f"Processo {rank} ha terminato, coda vuota.")
             break
@@ -358,18 +354,18 @@ def setup_and_run(config_file, audio_format, n_octave, world_size, test=False):
     for cut_secs in cut_secs_list:
         for class_name in classes_list:
             task_queue.put((cut_secs, class_name))
-            
+
     # Avvia i processi worker
     processes = []
     for rank in range(world_size):
         p = mp.Process(target=worker_process, args=(audio_format, n_octave, config,
-                                      rank, world_size, task_queue, log_data, test))
+                                    rank, world_size, task_queue, log_data, test))
         p.start()
         processes.append(p)
 
     for p in processes:
         p.join()
-    
+        
     delete_log(log_path)
     logging.info("Tutti i processi hanno terminato il loro lavoro.")
 

@@ -4,6 +4,13 @@
 ### Pending
 
 ```diff
+- /src/distributed_clap_embeddings.py ; process_class_with_cut_secs ; 01/09/2025 - pending ; fix folder generation and
+- create cut_secs subfolders
+- /src/distributed_clap_embeddings.py ; process_class_with_cut_secs ; 01/09/2025 - pending ; add flag to choose whether
+- or not to delete audio cuts after embedding generation
+```
+--------------------------------------------------------------------------
+```diff
 - /src/distributed_finetuning.py ; ; 18/08/2025 - pending ; implement test mode
 - /src/distributed_finetuning.py ; ; 20/08/2025 - pending ; develop support for other classifier models
 ```
@@ -65,3 +72,4 @@
 - /src/distributed_training.py ; Embedding generation -- split_audio_tracks ; 11/08/2025 - 29/08/2025 ; add support for
 -    other audio files like flac etc.
 - /src/distributed_clap_embeddings.py ; process_class_with_cut_secs ; 31/08/2025 - 31/08/2025 ; find solution for conflicting logs
+- /src/distributed_clap_embeddings.py ; process_class_with_cut_secs ; 01/09/2025 - 01/09/2025 ; fix parallel stout print
