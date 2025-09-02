@@ -17,8 +17,12 @@ def parsing():
             help='octaveband split for the spectrograms.')
     parser.add_argument('--audio_format', metavar='audio_format', dest='audio_format',
             help='audio format to embed; choose between \'wav\', \'mp3\', \'flac\'.')
+    parse.add_argument('--delete_segments', metavar='delete_segments', dest='delete_segments',
+            help='delete audio segments created along embeddings (default: yes); type '
+                 'y/Y/yes/Yes/YES or n/N/no/No/NO.')
     parser.set_defaults(config_file='config0.yaml')
     parser.set_defaults(audio_format='wav')
+    parser.set_defaults(delete_segments='y')
     args = parser.parse_args()
     return args
 
@@ -31,7 +35,7 @@ def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s',
                                              handlers=[logging.StreamHandler(),
                    logging.FileHandler(os.path.join(embed_folder, "log.txt"))])
-    setup_and_run(args.config_file, args.n_octave, args.audio_format, world_size)
+    setup_and_run(args.config_file, args.n_octave, args.audio_format, args.delete_segments, world_size)
 
 if __name__ == "__main__":
     main()

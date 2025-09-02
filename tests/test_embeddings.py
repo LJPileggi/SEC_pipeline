@@ -20,17 +20,21 @@ class EmbeddingTestCase(unittest.TestCase):
         self._gen_test_embeddings()
 
     def tearDown(self):
-        # for d in os.listdir(basedir_preprocessed_test):
-        #     if os.path.isdir(os.path.join(basedir_preprocessed_test, d)):
-        #         shutil.rmtree(d)
-        pass
+        delete_files = input("Do you want to delete all embeddings and spectrograms? y/n ")
+        if delete_files.lower() in ["y", "yes"]:
+            for d in os.listdir(basedir_preprocessed_test):
+                if os.path.isdir(os.path.join(basedir_preprocessed_test, d)):
+                    shutil.rmtree(os.path.join(basedir_preprocessed_test, d))
+        else:
+            pass
 
     def _gen_test_embeddings(self):
         self.test_config = 'test_config.yaml'
         _world_size = 4
         self._n_octave = 3
         self._audio_formats = ['wav', 'mp3', 'flac']
-        _, _, _, _, _, _, _, _, _, _, divisions_xc_sizes_names = get_config_from_yaml(self.test_config)
+        _, _, _, _, _, _, _, _, _, valid_cut_secs, divisions_xc_sizes_names = get_config_from_yaml(self.test_config)
+        self._valid_cut_secs = valid_cut_secs
         self._divisions_xc_sizes_names = divisions_xc_sizes_names
         for audio_format in self._audio_formats:
             print(f'Testing {audio_format} format:')
@@ -40,7 +44,7 @@ class EmbeddingTestCase(unittest.TestCase):
             logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s',
                                                     handlers=[logging.StreamHandler(),
                                                     logging.FileHandler(os.path.join(embed_dir, "log.txt"))])
-            setup_and_run(self.test_config, audio_format, self._n_octave, _world_size, test=True)
+            setup_and_run(self.test_config, audio_format, self._n_octave, "y", _world_size, test=True)
 
     def _n_files_within_subfolders(self, extension, audio_format):
         all_files = []
@@ -56,12 +60,12 @@ class EmbeddingTestCase(unittest.TestCase):
         return len(all_files)
 
     def test_number_of_embeddings(self):
-        correct_n = self.n_classes * sum(div[1] for div in self._divisions_xc_sizes_names) * 4
+        correct_n = self.n_classes * sum(div[1] for div in self._divisions_xc_sizes_names) * len(self._valid_cut_secs)
         for audio_format in self._audio_formats:
             n_segments = self._n_files_within_subfolders(audio_format, audio_format)
             n_spec = self._n_files_within_subfolders('npy', audio_format)
             n_embeddings = self._n_files_within_subfolders('pt', audio_format)
-            self.assertEqual(correct_n, n_segments)
+            self.assertEqual(0, n_segments)
             self.assertEqual(correct_n, n_spec)
             self.assertEqual(correct_n, n_embeddings)
 

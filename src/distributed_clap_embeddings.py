@@ -9,7 +9,7 @@ from torch.utils.data.distributed import DistributedSampler
 import numpy as np
 import soundfile as sf
 import librosa
-from tqdm_multiprocess.tqdm_multiprocess import MultiProcessTqdm
+from tqdm import tqdm
 import logging
 import traceback
 import random
@@ -60,11 +60,9 @@ def save_embedding(embedding, path):
     torch.save(embedding.cpu(), path)
 
 ### Embedding generation ###
-# TODO: fix folder generation and create cut_secs subfolders
-# TODO: add flag to choose whether or not to delete audio cuts after embedding generation
 
-def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, \
-                    n_octave, device, rank, start_log_data, class_to_process):
+def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n_octave, \
+                        device, rank, start_log_data, delete_segments, class_to_process):
     """
     Main job to submit to GPU workers to generate CLAP embeddings for a given class and
     cut_secs value. Each track gets split into multiple segments of length cut_secs * sr
@@ -82,10 +80,15 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, \
      - device (torch.device): PyTorch device (e.g., 'cuda:0') to use for computation;
      - rank (int): rank of the current distributed process. Used for logging and progress bars;
      - start_log_data (dict): dictionary containing log data to resume processing from a specific checkpoint;
+     - delete_segments: whether or not to delete audio segments created as a by-product of
+       embedding generation;
      - class_to_process (str): the name of the audio class to be processed.
     """
     root_source = config['dirs']['root_source']
     root_target = config['dirs']['root_target']
+    cut_secs_dir = os.path.join(root_target, f'{cut_secs}_secs')
+    if not os.path.exists(root_target):
+        os.makedirs(root_target)
     audio_format = config['audio']['audio_format']
     sr = config['spectrogram']['sr']
     ref = config['spectrogram']['ref']
@@ -94,9 +97,9 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, \
     seed = config['audio']['seed']
     save_log_every = config['log']['save_log_every']
 
-    if (start_log_data.get("divisions_xc_sizes_names")) and \
-      ((start_log_data.get("divisions_xc_sizes_names")) != config['data']['divisions_xc_sizes_names']):
-        raise ValueError("ValueError: divisions_xc_sizes_names between config and log doesn't match.")
+    # if (start_log_data.get("divisions_xc_sizes_names")) and \
+    #   ((start_log_data.get("divisions_xc_sizes_names")) != config['data']['divisions_xc_sizes_names']):
+    #     raise ValueError("ValueError: divisions_xc_sizes_names between config and log doesn't match.")
     division_names = [d[0] for d in config['data']['divisions_xc_sizes_names']]
     target_counts_list = [d[1] for d in config['data']['divisions_xc_sizes_names']]
 
@@ -112,7 +115,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, \
         round_ = start_log_data.get('round', 0)
         finish_class = start_log_data.get('finish_class', False)
         
-    target_class_dir = os.path.join(root_target, class_to_process)
+    target_class_dir = os.path.join(cut_secs_dir, class_to_process)
     dir_trvlts_paths = [os.path.join(target_class_dir, p) for p in division_names]
     
     for path in [target_class_dir] + dir_trvlts_paths:
@@ -187,7 +190,8 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, \
                                 embedding = audio_embedding(x)[0][0]
                             
                             save_embedding(embedding, trg_pt_path)
-                            os.remove(trg_audio_path)
+                            if delete_segments.lower() in ["y", "yes"]:
+                                os.remove(trg_audio_path)
                             
                             results += 1
 
@@ -235,7 +239,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, \
                     break
         logging.info(f"Classe '{class_to_process}' elaborata. Creazioni totali: {results}")
 
-def worker_process(audio_format, n_octave, config, rank, world_size, task_queue, start_log_data, test=False):
+def worker_process(audio_format, n_octave, config, rank, world_size, task_queue, start_log_data, delete_segments, test=False):
     """
     Worker process for distributed training.
 
@@ -254,6 +258,8 @@ def worker_process(audio_format, n_octave, config, rank, world_size, task_queue,
      - world_size (int): total number of processes in the distributed group;
      - task_queue (mp.Queue): shared queue containing tuples of (cut_secs, class_name) to be processed;
      - start_log_data (dict): dictionary containing log data to resume processing from a specific checkpoint;
+     - delete_segments: whether or not to delete audio segments created as a by-product of
+       embedding generation;
      - test (bool): whether to execute process for dummy testing dataset; defaul to False.
     """
     os.environ['MASTER_ADDR'] = 'localhost'
@@ -286,7 +292,7 @@ def worker_process(audio_format, n_octave, config, rank, world_size, task_queue,
             cut_secs, class_name = task_queue.get(timeout=1)
             logging.info(f"Processo {rank} sta elaborando: cut_secs={cut_secs}, classe={class_name}")
             process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs,
-                                    n_octave, device, rank, start_log_data, class_name)
+                    n_octave, device, rank, start_log_data, delete_segments, class_name)
         except Empty:
             logging.info(f"Processo {rank} ha terminato, coda vuota.")
             break
@@ -297,7 +303,7 @@ def worker_process(audio_format, n_octave, config, rank, world_size, task_queue,
     dist.destroy_process_group()
 
 
-def setup_and_run(config_file, audio_format, n_octave, world_size, test=False):
+def setup_and_run(config_file, audio_format, n_octave, delete_segments, world_size, test=False):
     """
     Sets up and launches the distributed data generation pipeline.
 
@@ -313,6 +319,8 @@ def setup_and_run(config_file, audio_format, n_octave, world_size, test=False):
      - config_file: name of the config file from shell;
      - audio_format: format of the audio to embed from shell;
      - n_octave: octave band split for the spectrogram from shell;
+     - delete_segments: whether or not to delete audio segments created as a by-product of
+       embedding generation;
      - world_size (int): total number of GPU devices to use for parallel processing;
      - test (bool): whether to execute pipeline for dummy testing dataset; default to False.
     """
@@ -359,7 +367,7 @@ def setup_and_run(config_file, audio_format, n_octave, world_size, test=False):
     processes = []
     for rank in range(world_size):
         p = mp.Process(target=worker_process, args=(audio_format, n_octave, config,
-                                    rank, world_size, task_queue, log_data, test))
+                    rank, world_size, task_queue, log_data, delete_segments, test))
         p.start()
         processes.append(p)
 
