@@ -1,5 +1,7 @@
 from tqdm import tqdm
 import torch
+from sklearn.metrics import accuracy_score, log_loss, confusion_matrix
+from xgboost import XGBClassifier
 
 _criterion = torch.nn.CrossEntropyLoss()
 
@@ -24,38 +26,66 @@ def get_scores(model, test_dataloader, train_dataloader=None):
      - ts_accuracy: accuracy on test set;
      - cm: confusion matrix on test set.
     """
-    tr_loss, ts_loss = 0, 0
-    tr_accuracy, ts_accuracy= 0, 0
-    try:
-        model.eval()
-    except:
-        pass
-    p_list, y_list = [], []
-    if train_dataloader is not None:
-        for x, y in tqdm(train_dataloader, desc=f'loss on train'):
+    if isinstance(model, XGBClassifier):
+        # Extract features and labels from the PyTorch dataloader
+        if train_dataloader is not None:
+            X_train = np.vstack([x.cpu().numpy() for x, y in train_dataloader])
+            y_train = np.hstack([y.cpu().numpy() for x, y in train_dataloader])
+        X_test = np.vstack([x.cpu().numpy() for x, y in test_dataloader])
+        y_test = np.hstack([y.cpu().numpy() for x, y in test_dataloader])
+
+        # Get predictions
+        if train_dataloader is not None:
+            y_tr_pred = model.predict(X_train)
+            y_tr_pred_proba = model.predict_proba(X_train)
+        y_ts_pred = model.predict(X_test)
+        y_ts_pred_proba = model.predict_proba(X_test)
+        
+        # Calculate scores
+        if train_dataloader is not None:
+            tr_accuracy = accuracy_score(y_train, y_tr_pred)
+            tr_loss = log_loss(y_train, y_tr_pred_proba)
+        ts_accuracy = accuracy_score(y_test, y_ts_pred)
+        ts_loss = log_loss(y_test, y_ts_pred_proba)
+        cm = confusion_matrix(y_test, y_ts_pred)
+
+        if train_dataloader is not None:
+            return ts_loss, ts_accuracy, cm
+        return tr_loss, ts_loss, tr_accuracy, ts_accuracy, cm
+
+    else:
+        tr_loss, ts_loss = 0, 0
+        tr_accuracy, ts_accuracy= 0, 0
+        try:
+            model.eval()
+        except:
+            pass
+        p_list, y_list = [], []
+        if train_dataloader is not None:
+            for x, y in tqdm(train_dataloader, desc=f'loss on train'):
+                p = model(x)
+                tr_loss += _criterion(p, y).item()
+                tr_accuracy += accuracy(y, p)
+        for x, y in tqdm(test_dataloader, desc=f'loss on test'):
             p = model(x)
-            tr_loss += _criterion(p, y).item()
-            tr_accuracy += accuracy(y, p)
-    for x, y in tqdm(test_dataloader, desc=f'loss on test'):
-        p = model(x)
-        p_list += p.argmax(axis=-1).tolist()
-        y_list += y.argmax(axis=-1).tolist()
-        ts_loss += _criterion(p, y).item()
-        ts_accuracy += accuracy(y, p)
-    if train_dataloader is not None:
-        tr_loss = tr_loss / len(train_dataloader)
-        tr_accuracy = tr_accuracy / len(train_dataloader)
-    ts_loss = ts_loss / len(test_dataloader)
-    ts_accuracy = ts_accuracy / len(test_dataloader)
-    print(f'TEST => accuracy: {ts_accuracy} - loss: {ts_loss}')
-    classes = test_dataloader.dataset.classes
-    y_list = [classes[v] for v in  y_list]
-    p_list = [classes[v] for v in  p_list]
-    cm = confusion_matrix(y_list, p_list, labels=classes)
-    if train_dataloader is None:
-        return ts_loss, ts_accuracy, cm
-    print(f'TRAIN => accuracy: {tr_accuracy} - loss: {tr_loss}')
-    return tr_loss, ts_loss, tr_accuracy, ts_accuracy, cm
+            p_list += p.argmax(axis=-1).tolist()
+            y_list += y.argmax(axis=-1).tolist()
+            ts_loss += _criterion(p, y).item()
+            ts_accuracy += accuracy(y, p)
+        if train_dataloader is not None:
+            tr_loss = tr_loss / len(train_dataloader)
+            tr_accuracy = tr_accuracy / len(train_dataloader)
+        ts_loss = ts_loss / len(test_dataloader)
+        ts_accuracy = ts_accuracy / len(test_dataloader)
+        print(f'TEST => accuracy: {ts_accuracy} - loss: {ts_loss}')
+        classes = test_dataloader.dataset.classes
+        y_list = [classes[v] for v in  y_list]
+        p_list = [classes[v] for v in  p_list]
+        cm = confusion_matrix(y_list, p_list, labels=classes)
+        if train_dataloader is None:
+            return ts_loss, ts_accuracy, cm
+        print(f'TRAIN => accuracy: {tr_accuracy} - loss: {tr_loss}')
+        return tr_loss, ts_loss, tr_accuracy, ts_accuracy, cm
 
 class RR:
     """

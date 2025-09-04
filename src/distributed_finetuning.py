@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import torch
 import torch.distributed as dist
 from tqdm import tqdm
+from xgboost import XGBClassifier
 
 from .utils import *
 from .utils_directories import *
@@ -73,6 +74,30 @@ def train(tr_set, es_set, config, epochs, callback=None):
     return model
 
 
+def train_xgboost(tr_set, es_set, config, epochs):
+    """
+    Train a model with a given configuration.
+    
+    This function now supports both PyTorch models and non-PyTorch models
+    like XGBoost.
+    """
+    # Extract features and labels from the PyTorch dataloaders
+    X_train = np.vstack([x.cpu().numpy() for x, y in tr_set])
+    y_train = np.hstack([y.cpu().numpy() for x, y in tr_set])
+
+    # Define the XGBoost model with hyperparameters from the config
+    model = XGBClassifier(
+        objective='multi:softprob',
+        eval_metric='mlogloss',
+        use_label_encoder=False,
+        # Add other hyperparameters you want to tune here
+        # e.g., n_estimators, max_depth, learning_rate
+        )
+
+    # Train the model
+    model.fit(X_train, y_train)
+
+    return model
 
 
 def setup_distributed_environment(rank, world_size):
@@ -134,6 +159,16 @@ def select_optim_distributed(rank, world_size, validation_filepath, dataloaders,
                 }
             } for builder in ['SGD', 'Adam'] for lr in [0.1, 0.01, 0.001, 0.0001]
         ],
+        *[
+            {
+                'optimizer': {
+                    'builder': 'XGBoost',
+                    # You can add more hyperparameters here to tune, e.g.,
+                    # 'n_estimators': 100,
+                    # 'max_depth': 6
+                }
+            }
+        ]
     ]
     
     # 2. Divide configurations among processes

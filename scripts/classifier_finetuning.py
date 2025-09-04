@@ -3,7 +3,7 @@ import sys
 sys.path.append('.')
 
 from src.utils import get_config_from_yaml
-from src.utils_directories import basedir_preprocessed
+from src.utils_directories import basedir_preprocessed, results_validation_filepath_project
 from src.data_handler import load_octaveband_embeddings
 from src.models import CLAP_initializer
 from src.distributed_finetuning import select_optim_distributed
@@ -14,8 +14,6 @@ def parsing():
     parser = argparse.ArgumentParser(description='Finetune classifier on CLAP embeddings from audio files')
     parser.add_argument('--config_file', metavar='config_file', dest='config_file',
             help='config file to load to get model and training params.')
-    parser.add_argument('--validation_filepath', metavar='validation_filepath', dest='validation_filepath',
-            help='directory for validation results.')
     parser.add_argument('--n_octave', metavar='n_octave', dest='n_octave',
             help='octaveband split for the spectrograms.')
     parser.add_argument('--audio_format', metavar='audio_format', dest='audio_format',
@@ -49,6 +47,9 @@ def main():
     
     # Percorso dove si trovano gli embedding
     octaveband_dir = os.path.join(basedir_preprocessed, f'{args.audio_format}', f'{args.n_octave}')
+    validation_filepath = os.path.join(results_validation_filepath_project, f'{args.audio_format}', f'{args.n_octave}')
+    if not os.path.exists(validation_filepath):
+        os.makedirs(validation_filepath)
 
     # 1. Carica i dataloader e i dataset
     print("Caricamento degli embeddings in corso...")
@@ -66,7 +67,7 @@ def main():
     import torch.multiprocessing as mp
     mp.spawn(
         main_worker,
-        args=(world_size, args.validation_filepath, dataloaders_dict, classes, epochs, patience, clap_model),
+        args=(world_size, validation_filepath, dataloaders_dict, classes, epochs, patience, clap_model),
         nprocs=world_size,
         join=True
     )

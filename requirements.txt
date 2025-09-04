@@ -1,6 +1,7 @@
 tensorflow
 torch
 sklearn
+xgboost
 transformers
 pandas
 matplotlib
