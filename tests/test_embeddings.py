@@ -20,13 +20,14 @@ class EmbeddingTestCase(unittest.TestCase):
         self._gen_test_embeddings()
 
     def tearDown(self):
-        delete_files = input("Do you want to delete all embeddings and spectrograms? y/n ")
-        if delete_files.lower() in ["y", "yes"]:
-            for d in os.listdir(basedir_preprocessed_test):
-                if os.path.isdir(os.path.join(basedir_preprocessed_test, d)):
-                    shutil.rmtree(os.path.join(basedir_preprocessed_test, d))
-        else:
-            pass
+        # delete_files = input("Do you want to delete all embeddings and spectrograms? y/n ")
+        # if delete_files.lower() in ["y", "yes"]:
+        #     for d in os.listdir(basedir_preprocessed_test):
+        #         if os.path.isdir(os.path.join(basedir_preprocessed_test, d)):
+        #             shutil.rmtree(os.path.join(basedir_preprocessed_test, d))
+        # else:
+        #     pass
+        pass
 
     def _gen_test_embeddings(self):
         self.test_config = 'test_config.yaml'
