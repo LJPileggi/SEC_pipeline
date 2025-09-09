@@ -102,9 +102,15 @@ def setup_distributed_environment(rank, world_size):
     """Setup the distributed environment."""
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'
-    dist.init_process_group("nccl", rank=rank, world_size=world_size)
-    torch.cuda.set_device(rank)
-    print(f"Processo {rank} di {world_size} avviato su GPU {rank}.")
+    if torch.cuda.is_available():
+        dist.init_process_group("nccl", rank=rank, world_size=world_size)
+        torch.cuda.set_device(rank)
+        device = torch.device(f'cuda:{rank}')
+        print(f"Processo {rank} di {world_size} avviato su GPU {rank}.")
+    else:
+        dist.init_process_group("gloo", rank=rank, world_size=world_size)
+        device = torch.device('cpu')
+        print(f"Processo {rank} di {world_size} avviato su CPU {rank}.")
 
 def cleanup_distributed_environment():
     """Cleanup the distributed environment."""
@@ -189,8 +195,7 @@ def select_optim_distributed(rank, world_size, validation_filepath, dataloaders,
         o_vl_loss, o_vl_accuracy, o_cm = get_scores(OriginalModel(classes, clap_model.get_text_embeddings, device=torch.device(f'cuda:{rank}')), vl_set)
         
         # We only save the original model results once to avoid duplicates, on rank 0
-        if rank == 0:
-            local_results[k].append(dict(metrics=dict(type_learning='original', accuracy=o_vl_accuracy, loss=o_vl_loss, cm=o_cm.tolist())))
+        local_results[k].append(dict(metrics=dict(type_learning='original', accuracy=o_vl_accuracy, loss=o_vl_loss, cm=o_cm.tolist())))
 
         # 3. Process the assigned configurations
         for config in tqdm(configs_subset, desc=f"GPU {rank} Processing configs for '{k}'"):
@@ -219,20 +224,19 @@ def select_optim_distributed(rank, world_size, validation_filepath, dataloaders,
             vl_loss, vl_accuracy, cm = get_scores(model, vl_set)
             
             # --- PLOT START ---
-            if rank == 0:
-                # Plots are generated only on rank 0 to avoid conflicts
-                disp_orig = ConfusionMatrixDisplay(confusion_matrix=o_cm, display_labels=classes)
-                disp_ft = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=classes)
-                fig, axs = plt.subplots(2, figsize=(15, 20))
+            # Plots are generated only on rank 0 to avoid conflicts
+            disp_orig = ConfusionMatrixDisplay(confusion_matrix=o_cm, display_labels=classes)
+            disp_ft = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=classes)
+            fig, axs = plt.subplots(2, figsize=(15, 20))
 
-                axs[0].set_title(f'Original {k} acc={round(o_vl_accuracy * 100, 2)}% loss={round(o_vl_loss, 4)}')
-                disp_orig.plot(xticks_rotation='vertical', ax=axs[0])
+            axs[0].set_title(f'Original {k} acc={round(o_vl_accuracy * 100, 2)}% loss={round(o_vl_loss, 4)}')
+            disp_orig.plot(xticks_rotation='vertical', ax=axs[0])
 
-                axs[1].set_title(f'Finetuning {k} acc={round(vl_accuracy * 100, 2)}% loss={round(vl_loss, 4)} config={config_label}')
-                disp_ft.plot(xticks_rotation='vertical', ax=axs[1])
+            axs[1].set_title(f'Finetuning {k} acc={round(vl_accuracy * 100, 2)}% loss={round(vl_loss, 4)} config={config_label}')
+            disp_ft.plot(xticks_rotation='vertical', ax=axs[1])
 
-                plt.tight_layout()
-                plt.savefig(os.path.join(validation_filepath, f'{k}_{config_label}.png'))
+            plt.tight_layout()
+            plt.savefig(os.path.join(validation_filepath, f'{k}_{rank}_{config_label}.png'))
             # --- PLOT END ---
             
             # Store results
