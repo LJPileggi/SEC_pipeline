@@ -18,25 +18,29 @@ def parsing():
             help='octaveband split for the spectrograms.')
     parser.add_argument('--audio_format', metavar='audio_format', dest='audio_format',
             help='audio format to embed; choose between \'wav\', \'mp3\', \'flac\'.')
+    parser.add_argument('--model_type', metavar='model_type', dest='model_type',
+            help='type of classifier model; choose between \'linear\' and \'xgboost\'.')
     parser.set_defaults(config_file='config0.yaml')
     parser.set_defaults(audio_format='wav')
+    parser.set_defaults(model_type='linear')
     args = parser.parse_args()
     return args
 
 
-def main_worker(rank, world_size, validation_filepath, dataloaders, classes, epochs, patience, clap_model):
+def main_worker(rank, world_size, validation_filepath, dataloaders, classes, epochs, patience, clap_model, classifier_model):
     """
     The main function for each process.
     """
     select_optim_distributed(
         rank=rank, 
-        world_size=world_size, 
-        validation_filepath=validation_filepath, 
+        world_size=world_size,
+        validation_filepath=validation_filepath,
         dataloaders=dataloaders,
-        classes=classes, 
-        epochs=epochs, 
-        patience=patience, 
-        clap_model=clap_model
+        classes=classes,
+        epochs=epochs,
+        patience=patience,
+        clap_model=clap_model,
+        classifier_model=classifier_model
     )
 
 def main():
@@ -67,7 +71,7 @@ def main():
     import torch.multiprocessing as mp
     mp.spawn(
         main_worker,
-        args=(world_size, validation_filepath, dataloaders_dict, classes, epochs, patience, clap_model),
+        args=(world_size, validation_filepath, dataloaders_dict, classes, epochs, patience, clap_model, args.classifier_model),
         nprocs=world_size,
         join=True
     )

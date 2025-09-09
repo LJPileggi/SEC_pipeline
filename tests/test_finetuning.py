@@ -18,6 +18,7 @@ class FinetuningTestCase(unittest.TestCase):
         patience, epochs, batch_size, _, _, _, _, _, _, _, _ = get_config_from_yaml(self._test_config)
         self._n_octave = 3
         self._audio_format = 'wav'
+        self._classifier_model = 'linear'
         self._world_size = 4
         octaveband_dir = os.path.join(basedir_preprocessed_test, f'{self._audio_format}', f'{self._n_octave}')
         validation_filepath = os.path.join(results_validation_filepath_project_test, f'{self._audio_format}', f'{self._n_octave}')
@@ -37,8 +38,8 @@ class FinetuningTestCase(unittest.TestCase):
         # 4. Avvia il processo distribuito
         import torch.multiprocessing as mp
         mp.spawn(
-            main_worker,
-            args=(world_size, validation_filepath, dataloaders_dict, classes, epochs, patience, clap_model),
+            select_optim_distributed,
+            args=(world_size, validation_filepath, dataloaders_dict, classes, epochs, patience, clap_model, self._classifier_model),
             nprocs=world_size,
             join=True
         )

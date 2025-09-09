@@ -13,14 +13,12 @@ from .utils_directories import *
 from .losses import *
 from .models import *
 
-# TODO: develop support for other classifier models
-
 ### Finetuned classifier training ###
 
 def build_model():
     return FinetunedModel(classes, device='cpu')
 
-def train(tr_set, es_set, config, epochs, callback=None):
+def train(tr_set, es_set, config, epochs, patience=patience):
     """
     Training container function to train finetuned classifier
     with the different loss functions.
@@ -30,7 +28,8 @@ def train(tr_set, es_set, config, epochs, callback=None):
      - es_set: container for validation set's x-s and y-s;
      - config: optimiser configuration;
      - epochs: training epochs (only if optimiser != RR);
-     - callback (optional): training callback.
+     - patience: number of epochs with no improvement after which
+                       training will be stopped.
 
     returns:
      - model: trained torch model for finetuned classifier.
@@ -74,7 +73,7 @@ def train(tr_set, es_set, config, epochs, callback=None):
     return model
 
 
-def train_xgboost(tr_set, es_set, config, epochs):
+def train_xgboost(tr_set, config):
     """
     Train a model with a given configuration.
     
@@ -90,8 +89,7 @@ def train_xgboost(tr_set, es_set, config, epochs):
         objective='multi:softprob',
         eval_metric='mlogloss',
         use_label_encoder=False,
-        # Add other hyperparameters you want to tune here
-        # e.g., n_estimators, max_depth, learning_rate
+        **config
         )
 
     # Train the model
@@ -112,8 +110,8 @@ def cleanup_distributed_environment():
     """Cleanup the distributed environment."""
     dist.destroy_process_group()
 
-# TODO: implement test mode
-def select_optim_distributed(rank, world_size, validation_filepath, dataloaders, classes, epochs, patience, clap_model):
+def select_optim_distributed(rank, world_size, validation_filepath, dataloaders, classes, \
+                                          epochs, patience, clap_model, classifier_model):
     """
     Model selection pipeline to find the best optimizer configuration for a given
     n-octaveband dataset using a distributed, multi-GPU approach.
@@ -133,6 +131,7 @@ def select_optim_distributed(rank, world_size, validation_filepath, dataloaders,
      - patience (int): The number of epochs with no improvement after which
                        training will be stopped.
      - clap_model (msclap.CLAP): The pre-initialized CLAP model (on CPU).
+     - classifier_model (str): type of classifier; choose between 'linear' and 'xgboost'.
 
     returns:
      - None: The function saves the results to JSON and CSV files and generates
@@ -158,18 +157,20 @@ def select_optim_distributed(rank, world_size, validation_filepath, dataloaders,
                     'lr': lr,
                 }
             } for builder in ['SGD', 'Adam'] for lr in [0.1, 0.01, 0.001, 0.0001]
-        ],
+        ]
+    ] if classifier_model == 'linear' else [
         *[
             {
                 'optimizer': {
                     'builder': 'XGBoost',
-                    # You can add more hyperparameters here to tune, e.g.,
-                    # 'n_estimators': 100,
-                    # 'max_depth': 6
+                    'learning_rate': [0.01, 0.1],
+                    'gamma': [0.1, 1, 5],
+                    'reg_lambda': [5, 10, 20],
+                    'max_depth': [4, 8]
+  
                 }
             }
         ]
-    ]
     
     # 2. Divide configurations among processes
     configs_per_process = math.ceil(len(all_configs) / world_size)
@@ -195,17 +196,26 @@ def select_optim_distributed(rank, world_size, validation_filepath, dataloaders,
         for config in tqdm(configs_subset, desc=f"GPU {rank} Processing configs for '{k}'"):
             # Modifica per includere il parametro 'reg' nella label
             config_label = str(config['optimizer'])
-            if 'reg' in config['optimizer']:
+            if config['optimizer']['builder'] == 'RR':
                 config_label = f"RR_reg={config['optimizer']['reg']}"
-            else:
+            elif config['optimizer']['builder'] in ['SGD', 'Adam']:
                 config_label = f"{config['optimizer']['builder']}_lr={config['optimizer']['lr']}"
+            else:
+                config_label = f"{config['optimizer']['builder']}_"       + \
+                               f"{config['optimizer']['learning_rate']}_" + \
+                               f"{config['optimizer']['gamma']}_"         + \
+                               f"{config['optimizer']['reg_lambda']}_"    + \
+                               f"{config['optimizer']['max_depth']}"
             
             # Move sets to the correct device
             tr_set.dataset.to(torch.device(f'cuda:{rank}'))
             es_set.dataset.to(torch.device(f'cuda:{rank}'))
             vl_set.dataset.to(torch.device(f'cuda:{rank}'))
-            
-            model = train(tr_set, es_set, config, epochs, classes=classes, patience=patience) # Pass classes to train
+
+            if classifier_model == 'linear':
+                model = train(tr_set, es_set, config, epochs, patience=patience) # Pass classes to train
+            else:
+                model = train_xgboost(tr_set, config) # Pass classes to train
             vl_loss, vl_accuracy, cm = get_scores(model, vl_set)
             
             # --- PLOT START ---
@@ -233,43 +243,36 @@ def select_optim_distributed(rank, world_size, validation_filepath, dataloaders,
     gathered_results = [None for _ in range(world_size)]
     dist.gather_object(local_results, gathered_results if rank == 0 else None, dst=0)
 
-    # 5. Process final results on rank 0
-    if rank == 0:
-        final_results = {}
-        for res in gathered_results:
-            for k, v in res.items():
-                if k not in final_results:
-                    final_results[k] = []
-                final_results[k].extend(v)
-                
-        # Save results to json
-        json.dump(final_results, open(os.path.join(validation_filepath, 'validation_ms_results.json'), 'w'))
+    # 5. Process final results on given rank
+    final_results = {}
+    for res in gathered_results:
+        for k, v in res.items():
+            if k not in final_results:
+                final_results[k] = []
+            final_results[k].extend(v)
 
-        # Sort and save to csv
-        all_values = []
-        for k, results in final_results.items():
-            results.sort(key=lambda x: x['metrics']['accuracy'], reverse=True)
-            for t in results:
-                values_dict = dict(time=k, **(t['hyperparams']['optimizer'] if 'hyperparams' in t else {}), **t['metrics'])
-                # Aggiungi 'reg' al dizionario se è presente
-                if 'reg' in t['hyperparams']['optimizer']:
-                    values_dict['reg'] = t['hyperparams']['optimizer']['reg']
-                all_values.append(values_dict)
+    # Save results to json
+    json.dump(final_results, open(os.path.join(validation_filepath, f'validation_ms_results_{classifier_model}_{rank}.json'), 'w'))
 
-        df = pd.DataFrame(all_values)
-        # Assicurati che le colonne 'builder', 'lr' e 'reg' esistano prima di riordinare
+    # Sort and save to csv
+    all_values = []
+    for k, results in final_results.items():
+        results.sort(key=lambda x: x['metrics']['accuracy'], reverse=True)
+        for t in results:
+            values_dict = dict(time=k, **(t['hyperparams']['optimizer'] if 'hyperparams' in t else {}), **t['metrics'])
+            # Aggiungi 'reg' al dizionario se è presente
+            if 'reg' in t['hyperparams']['optimizer']:
+                values_dict['reg'] = t['hyperparams']['optimizer']['reg']
+            all_values.append(values_dict)
+
+    df = pd.DataFrame(all_values)
+    # Assicurati che le colonne 'builder', 'lr' e 'reg' esistano prima di riordinare
+    if classifier_model == 'linear':
         df = df[['time', 'builder', 'lr', 'reg', 'accuracy', 'loss']].sort_values('accuracy', ascending=False)
-        df.to_csv(os.path.join(validation_filepath, 'validation_ms_results.csv'))
+    else:
+        df = df[['time', 'builder', 'learning_rate', 'gamma', 'reg_lambda','max_depth',
+                         'accuracy', 'loss']].sort_values('accuracy', ascending=False)
+    df.to_csv(os.path.join(validation_filepath, 'validation_ms_results_{classifier_model}_{rank}.csv'))
 
-        print("\n--- Risultati Finali Ordinati per Accuratezza ---")
-        for k, results in final_results.items():
-            print(f"\nRisultati per {k}:")
-            for item in results[:5]: # Mostra solo i top 5
-                # Modifica per stampare anche 'reg'
-                config_str = f"Config: {item.get('hyperparams', {}).get('optimizer', 'Original')}"
-                if 'reg' in item.get('hyperparams', {}).get('optimizer', {}):
-                     config_str = f"Config: RR_reg={item['hyperparams']['optimizer']['reg']}"
-                print(f"  Accuracy: {item['metrics']['accuracy']:.4f}, Loss: {item['metrics']['loss']:.4f}, {config_str}")
-                
     # 6. Cleanup
     cleanup_distributed_environment()

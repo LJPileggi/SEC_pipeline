@@ -1,5 +1,15 @@
 #!/bin/bash
 
+rm -rf .venv
+
+module purge
+module load python/3.11.7
+module load profile/deeplrn
+module load profile/chem-phys
+
+which python
+python3 --version
+
 echo "Creating virtual environment..."
 python3 -m venv .venv
 
