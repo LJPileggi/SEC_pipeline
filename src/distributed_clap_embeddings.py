@@ -239,7 +239,10 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
                     break
         logging.info(f"Classe '{class_to_process}' elaborata. Creazioni totali: {results}")
 
-def worker_process(audio_format, n_octave, config, rank, world_size, task_queue, start_log_data, delete_segments, test=False):
+### Workers ###
+
+def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_tasks, start_log_data,
+                                              delete_segments, pbar_instance=None, test=False):
     """
     Worker process for distributed training.
 
@@ -260,19 +263,14 @@ def worker_process(audio_format, n_octave, config, rank, world_size, task_queue,
      - start_log_data (dict): dictionary containing log data to resume processing from a specific checkpoint;
      - delete_segments: whether or not to delete audio segments created as a by-product of
        embedding generation;
+     - pbar_instance: MultiProcessTqdm instance to implement a progress bar on rank 0;
      - test (bool): whether to execute process for dummy testing dataset; defaul to False.
     """
-    os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '12355'
-    if torch.cuda.is_available():
-        dist.init_process_group("nccl", rank=rank, world_size=world_size)
-        torch.cuda.set_device(rank)
-        device = torch.device(f'cuda:{rank}')
-    else:
-        dist.init_process_group("gloo", rank=rank, world_size=world_size)
-        device = torch.device('cpu')
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    torch.cuda.set_device(rank)
+    device = torch.device(f'cuda:{rank}')
 
-    clap_model, _, _ = CLAP_initializer()
+    clap_model, audio_embedding, _ = CLAP_initializer(device, use_cuda=True)
 
     config['dirs']['root_source'] = os.path.join(basedir_raw if not test else basedir_raw_test, f'{audio_format}')
     config['dirs']['root_target'] = os.path.join(basedir_preprocessed if not test else basedir_preprocessed_test,
@@ -281,29 +279,74 @@ def worker_process(audio_format, n_octave, config, rank, world_size, task_queue,
         os.makedirs(config['dirs']['root_target'])
     config['audio']['audio_format'] = audio_format
     config['audio']['n_octave'] = n_octave
-
-    audio_embedding = clap_model.clap.audio_encoder
-    audio_embedding.to(device)
     
     logging.info(f"Processo {rank} avviato su GPU {rank}.")
 
-    while not task_queue.empty():
+    # Itera sulla lista di task che competono a questo rank
+    for cut_secs, class_name in my_tasks:
         try:
-            cut_secs, class_name = task_queue.get(timeout=1)
-            logging.info(f"Processo {rank} sta elaborando: cut_secs={cut_secs}, classe={class_name}")
-            process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs,
-                    n_octave, device, rank, start_log_data, delete_segments, class_name)
-        except Empty:
-            logging.info(f"Processo {rank} ha terminato, coda vuota.")
-            break
+            # Stampa un messaggio per il task corrente (opzionale)
+            if rank == 0:
+                print(f"[{rank}] Elaborando {cut_secs}, classe {class_name}", flush=True)
+
+            # Esegui la funzione di elaborazione degli embedding
+            process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n_octave
+                                      device, rank, start_log_data, delete_segments, class_name)
+            
+            # Aggiorna la barra di avanzamento dopo aver completato un task
+            if pbar_instance:
+                pbar_instance.update(1)
+
+        except Exception as e:
+            logging.error(f"Errore critico nel processo {rank} per task ({cut_secs}, {class_name}): {e}")
+
+    # Sincronizza i processi prima di distruggere il gruppo
+    dist.barrier()
+    dist.destroy_process_group()
+    logging.info(f"Processo {rank} ha terminato il suo lavoro.")
+
+
+# Funzione Worker per l'ambiente locale (richiamata da mp.Process)
+def local_worker_process(audio_format, n_octave, config, rank, world_size, my_tasks, start_log_data,
+                                                    delete_segments, pbar_instance=None, test=False):
+    """
+    Funzione worker per l'esecuzione parallela in ambiente locale.
+    """
+    # L'inizializzazione DDP è diversa per i processi lanciati con mp.Process
+    dist.init_process_group("gloo", rank=rank, world_size=world_size) # Usiamo il backend 'gloo' per la CPU
+    
+    # Non usiamo torch.cuda.set_device qui, dato che siamo su CPU (o se usi una GPU locale, gestiscila manualmente)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if torch.cuda.is_available():
+        torch.cuda.set_device(rank)
+        device = torch.device(f'cuda:{rank}')
+
+    logging.info(f"Processo locale {rank} avviato su {device}.")
+
+    clap_model, audio_embedding, _ = CLAP_initializer(device, use_cuda=True)
+
+    # Dividi i task (come prima)
+    my_tasks = all_tasks[rank::world_size]
+    logging.info(f"Processo {rank} ha {len(my_tasks)} task da elaborare.")
+
+    # Itera sui task assegnati
+    for cut_secs, class_name in my_tasks:
+        try:
+            # Esegui la funzione di elaborazione degli embedding
+            process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n_octave
+                                      device, rank, start_log_data, delete_segments, class_name)
         except Exception as e:
             logging.error(f"Errore critico nel processo {rank}: {e}")
-            sys.exit(1)
 
+    # Sincronizza i processi prima di distruggere il gruppo
+    dist.barrier()
     dist.destroy_process_group()
+    logging.info(f"Processo {rank} ha terminato il suo lavoro.")
 
 
-def setup_and_run(config_file, audio_format, n_octave, delete_segments, world_size, test=False):
+### Executions ###
+
+def run_distributed_slurm(config_file, audio_format, n_octave, delete_segments, test=False):
     """
     Sets up and launches the distributed data generation pipeline.
 
@@ -321,10 +364,20 @@ def setup_and_run(config_file, audio_format, n_octave, delete_segments, world_si
      - n_octave: octave band split for the spectrogram from shell;
      - delete_segments: whether or not to delete audio segments created as a by-product of
        embedding generation;
-     - world_size (int): total number of GPU devices to use for parallel processing;
      - test (bool): whether to execute pipeline for dummy testing dataset; default to False.
     """
-    mp.set_start_method('spawn', force=True)
+    # Questo è ora il punto di ingresso per OGNI processo SLURM (rank)
+
+    # Recupera rank e world_size dalle variabili d'ambiente di SLURM
+    # Assicurati che SLURM_PROCID e SLURM_NTASKS siano impostati nel tuo script .sbatch
+    rank = int(os.environ.get("SLURM_PROCID", 0))
+    world_size = int(os.environ.get("SLURM_NTASKS", 1))
+
+    # Inizializza il logging una volta per processo
+    embed_folder = os.path.join(basedir_preprocessed, f'{args.audio_format}', f'{args.n_octave}_octave')
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s',
+                                             handlers=[logging.StreamHandler(),
+                   logging.FileHandler(filename=os.path.join(embed_folder, f'log_rank_{rank}.txt'))])
 
     config = {
             'dirs' : {},
@@ -357,23 +410,105 @@ def setup_and_run(config_file, audio_format, n_octave, delete_segments, world_si
     except FileNotFoundError:
         logging.info("Nessun log trovato, avvio una nuova esecuzione.")
 
-    # Popola la coda dei task
-    task_queue = mp.Queue()
+    all_tasks = []
     for cut_secs in cut_secs_list:
         for class_name in classes_list:
-            task_queue.put((cut_secs, class_name))
+            all_tasks.append((cut_secs, class_name))
+    
+    # Dividi i task per il rank corrente
+    my_tasks = all_tasks[rank::world_size]
+    
+    # Crea il manager e la coda di messaggi per MultiProcessTqdm solo nel rank 0
+    manager = mp.Manager()
+    message_queue = manager.Queue() if world_size > 1 else None
 
-    # Avvia i processi worker
+    pbar = None
+    if rank == 0:
+        if len(all_tasks) > 0:
+            pbar = MultiProcessTqdm(message_queue, "main_pbar", desc="Progresso Totale", total=len(all_tasks))
+
+    # Esegui la logica del worker con la fetta di task
+    worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_tasks, start_log_data, delete_segments, pbar, test)
+
+    # Assicurati che il rank 0 chiuda la pbar dopo che tutti hanno finito
+    if rank == 0 and pbar:
+        pbar.close()
+
+    # delete_log (se vuoi una singola pulizia finale) dovrebbe essere chiamato solo dal rank 0
+    if rank == 0:
+        delete_log(log_path)
+
+    logging.info(f"Rank {rank}: tutti i processi hanno terminato il loro lavoro.")
+
+
+def run_local_multiprocess(config_file, audio_format, n_octave, delete_segments, world_size, test=False):
+    """
+    Funzione per l'esecuzione locale in parallelo.
+    """
+    # Carica la configurazione e prepara la lista completa di tutti i task
+    # ... (codice simile a run_distributed_slurm) ...
+    # Calcola la lista completa all_tasks
+    
+    # Prepara l'ambiente DDP locale (un solo processo parent)
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '29500' # Scegli una porta non in uso
+
+    embed_folder = os.path.join(basedir_preprocessed, f'{args.audio_format}', f'{args.n_octave}_octave')
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s',
+                                             handlers=[logging.StreamHandler(),
+                   logging.FileHandler(filename=os.path.join(embed_folder, f'log.txt'))])
+
+    config = {
+            'dirs' : {},
+            'audio' : {},
+            'spectrogram' : {},
+            'log' : {},
+            'data' : {}
+        }
+
+    _, _, _, save_log_every, sampling_rate, ref, noise_perc, seed, center_freqs, cut_secs_list, \
+                                    divisions_xc_sizes_names = get_config_from_yaml(config_file)
+
+    config['spectrogram']['sr'] = sampling_rate
+    config['spectrogram']['ref'] = ref
+    config['spectrogram']['center_freqs'] = center_freqs
+    config['audio']['noise_perc'] = noise_perc
+    config['audio']['seed'] = seed
+    config['log']['save_log_every'] = save_log_every
+    config['data']['divisions_xc_sizes_names'] = divisions_xc_sizes_names
+
+    basedir_raw_format = os.path.join(basedir_raw if not test else basedir_raw_test, f'{audio_format}')
+    classes_list = sorted([d for d in os.listdir(basedir_raw_format) if os.path.isdir(os.path.join(basedir_raw_format, d))])
+
+    log_data = {}
+    log_path = os.path.join(basedir_preprocessed if not test else basedir_preprocessed_test,
+                                                    f'{audio_format}', f'{n_octave}_octave')
+    try:
+        log_data = read_log(log_path)
+        logging.info(f"Ripresa da log: {log_data}")
+    except FileNotFoundError:
+        logging.info("Nessun log trovato, avvio una nuova esecuzione.")
+
+    all_tasks = []
+    for cut_secs in cut_secs_list:
+        for class_name in classes_list:
+            all_tasks.append((cut_secs, class_name))
+
+    # Avvia i processi worker (come nel tuo codice iniziale)
     processes = []
+    # Crea un Manager per il logging o le comunicazioni tra processi
+    manager = mp.Manager()
+    log_lock = manager.Lock()
+    message_queue = manager.Queue()
+    
     for rank in range(world_size):
-        p = mp.Process(target=worker_process, args=(audio_format, n_octave, config,
-                    rank, world_size, task_queue, log_data, delete_segments, test))
+        # Passa i task, il lock e le code a ogni processo
+        p = mp.Process(target=local_worker_process, args=(audio_format, n_octave, config, rank,
+                world_size, my_tasks, start_log_data, delete_segments, f'pbar_id_{rank}', test))
         p.start()
         processes.append(p)
-
+        
+    # Aspetta che tutti i processi finiscano
     for p in processes:
         p.join()
-        
-    delete_log(log_path)
-    logging.info("Tutti i processi hanno terminato il loro lavoro.")
 

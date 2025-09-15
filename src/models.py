@@ -6,7 +6,7 @@ from msclap import CLAP
 
 ### CLAP models and classifiers ###
 
-def CLAP_initializer(device='cpu'):
+def CLAP_initializer(device='cpu', use_cuda=False):
     """
     CLAP model initialiser
     
@@ -15,7 +15,7 @@ def CLAP_initializer(device='cpu'):
      - audio_embedding: CLAP audio encoder;
      - original_parameters: CLAP original parameters.
     """
-    clap_model = CLAP(version = '2023', use_cuda=False)
+    clap_model = CLAP(version = '2023', use_cuda=use_cuda)
     original_parameters = clap_model.clap.audio_encoder.to('cpu').state_dict()
     clap_model.clap.audio_encoder = clap_model.clap.audio_encoder.to(device)
     audio_embedding=clap_model.clap.audio_encoder

@@ -177,6 +177,7 @@ def select_optim_distributed(rank, world_size, validation_filepath, dataloaders,
                 }
             }
         ]
+    ]
     
     # 2. Divide configurations among processes
     configs_per_process = math.ceil(len(all_configs) / world_size)

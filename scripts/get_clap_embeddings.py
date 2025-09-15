@@ -5,7 +5,7 @@ import logging
 sys.path.append('.')
 
 from src.utils_directories import basedir_preprocessed
-from src.distributed_clap_embeddings import setup_and_run
+from src.distributed_clap_embeddings import run_distributed_slurm, run_local_multiprocess
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
@@ -35,7 +35,15 @@ def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s',
                                              handlers=[logging.StreamHandler(),
                    logging.FileHandler(os.path.join(embed_folder, "log.txt"))])
-    setup_and_run(args.config_file, args.n_octave, args.audio_format, args.delete_segments, world_size)
+
+    # Rileva l'ambiente di esecuzione
+    if "SLURM_PROCID" in os.environ:
+        print("Ambiente SLURM rilevato. Avvio in modalità distribuita...")
+        run_distributed_slurm(args.config_file, args.n_octave, args.audio_format, args.delete_segments)
+    else:
+        # Ambiente locale o altro non-SLURM
+        print("Ambiente locale rilevato. Avvio in modalità multi-processo...")
+        run_local_multiprocess(args.config_file, args.n_octave, args.audio_format, args.delete_segments, world_size)
 
 if __name__ == "__main__":
     main()
