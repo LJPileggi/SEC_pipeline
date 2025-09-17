@@ -10,6 +10,7 @@ import numpy as np
 import soundfile as sf
 import librosa
 from tqdm import tqdm
+from tqdm_multiprocess.tqdm_multiprocess import MultiProcessTqdm 
 import logging
 import traceback
 import random
@@ -330,13 +331,16 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
     logging.info(f"Processo {rank} ha {len(my_tasks)} task da elaborare.")
 
     # Itera sui task assegnati
-    for cut_secs, class_name in my_tasks:
-        try:
-            # Esegui la funzione di elaborazione degli embedding
-            process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n_octave
-                                      device, rank, start_log_data, delete_segments, class_name)
-        except Exception as e:
-            logging.error(f"Errore critico nel processo {rank}: {e}")
+    with MultiProcessTqdm(message_queue, tqdm_id, desc=f"Processo {rank}", total=len(my_tasks)) as worker_pbar:
+        for cut_secs, class_name in my_tasks:
+            try:
+                # Esegui la funzione di elaborazione degli embedding
+                process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n_octave
+                                          device, rank, start_log_data, delete_segments, class_name)
+                # Aggiorna la barra di avanzamento locale (che invia il messaggio alla coda)
+                worker_pbar.update(1)
+            except Exception as e:
+                logging.error(f"Errore critico nel processo {rank}: {e}")
 
     # Sincronizza i processi prima di distruggere il gruppo
     dist.barrier()
@@ -451,7 +455,7 @@ def run_local_multiprocess(config_file, audio_format, n_octave, delete_segments,
     
     # Prepara l'ambiente DDP locale (un solo processo parent)
     os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '29500' # Scegli una porta non in uso
+    os.environ['MASTER_PORT'] = '29500'
 
     embed_folder = os.path.join(basedir_preprocessed, f'{args.audio_format}', f'{args.n_octave}_octave')
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s',
@@ -498,9 +502,14 @@ def run_local_multiprocess(config_file, audio_format, n_octave, delete_segments,
     processes = []
     # Crea un Manager per il logging o le comunicazioni tra processi
     manager = mp.Manager()
-    log_lock = manager.Lock()
     message_queue = manager.Queue()
-    
+
+    # Crea l'istanza di MultiProcessTqdm nel processo principale
+    total_tasks = len(all_tasks)
+    pbar = None
+    if total_tasks > 0:
+        pbar = MultiProcessTqdm(message_queue, f"main_pbar", desc="Progresso Totale", total=total_tasks)
+
     for rank in range(world_size):
         # Passa i task, il lock e le code a ogni processo
         p = mp.Process(target=local_worker_process, args=(audio_format, n_octave, config, rank,
@@ -511,4 +520,8 @@ def run_local_multiprocess(config_file, audio_format, n_octave, delete_segments,
     # Aspetta che tutti i processi finiscano
     for p in processes:
         p.join()
+
+    # Chiudi la barra di avanzamento dopo che tutti i processi hanno terminato
+    if pbar:
+        pbar.close()
 

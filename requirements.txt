@@ -11,3 +11,4 @@ pydub
 librosa
 soundfile
 pyyaml
+tqdm_multiprocess
