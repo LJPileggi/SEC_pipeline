@@ -1,9 +1,11 @@
+#!/bin/bash
+
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4           # <--- Esegui 4 processi per nodo
 #SBATCH --cpus-per-task=1             # Un CPU core per processo (controlla i requisiti CLAP)
 #SBATCH --time=00:30:00
 #SBATCH --exclusive                   # O --exclusive, o --gpus-per-task=1
-#SBATCH -gres=gpu:4                   # Richiedi 4 GPU per il nodo
+#SBATCH --gres=gpu:4                   # Richiedi 4 GPU per il nodo
 #SBATCH -A IscrC_Pb-skite
 #SBATCH -p boost_usr_prod
 

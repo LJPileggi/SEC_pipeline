@@ -291,7 +291,7 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
                 print(f"[{rank}] Elaborando {cut_secs}, classe {class_name}", flush=True)
 
             # Esegui la funzione di elaborazione degli embedding
-            process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n_octave
+            process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n_octave,
                                       device, rank, start_log_data, delete_segments, class_name)
             
             # Aggiorna la barra di avanzamento dopo aver completato un task
@@ -335,7 +335,7 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
         for cut_secs, class_name in my_tasks:
             try:
                 # Esegui la funzione di elaborazione degli embedding
-                process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n_octave
+                process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n_octave,
                                           device, rank, start_log_data, delete_segments, class_name)
                 # Aggiorna la barra di avanzamento locale (che invia il messaggio alla coda)
                 worker_pbar.update(1)

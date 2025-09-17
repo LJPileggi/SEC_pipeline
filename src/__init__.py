@@ -3,7 +3,7 @@ from .utils import get_config_from_yaml, extract_all_files_from_dir, gen_log, re
 from .losses import accuracy, get_scores, RR, build_optimizer
 from .data_handler import CustomDataset, create_dataset, data_stats, load_octaveband_embeddings
 from .models import CLAP_initializer, spectrogram_n_octaveband_generator, OriginalModel, FinetunedModel
-from .distributed_clap_embeddings import setup_and_run
+from .distributed_clap_embeddings import run_distributed_slurm, run_local_multiprocess
 from .distributed_finetuning import select_optim_distributed
 # from .explainability.LMAC import listenable_wav_from_n_octaveband, Decoder, LMAC, LMAC_explainer
 
@@ -39,7 +39,8 @@ __all__ = ["basedir",
            "OriginalModel",
            "FinetunedModel",
 
-           "setup_and_run",
+           "run_distributed_slurm",
+           "run_local_multiprocess",
            "select_optim_distributed"#,
 
            # "listenable_wav_from_n_octaveband",

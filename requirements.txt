@@ -1,6 +1,6 @@
 tensorflow
 torch
-sklearn
+scikit-learn
 xgboost
 transformers
 pandas
