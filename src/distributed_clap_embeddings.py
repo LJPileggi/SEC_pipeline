@@ -381,7 +381,7 @@ def run_distributed_slurm(config_file, audio_format, n_octave, delete_segments, 
     embed_folder = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave')
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s',
                                              handlers=[logging.StreamHandler(),
-                   logging.FileHandler(filename=os.path.join(embed_folder, f'log_rank_{rank}.txt'))])
+                   logging.FileHandler(filename=os.path.join(embed_folder, 'log.txt'))])
 
     config = {
             'dirs' : {},
