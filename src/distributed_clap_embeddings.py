@@ -433,7 +433,7 @@ def run_distributed_slurm(config_file, audio_format, n_octave, delete_segments, 
             pbar = MultiProcessTqdm(message_queue, "main_pbar", desc="Progresso Totale", total=len(all_tasks))
 
     # Esegui la logica del worker con la fetta di task
-    worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_tasks, start_log_data, delete_segments, pbar, test)
+    worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_tasks, log_data, delete_segments, pbar, test)
 
     # Assicurati che il rank 0 chiuda la pbar dopo che tutti hanno finito
     if rank == 0 and pbar:
@@ -515,7 +515,7 @@ def run_local_multiprocess(config_file, audio_format, n_octave, delete_segments,
     for rank in range(world_size):
         # Passa i task, il lock e le code a ogni processo
         p = mp.Process(target=local_worker_process, args=(audio_format, n_octave, config, rank,
-                world_size, my_tasks, start_log_data, delete_segments, f'pbar_id_{rank}', test))
+                      world_size, my_tasks, log_data, delete_segments, f'pbar_id_{rank}', test))
         p.start()
         processes.append(p)
         
