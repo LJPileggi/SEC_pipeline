@@ -9,6 +9,9 @@
 #SBATCH -A IscrC_Pb-skite
 #SBATCH -p boost_usr_prod
 
+ROOT_SOURCE_PATH="../dataSEC/testing/RAW_DATASET"
+FINAL_TARGET_PATH="../dataSEC/testing/PREPROCESSED_DATASET"
+
 export OMP_NUM_THREADS=1
 export OMP_PLACES=cores
 export OMP_PROC_BIND=close
@@ -26,5 +29,10 @@ export MASTER_PORT=29500
 
 embed_test="./tests/test_embeddings.py"
 
+cp -r $ROOT_SOURCE_PATH $TMPDIR/RAW_DATASET
+cp -r $FINAL_TARGET_PATH $TMPDIR/PREPROCESSED_DATASET
+
 # Avvia ogni processo con srun, che imposterà RANK e WORLD_SIZE
 srun python3 "$embed_test"
+
+cp -r $TMPDIR/PREPROCESSED_DATASET* $FINAL_TARGET_PATH

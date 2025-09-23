@@ -1,5 +1,6 @@
 from .utils_directories import *
-from .utils import get_config_from_yaml, extract_all_files_from_dir, gen_log, read_log, delete_log
+from .utils import get_config_from_yaml, extract_all_files_from_dir, gen_log, read_log, delete_log, \
+                          initialize_hdf5, append_to_hdf5, load_or_create_emb_index, save_emb_index
 from .losses import accuracy, get_scores, RR, build_optimizer
 from .data_handler import CustomDataset, create_dataset, data_stats, load_octaveband_embeddings
 from .models import CLAP_initializer, spectrogram_n_octaveband_generator, OriginalModel, FinetunedModel
@@ -14,6 +15,7 @@ __all__ = ["basedir",
            "results_validation_filepath_project",
            "model_filepath",
 
+           "basedir_testing",
            "basedir_raw_test",
            "basedir_preprocessed_test",
            "results_filepath_project_test",
@@ -25,6 +27,10 @@ __all__ = ["basedir",
            "gen_log",
            "read_log",
            "delete_log",
+           "initialize_hdf5",
+           "append_to_hdf5",
+           "load_or_create_emb_index",
+           "save_emb_index",
 
            "accuracy",
            "get_scores",

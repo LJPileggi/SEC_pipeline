@@ -12,3 +12,4 @@ librosa
 soundfile
 pyyaml
 tqdm_multiprocess
+h5py

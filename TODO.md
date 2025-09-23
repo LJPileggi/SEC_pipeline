@@ -2,7 +2,12 @@
 # TODO file
 
 ### Pending
+update cancelling logic according to new hdf5 framework
+```diff
+- src/distributed_clap_embeddings.py ; process_class_with_cut_secs ; 23/09/2025 - pending ; update cancelling logic according to new hdf5 framework
+```
 
+--------------------------------------------------------------------------------------------
 ```diff
 ! /src/explainability/LMAC.py ; listenable_wav_from_n_octaveband ; 06/08/2025 - pending ; set correct directory to save explanations
 !    from listenable_wav_from_n_octaveband

@@ -3,6 +3,7 @@ import json
 import yaml
 import glob
 import logging
+import h5py
 import numpy as np
 
 ### Get model, training and spectrogram configuration from yaml ###
@@ -179,3 +180,82 @@ def delete_log(log_path):
         os.remove(os.path.join(log_path, "log.json"))
     except FileNotFoundError:
         return
+
+### hdf5 data generation and appending for embeddings and spectrograms ###
+
+def initialize_hdf5(file_path, embedding_dim, spec_shape):
+    """
+    Creates HDF5 file with resizable embedding and spectrogram datasets.
+
+    args:
+     - file_path: path of HDF5 file;
+     - embedding_dim: dimension of single embedding;
+     - spec_shape: shape of single spectrogram.
+    """
+    # 'a' per aprire in modalità append, crea il file se non esiste
+    with h5py.File(file_path, 'a') as hf:
+        if 'embeddings' not in hf:
+            hf.create_dataset(
+                'embeddings',
+                shape=(0, embedding_dim),  # La prima dimensione è 0, sarà ridimensionata
+                maxshape=(None, embedding_dim), # Può crescere indefinitamente lungo la prima dimensione
+                dtype='f4', # Float a 32 bit
+                chunks=True
+            )
+        if 'spectrograms' not in hf:
+            hf.create_dataset(
+                'spectrograms',
+                shape=(0,) + spec_shape,
+                maxshape=(None,) + spec_shape,
+                dtype='f4',
+                chunks=True
+            )
+        if 'names' not in hf:
+            dt = h5py.string_dtype(encoding='utf-8')
+            hf.create_dataset('names', shape=(0,), maxshape=(None,), dtype=dt, chunks=True)
+
+def append_to_hdf5(file_path, embeddings_buffer, spectrograms_buffer):
+    """
+    Appends embedding and spectrogram batches to preexisting HDF5 file.
+
+    args:
+     - file_path: path of HDF5 file to append data;
+     - embeddings_buffer: buffer of embeddings to append;
+     - spectrograms_buffer: buffer of spectrograms to append.
+    """
+    with h5py.File(file_path, 'a') as hf:
+        # Aggiungi gli embeddings
+        embeddings_ds = hf['embeddings']
+        current_size = embeddings_ds.shape[0]
+        new_size = current_size + len(embeddings_buffer)
+        embeddings_ds.resize(new_size, axis=0) # Ridimensiona il dataset
+        embeddings_ds[current_size:] = embeddings_buffer # Scrivi i nuovi dati
+
+        # Aggiungi gli spettrogrammi
+        spectrograms_ds = hf['spectrograms']
+        current_size = spectrograms_ds.shape[0]
+        new_size = current_size + len(spectrograms_buffer)
+        spectrograms_ds.resize(new_size, axis=0) # Ridimensiona il dataset
+        spectrograms_ds[current_size:] = spectrograms_buffer # Scrivi i nuovi dati
+
+        # Aggiungi i nomi
+        names_ds = hf['names']
+        current_size = names_ds.shape[0]
+        new_size = current_size + len(names_buffer)
+        names_ds.resize(new_size, axis=0)
+        names_ds[current_size:] = np.array(names_buffer, dtype=h5py.string_dtype(encoding='utf-8'))
+
+### Indexing for embeddings ###
+
+def load_or_create_emb_index(index_path):
+    """Carica l'indice da un file JSON o ne crea uno nuovo."""
+    if os.path.exists(index_path):
+        with open(index_path, 'r') as f:
+            return json.load(f)
+    return {}
+
+def save_emb_index(index, index_path):
+    """Salva l'indice in un file JSON."""
+    with open(index_path, 'w') as f:
+        json.dump(index, f)
+

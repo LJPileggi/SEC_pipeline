@@ -17,48 +17,9 @@ import random
 import pydub
 
 from .models import CLAP_initializer, spectrogram_n_octaveband_generator
-from .utils import get_config_from_yaml, gen_log, read_log, delete_log, extract_all_files_from_dir
+from .utils import *
 from .utils_directories import *
 
-
-### Saving functions ###
-
-def save_audio_segment(data, sr, path, audio_format="wav"):
-    """
-    Saves audio segment to be then used by CLAP to generate the embedding.
-    Distinguishes between different audio formats.
-
-    args:
-     - data (np.array): audio data in the form of monophonic time series;
-     - sr (float): sampling rate for the to-save audio;
-     - path (str): path to export the audio in;
-     - audio_format (str): final audio format of the saved audio; have to
-       choose valid audio format (wav, mp3, flac etc.).
-    """
-    if audio_format == "wav":
-        sf.write(path, data, sr, subtype='PCM_24')
-    elif audio_format in ("mp3", "flac"):
-        audio_segment = pydub.AudioSegment(
-            data.astype("float32").tobytes(),
-            frame_rate=sr,
-            sample_width=4,
-            channels=1
-        )
-        audio_segment.export(path, format=audio_format, bitrate="128k")
-    else:
-        raise NotImplementedError(f"Formato audio {audio_format} non implementato.")
-
-def save_spectrogram(spectrogram, path):
-    """
-    Saves spectrogram in .npy file.
-    """
-    np.save(path, spectrogram)
-
-def save_embedding(embedding, path):
-    """
-    Saves embedding in .pt file.
-    """
-    torch.save(embedding.cpu(), path)
 
 ### Embedding generation ###
 
@@ -124,7 +85,21 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
         
     source_class_dir = os.path.join(root_source, class_to_process)
     audio_fp_list = extract_all_files_from_dir(source_class_dir, extension=f'.{audio_format}')
-    
+
+    # Inizializza il file HDF5
+    hdf5_file_path = os.path.join(dir_trvlts_paths[di], f'{class_to_process}_data.h5')
+    initialize_hdf5(hdf5_file_path, embedding_dim, spec_shape)
+
+
+    # Indice sugli embeddings già creati per efficientare controllo su embeddings già esistenti
+    index_path = os.path.join(dir_trvlts_paths[di], f'{class_to_process}_index.json')
+    existing_names_index = load_or_create_emb_index(index_path)
+
+    embeddings_buffer = []
+    spectrograms_buffer = []
+    names_buffer = []
+    buffer_size_limit = 100 
+
     if len(audio_fp_list) > 0:
         perms = np.random.RandomState(seed=seed).permutation(len(audio_fp_list))
         
@@ -154,15 +129,11 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
                             else:
                                 results = 0
                         
-                        trg_audio_path, trg_pt_path, trg_spec3o_path = None, None, None
                         try:
                             base_name = os.path.splitext(os.path.basename(audio_fp))[0]
                             new_fp_base = f'{base_name}_{cut_secs}s_({b}_{round_})'
-                            trg_audio_path = os.path.join(dir_trvlts_paths[di], f'{new_fp_base}.{audio_format}')
-                            trg_pt_path = os.path.join(dir_trvlts_paths[di], f'{new_fp_base}.pt')
-                            trg_spec3o_path = os.path.join(dir_trvlts_paths[di], f'{new_fp_base}_spec3o.npy')
 
-                            if os.path.exists(trg_pt_path) and os.path.exists(trg_spec3o_path):
+                            if if new_fp_base in existing_names_index:
                                 results += 1
                                 continue
 
@@ -179,22 +150,34 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
                             noise = (np.random.rand(*cut_data.shape) * 2 - 1) * max_threshold
                             new_audio = (1 - noise_perc) * cut_data + noise_perc * noise
                             
-                            save_audio_segment(new_audio, sr, trg_audio_path, audio_format)
-                            spec3o = spectrogram_n_octaveband_generator(new_audio, sr, integration_seconds=0.1,
+                            spec_n_o = spectrogram_n_octaveband_generator(new_audio, sr, integration_seconds=0.1,
                                                         n_octave=n_octave, center_freqs=center_freqs, ref=ref)
-                            save_spectrogram(spec3o, trg_spec3o_path)
 
                             preprocessed_audio = clap_model.preprocess_audio([trg_audio_path], True)
                             preprocessed_audio = preprocessed_audio.reshape(preprocessed_audio.shape[0], preprocessed_audio.shape[2])
                             x = preprocessed_audio.to(device)
                             with torch.no_grad():
                                 embedding = audio_embedding(x)[0][0]
-                            
-                            save_embedding(embedding, trg_pt_path)
-                            if delete_segments.lower() in ["y", "yes"]:
-                                os.remove(trg_audio_path)
-                            
+
+                            embeddings_buffer.append(embedding)
+                            spectrograms_buffer.append(spec_n_o)
+                            names_buffer.append(new_fp_base)
+                            existing_names_index[new_fp_base] = True
+
                             results += 1
+
+                            # All'interno del controllo del buffer:
+                            if len(embeddings_buffer) >= buffer_size_limit:
+                                # Salva il buffer in HDF5
+                                append_to_hdf5(output_file_path, embeddings_buffer, spectrograms_buffer)
+    
+                                # Salva l'indice aggiornato
+                                save_emb_index(existing_names_index, index_path)
+    
+                                # Resetta i buffer
+                                embeddings_buffer = []
+                                spectrograms_buffer = []
+                                names_buffer = []
 
                             if results % save_log_every == 0:
                                 # Il log è gestito solo dal rank 0
@@ -214,12 +197,13 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
                                 os.remove(trg_audio_path)
                             sys.exit(0)
 
+                        # TODO: update cancelling logic according to new hdf5 framework
                         except Exception as e:
                             logging.error(f"Errore durante l'elaborazione del bucket {b} da {filepath}: {e}. Tentativo di pulizia.")
                             traceback.print_exc(file=sys.stderr)
-                            for file_path in [trg_audio_path, trg_pt_path, trg_spec3o_path]:
-                                if file_path and os.path.exists(file_path):
-                                    os.remove(file_path)
+                            # for file_path in [trg_audio_path, trg_pt_path, trg_spec3o_path]:
+                            #     if file_path and os.path.exists(file_path):
+                            #         os.remove(file_path)
                             continue
 
                     if finish_class:
