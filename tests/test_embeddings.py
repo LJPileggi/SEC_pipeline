@@ -47,11 +47,11 @@ class EmbeddingTestCase(unittest.TestCase):
             # Rileva l'ambiente di esecuzione
             if "SLURM_PROCID" in os.environ:
                 print("Ambiente SLURM rilevato. Avvio in modalità distribuita...")
-                run_distributed_slurm(self.test_config, audio_format, self._n_octave, "y", test=True)
+                run_distributed_slurm(self.test_config, audio_format, self._n_octave, test=True)
             else:
                 # Ambiente locale o altro non-SLURM
                 print("Ambiente locale rilevato. Avvio in modalità multi-processo...")
-                run_local_multiprocess(self.test_config, audio_format, self._n_octave, "y", _world_size, test=True)
+                run_local_multiprocess(self.test_config, audio_format, self._n_octave, _world_size, test=True)
 
     def _n_files_within_subfolders(self, extension, audio_format):
         all_files = []

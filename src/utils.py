@@ -29,12 +29,12 @@ def get_config_from_yaml(config_file="config0.yaml"):
     seed = configs["seed"]
     center_freqs = np.array(configs["center_freqs"])
     valid_cut_secs = configs["valid_cut_secs"]
-    divisions_xc_sizes_names = [("train", configs["train_size"]),
+    splits_xc_sizes_names = [("train", configs["train_size"]),
                                 ("es", configs["es_size"]),
                                 ("valid", configs["valid_size"]),
                                 ("test", configs["test_size"])]
     return patience, epochs, batch_size, save_log_every, sampling_rate, ref, noise_perc, \
-                            seed, center_freqs, valid_cut_secs, divisions_xc_sizes_names
+                            seed, center_freqs, valid_cut_secs, splits_xc_sizes_names
 
    
 ### Files and directory handling functions ###
@@ -69,7 +69,7 @@ def extract_all_files_from_dir(source_class_dir, extension='.wav'):
 ### Log file functions for embedding calculation ###
 
 def gen_log(log_path, cut_secs, ic, di, results, round_, finish_class, \
-                    divisions_xc_sizes_names, noise_perc, seed, rank):
+                    splits_xc_sizes_names, noise_perc, seed, rank):
     """
     Generates a log file to set up a check point for embedding generation.
     This function is called every #save_log_every embedding creations or
@@ -87,14 +87,14 @@ def gen_log(log_path, cut_secs, ic, di, results, round_, finish_class, \
        than the required number for each class, split_audio_tracks starts to
        run subsequent data augmentation runs until the desired number is reached;
      - finish_class: whether the current class has been completely swept of not;
-     - divisions_xc_sizes_names: a list containing tuples of ('split_name', #samples);
+     - splits_xc_sizes_names: a list containing tuples of ('split_name', #samples);
        the usual one is [('train', 500), ('es', 100), ('valid', 100), ('test', 100)];
      - noise_perc: intensity of noise for data augmentation;
      - seed: random seed for track permutations inside the same class;
      - rank: rank of the log generating process to confront different logs and
        sort them lexicographically.
     """
-    lengths = list(zip(*divisions_xc_sizes_names))[1]
+    lengths = list(zip(*splits_xc_sizes_names))[1]
     results = sum(lengths[:di]) if di > 0 else 0
     log = {
         "cut_secs" : cut_secs,
@@ -103,7 +103,7 @@ def gen_log(log_path, cut_secs, ic, di, results, round_, finish_class, \
         "results" : results,
         "round" : round_,
         "finish_class" : finish_class,
-        "divisions_xc_sizes_names" : divisions_xc_sizes_names,
+        "splits_xc_sizes_names" : splits_xc_sizes_names,
         "noise_perc" : noise_perc,
         "seed" : seed
     }
@@ -116,7 +116,7 @@ def gen_log(log_path, cut_secs, ic, di, results, round_, finish_class, \
           f"results: {results}\n"
           f"round: {round_}\n"
           f"finish_class: {finish_class}\n"
-          f"divisions_xc_sizes_names: {divisions_xc_sizes_names}\n"
+          f"splits_xc_sizes_names: {splits_xc_sizes_names}\n"
           f"noise_perc: {noise_perc}\n"
           f"seed: {seed}\n"
     )
@@ -183,14 +183,15 @@ def delete_log(log_path):
 
 ### hdf5 data generation and appending for embeddings and spectrograms ###
 
-def initialize_hdf5(file_path, embedding_dim, spec_shape):
+def initialize_hdf5(file_path, embedding_dim, spec_shape, split):
     """
     Creates HDF5 file with resizable embedding and spectrogram datasets.
 
     args:
      - file_path: path of HDF5 file;
      - embedding_dim: dimension of single embedding;
-     - spec_shape: shape of single spectrogram.
+     - spec_shape: shape of single spectrogram;
+     - split: dataset split the embedding belongs to.
     """
     # 'a' per aprire in modalità append, crea il file se non esiste
     with h5py.File(file_path, 'a') as hf:
@@ -214,14 +215,15 @@ def initialize_hdf5(file_path, embedding_dim, spec_shape):
             dt = h5py.string_dtype(encoding='utf-8')
             hf.create_dataset('names', shape=(0,), maxshape=(None,), dtype=dt, chunks=True)
 
-def append_to_hdf5(file_path, embeddings_buffer, spectrograms_buffer):
+def append_to_hdf5(file_path, embeddings_buffer, spectrograms_buffer, names_buffer):
     """
     Appends embedding and spectrogram batches to preexisting HDF5 file.
 
     args:
      - file_path: path of HDF5 file to append data;
      - embeddings_buffer: buffer of embeddings to append;
-     - spectrograms_buffer: buffer of spectrograms to append.
+     - spectrograms_buffer: buffer of spectrograms to append;
+     - names_buffer: buffer of embeddings' IDs.
     """
     with h5py.File(file_path, 'a') as hf:
         # Aggiungi gli embeddings

@@ -23,8 +23,9 @@ from .utils_directories import *
 
 ### Embedding generation ###
 
+
 def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n_octave, \
-                        device, rank, start_log_data, delete_segments, class_to_process):
+                                        device, rank, start_log_data, class_to_process):
     """
     Main job to submit to GPU workers to generate CLAP embeddings for a given class and
     cut_secs value.
@@ -50,16 +51,15 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
         no work is lost.
 
     args:
-        clap_model (CLAP_model): The pre-trained CLAP model instance;
-        audio_embedding (torch.nn.Module): The audio embedding module from the model;
-        config (dict): The configuration dictionary containing all necessary parameters;
-        cut_secs (float): The duration in seconds of each audio segment;
-        n_octave (int): The number of octave bands for the spectrogram;
-        device (torch.device): The device (CPU or CUDA) to run the computation on;
-        rank (int): The rank of the current process in a distributed setup;
-        start_log_data (dict): Dictionary with logging data to resume a previous job;
-        delete_segments (bool): If True, deletes the temporary audio segments;
-        class_to_process (str): The name of the audio class to process.
+     - clap_model (CLAP_model): The pre-trained CLAP model instance;
+     - audio_embedding (torch.nn.Module): The audio embedding module from the model;
+     - config (dict): The configuration dictionary containing all necessary parameters;
+     - cut_secs (float): The duration in seconds of each audio segment;
+     - n_octave (int): The number of octave bands for the spectrogram;
+     - device (torch.device): The device (CPU or CUDA) to run the computation on;
+     - rank (int): The rank of the current process in a distributed setup;
+     - start_log_data (dict): Dictionary with logging data to resume a previous job;
+     - class_to_process (str): The name of the audio class to process.
 
     returns:
         None. The function saves the generated embeddings and spectrograms as a side effect
@@ -68,8 +68,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
     root_source = config['dirs']['root_source']
     root_target = config['dirs']['root_target']
     cut_secs_dir = os.path.join(root_target, f'{cut_secs}_secs')
-    if not os.path.exists(root_target):
-        os.makedirs(root_target)
+    
     audio_format = config['audio']['audio_format']
     sr = config['spectrogram']['sr']
     ref = config['spectrogram']['ref']
@@ -77,7 +76,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
     noise_perc = config['audio']['noise_perc']
     seed = config['audio']['seed']
     save_log_every = config['log']['save_log_every']
-
+    
     # Inizializzazione della logica di ripresa
     division_names = [d[0] for d in config['data']['divisions_xc_sizes_names']]
     target_counts_list = [d[1] for d in config['data']['divisions_xc_sizes_names']]
@@ -87,36 +86,33 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
     round_ = 0
     finish_class = False
 
-    # Se stiamo riprendendo da un log, carichiamo i valori salvati
     if start_log_data and start_log_data.get('cut_secs') == cut_secs and start_log_data.get('class_name') == class_to_process:
         di = start_log_data.get('di', 0)
         results = start_log_data.get('results', 0)
         round_ = start_log_data.get('round', 0)
         finish_class = start_log_data.get('finish_class', False)
         
-    target_class_dir = os.path.join(cut_secs_dir, class_to_process)
-    dir_trvlts_paths = [os.path.join(target_class_dir, p) for p in division_names]
-    
-    for path in [target_class_dir] + dir_trvlts_paths:
-        os.makedirs(path, exist_ok=True)
-        
     source_class_dir = os.path.join(root_source, class_to_process)
     audio_fp_list = extract_all_files_from_dir(source_class_dir, extension=f'.{audio_format}')
+    
+    target_class_dir = os.path.join(cut_secs_dir, class_to_process)
+    os.makedirs(target_class_dir, exist_ok=True)
 
     # Inizializzazione dei buffer globali e dei percorsi dei file
     embeddings_buffer = []
     spectrograms_buffer = []
     names_buffer = []
     buffer_size_limit = 100 # Regola questo valore in base alla RAM disponibile
-    output_file_path = os.path.join(dir_trvlts_paths[0], f'{class_to_process}_data.h5')
-    index_path = os.path.join(dir_trvlts_paths[0], f'{class_to_process}_index.json')
     
     # Specifica le dimensioni dei dati
     embedding_dim = 1024 # Esempio, metti la dimensione corretta del tuo embedding
     spec_shape = (128, 1024) # Esempio, metti la forma corretta dello spettrogramma
     
-    # Carica l'indice esistente e inizializza il file HDF5
+    # Carica l'indice esistente e inizializza il file HDF5 per lo split corrente
+    index_path = os.path.join(target_class_dir, f'{class_to_process}_{division_names[di]}.json')
     existing_names_index = load_or_create_emb_index(index_path)
+    
+    output_file_path = os.path.join(target_class_dir, f'{class_to_process}_{division_names[di]}.h5')
     initialize_hdf5(output_file_path, embedding_dim, spec_shape)
 
     # Questo blocco 'try...finally' garantisce il salvataggio dei dati in caso di interruzione manuale
@@ -143,77 +139,76 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
                         bucket_error = False
 
                         for b in range(n_buckets):
-                            try:
-                                # Controllo per passare alla prossima divisione
-                                if results >= target_counts_list[di]:
-                                    di += 1
-                                    if di >= len(division_names):
-                                        finish_class = True
-                                        break
-                                    else:
-                                        results = 0
-
-                                new_fp_base = f'{base_name}_{cut_secs}s_({b}_{round_})'
-
-                                # Controllo a costo O(1) per verificare se il nome è già presente nell'indice
-                                if new_fp_base in existing_names_index:
-                                    continue
-
-                                start = b * window_size + offset
-                                end = start + window_size
-                                cut_data = data[start:end]
-
-                                if len(cut_data) < window_size:
-                                    pad_length = window_size - len(cut_data)
-                                    cut_data = np.pad(cut_data, (0, pad_length), 'constant')
-
-                                abs_cutdata = np.abs(cut_data)
-                                max_threshold = np.mean(abs_cutdata)
-                                noise = (np.random.rand(*cut_data.shape) * 2 - 1) * max_threshold
-                                new_audio = (1 - noise_perc) * cut_data + noise_perc * noise
+                            # VEDI MODIFICA: La logica per il cambio split è ora qui
+                            if results >= target_counts_list[di]:
+                                # Esegui il salvataggio finale per lo split precedente
+                                if len(embeddings_buffer) > 0:
+                                    append_to_hdf5(output_file_path, embeddings_buffer, spectrograms_buffer, names_buffer)
+                                    save_emb_index(existing_names_index, index_path)
+                                    embeddings_buffer = []
+                                    spectrograms_buffer = []
+                                    names_buffer = []
                                 
-                                # Generazione dello spettrogramma e dell'embedding direttamente in memoria
-                                spec_n_o = spectrogram_n_octaveband_generator(new_audio, sr, integration_seconds=0.1,
-                                                                n_octave=n_octave, center_freqs=center_freqs, ref=ref)
-                                
-                                preprocessed_audio = clap_model.preprocess_audio([new_audio], is_path=False)
-                                preprocessed_audio = preprocessed_audio.reshape(preprocessed_audio.shape[0],
-                                                                                preprocessed_audio.shape[2])
-                                x = preprocessed_audio.to(device)
-                                with torch.no_grad():
-                                    embedding = audio_embedding(x)[0][0]
-                                
-                                # Aggiungi i dati elaborati con successo ai buffer locali
-                                local_embeddings_buffer.append(embedding.cpu().numpy())
-                                local_spectrograms_buffer.append(spec_n_o)
-                                local_names_buffer.append(new_fp_base)
+                                # Passa al prossimo split e reinizializza
+                                di += 1
+                                if di >= len(division_names):
+                                    finish_class = True
+                                    break
+                                else:
+                                    results = 0
+                                    index_path = os.path.join(target_class_dir, f'{class_to_process}_{division_names[di]}.json')
+                                    existing_names_index = load_or_create_emb_index(index_path)
+                                    output_file_path = os.path.join(target_class_dir, f'{class_to_process}_{division_names[di]}.h5')
+                                    initialize_hdf5(output_file_path, embedding_dim, spec_shape)
 
-                                # Aggiornamento chiave: aggiungi il nome all'indice in memoria
-                                existing_names_index[new_fp_base] = True
 
-                                results += 1
+                            new_fp_base = f'{audio_fp}_{cut_secs}s_({b}_{round_})'
 
-                            except Exception as e:
-                                # Errore durante l'elaborazione di un singolo bucket
-                                logging.error(f"Errore durante l'elaborazione del bucket {b} da "
-                                              f"{filepath}: {e}. Salto il resto di questo file.")
-                                traceback.print_exc(file=sys.stderr)
-                                bucket_error = True
-                                break # Esce dal ciclo dei bucket per il file corrente
+                            if new_fp_base in existing_names_index:
+                                continue
 
-                        # Dopo il ciclo dei bucket
+                            start = b * window_size + offset
+                            end = start + window_size
+                            cut_data = data[start:end]
+
+                            if len(cut_data) < window_size:
+                                pad_length = window_size - len(cut_data)
+                                cut_data = np.pad(cut_data, (0, pad_length), 'constant')
+
+                            abs_cutdata = np.abs(cut_data)
+                            max_threshold = np.mean(abs_cutdata)
+                            noise = (np.random.rand(*cut_data.shape) * 2 - 1) * max_threshold
+                            new_audio = (1 - noise_perc) * cut_data + noise_perc * noise
+                            
+                            preprocessed_audio = clap_model.preprocess_audio([new_audio], is_path=False)
+                            preprocessed_audio = preprocessed_audio.reshape(preprocessed_audio.shape[0], preprocessed_audio.shape[2])
+                            x = preprocessed_audio.to(device)
+                            with torch.no_grad():
+                                embedding = audio_embedding(x)[0][0]
+                            
+                            local_embeddings_buffer.append(embedding.cpu().numpy())
+                            local_spectrograms_buffer.append(spec3o)
+                            local_names_buffer.append(new_fp_base)
+
+                            existing_names_index[new_fp_base] = True
+
+                            results += 1
+
+                        except Exception as e:
+                            logging.error(f"Errore durante l'elaborazione del bucket {b} da "
+                                          f"{filepath}: {e}. Salto il resto di questo file.")
+                            traceback.print_exc(file=sys.stderr)
+                            bucket_error = True
+                            break
+
                         if bucket_error:
-                            # Se si è verificato un errore, i buffer locali vengono scartati
-                            continue # Passa al prossimo file nel ciclo 'for p in perms'
+                            continue
 
-                        # Se l'elaborazione di tutti i bucket è andata a buon fine, aggiungi i dati
-                        # dai buffer locali a quelli globali.
                         embeddings_buffer.extend(local_embeddings_buffer)
                         spectrograms_buffer.extend(local_spectrograms_buffer)
                         names_buffer.extend(local_names_buffer)
 
                     except Exception as e:
-                        # Errore durante il caricamento del file audio (es. librosa.load)
                         logging.error(f"Errore durante il caricamento del file {filepath}: {e}. Salto il file.")
                         traceback.print_exc(file=sys.stderr)
                         n_corrupt_files += 1
@@ -235,31 +230,24 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
 
     except KeyboardInterrupt:
         logging.info("Interruzione manuale rilevata. Avvio del salvataggio finale.")
-        # La logica del 'finally' gestirà il salvataggio dei dati rimanenti
-
     finally:
-        # Questo blocco viene eseguito SEMPRE, sia in caso di successo che di errore
-        # (inclusi i KeyboardInterrupt)
-        
-        # Salva i dati rimanenti nei buffer prima di uscire
         if len(embeddings_buffer) > 0:
             append_to_hdf5(output_file_path, embeddings_buffer, spectrograms_buffer, names_buffer)
             save_emb_index(existing_names_index, index_path)
             logging.info("Dati e indice rimanenti salvati con successo.")
         
-        # Salva lo stato del log per la ripresa
         classes_list = sorted([d for d in os.listdir(root_source) if os.path.isdir(os.path.join(root_source, d))])
         ic = classes_list.index(class_to_process)
         gen_log(root_target, cut_secs, ic, di, results, round_, finish_class,
                 config['data']['divisions_xc_sizes_names'], noise_perc, seed, rank)
         
-        logging.info(f"Classe '{class_to_process}' elaborata. Creazioni totali: {results}")
+        logging.info(f"Classe '{class_to_process}' elaborata. Creazioni totali: {sum(target_counts_list[:di]) + results}")
 
 
 ### Workers ###
 
-def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_tasks, start_log_data,
-                                              delete_segments, pbar_instance=None, test=False):
+def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_tasks, \
+                                    start_log_data, pbar_instance=None, test=False):
     """
     Worker process for distributed training.
 
@@ -278,8 +266,6 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
      - world_size (int): total number of processes in the distributed group;
      - task_queue (mp.Queue): shared queue containing tuples of (cut_secs, class_name) to be processed;
      - start_log_data (dict): dictionary containing log data to resume processing from a specific checkpoint;
-     - delete_segments: whether or not to delete audio segments created as a by-product of
-       embedding generation;
      - pbar_instance: MultiProcessTqdm instance to implement a progress bar on rank 0;
      - test (bool): whether to execute process for dummy testing dataset; defaul to False.
     """
@@ -308,7 +294,7 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
 
             # Esegui la funzione di elaborazione degli embedding
             process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n_octave,
-                                      device, rank, start_log_data, delete_segments, class_name)
+                                                      device, rank, start_log_data, class_name)
             
             # Aggiorna la barra di avanzamento dopo aver completato un task
             if pbar_instance:
@@ -324,8 +310,8 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
 
 
 # Funzione Worker per l'ambiente locale (richiamata da mp.Process)
-def local_worker_process(audio_format, n_octave, config, rank, world_size, my_tasks, start_log_data,
-                                                    delete_segments, pbar_instance=None, test=False):
+def local_worker_process(audio_format, n_octave, config, rank, world_size, my_tasks, \
+                                    start_log_data, pbar_instance=None, test=False):
     """
     Funzione worker per l'esecuzione parallela in ambiente locale.
     """
@@ -343,7 +329,6 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
     clap_model, audio_embedding, _ = CLAP_initializer(device, use_cuda=True)
 
     # Dividi i task (come prima)
-    my_tasks = all_tasks[rank::world_size]
     logging.info(f"Processo {rank} ha {len(my_tasks)} task da elaborare.")
 
     # Itera sui task assegnati
@@ -352,7 +337,7 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
             try:
                 # Esegui la funzione di elaborazione degli embedding
                 process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n_octave,
-                                          device, rank, start_log_data, delete_segments, class_name)
+                                                          device, rank, start_log_data, class_name)
                 # Aggiorna la barra di avanzamento locale (che invia il messaggio alla coda)
                 worker_pbar.update(1)
             except Exception as e:
@@ -366,7 +351,7 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
 
 ### Executions ###
 
-def run_distributed_slurm(config_file, audio_format, n_octave, delete_segments, test=False):
+def run_distributed_slurm(config_file, audio_format, n_octave, test=False):
     """
     Sets up and launches the distributed data generation pipeline.
 
@@ -382,8 +367,6 @@ def run_distributed_slurm(config_file, audio_format, n_octave, delete_segments, 
      - config_file: name of the config file from shell;
      - audio_format: format of the audio to embed from shell;
      - n_octave: octave band split for the spectrogram from shell;
-     - delete_segments: whether or not to delete audio segments created as a by-product of
-       embedding generation;
      - test (bool): whether to execute pipeline for dummy testing dataset; default to False.
     """
     # Questo è ora il punto di ingresso per OGNI processo SLURM (rank)
@@ -431,10 +414,38 @@ def run_distributed_slurm(config_file, audio_format, n_octave, delete_segments, 
     except FileNotFoundError:
         logging.info("Nessun log trovato, avvio una nuova esecuzione.")
 
+    log_cut_secs = log_data.get('cut_secs', None)
+    log_class_name = log_data.get('class_name', None)
+
+    # Questo flag indica se abbiamo raggiunto il punto di ripresa
+    found_resume_point = False
+
     all_tasks = []
     for cut_secs in cut_secs_list:
         for class_name in classes_list:
-            all_tasks.append((cut_secs, class_name))
+            if log_data:
+                # Se siamo già oltre il punto di ripresa, mettiamo tutto in coda
+                if found_resume_point:
+                    all_tasks.put((cut_secs, class_name))
+                    continue
+
+                # Confronto lessicografico per trovare il punto di ripresa
+                if cut_secs > log_cut_secs:
+                    found_resume_point = True
+                    all_tasks.put((cut_secs, class_name))
+                    continue
+                elif cut_secs == log_cut_secs and class_name >= log_class_name:
+                    found_resume_point = True
+                    # Inserisci il task in corso
+                    all_tasks.put((cut_secs, class_name))
+                    continue
+                else:
+                    # Salta i task precedenti al punto di ripresa
+                    logging.info(f"Skipping task: cut_secs={cut_secs}, class_name={class_name} (already completed)")
+                    continue
+            else:
+                # Nessun log, aggiungi tutti i task normalmente
+                all_tasks.put((cut_secs, class_name))
     
     # Dividi i task per il rank corrente
     my_tasks = all_tasks[rank::world_size]
@@ -449,7 +460,7 @@ def run_distributed_slurm(config_file, audio_format, n_octave, delete_segments, 
             pbar = MultiProcessTqdm(message_queue, "main_pbar", desc="Progresso Totale", total=len(all_tasks))
 
     # Esegui la logica del worker con la fetta di task
-    worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_tasks, log_data, delete_segments, pbar, test)
+    worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_tasks, log_data, pbar, test)
 
     # Assicurati che il rank 0 chiuda la pbar dopo che tutti hanno finito
     if rank == 0 and pbar:
@@ -462,7 +473,7 @@ def run_distributed_slurm(config_file, audio_format, n_octave, delete_segments, 
     logging.info(f"Rank {rank}: tutti i processi hanno terminato il loro lavoro.")
 
 
-def run_local_multiprocess(config_file, audio_format, n_octave, delete_segments, world_size, test=False):
+def run_local_multiprocess(config_file, audio_format, n_octave, world_size, test=False):
     """
     Funzione per l'esecuzione locale in parallelo.
     """
@@ -511,10 +522,35 @@ def run_local_multiprocess(config_file, audio_format, n_octave, delete_segments,
     except FileNotFoundError:
         logging.info("Nessun log trovato, avvio una nuova esecuzione.")
 
+    log_cut_secs = log_data.get('cut_secs', None)
+    log_class_name = log_data.get('class_name', None)
+
     all_tasks = []
     for cut_secs in cut_secs_list:
         for class_name in classes_list:
-            all_tasks.append((cut_secs, class_name))
+            if log_data:
+                # Se siamo già oltre il punto di ripresa, mettiamo tutto in coda
+                if found_resume_point:
+                    all_tasks.put((cut_secs, class_name))
+                    continue
+
+                # Confronto lessicografico per trovare il punto di ripresa
+                if cut_secs > log_cut_secs:
+                    found_resume_point = True
+                    all_tasks.put((cut_secs, class_name))
+                    continue
+                elif cut_secs == log_cut_secs and class_name >= log_class_name:
+                    found_resume_point = True
+                    # Inserisci il task in corso
+                    all_tasks.put((cut_secs, class_name))
+                    continue
+                else:
+                    # Salta i task precedenti al punto di ripresa
+                    logging.info(f"Skipping task: cut_secs={cut_secs}, class_name={class_name} (already completed)")
+                    continue
+            else:
+                # Nessun log, aggiungi tutti i task normalmente
+                all_tasks.put((cut_secs, class_name))
 
     # Avvia i processi worker (come nel tuo codice iniziale)
     processes = []
@@ -524,6 +560,7 @@ def run_local_multiprocess(config_file, audio_format, n_octave, delete_segments,
 
     # Crea l'istanza di MultiProcessTqdm nel processo principale
     total_tasks = len(all_tasks)
+    my_tasks = all_tasks[rank::world_size]
     pbar = None
     if total_tasks > 0:
         pbar = MultiProcessTqdm(message_queue, f"main_pbar", desc="Progresso Totale", total=total_tasks)
@@ -531,7 +568,7 @@ def run_local_multiprocess(config_file, audio_format, n_octave, delete_segments,
     for rank in range(world_size):
         # Passa i task, il lock e le code a ogni processo
         p = mp.Process(target=local_worker_process, args=(audio_format, n_octave, config, rank,
-                      world_size, my_tasks, log_data, delete_segments, f'pbar_id_{rank}', test))
+                                      world_size, my_tasks, log_data, f'pbar_id_{rank}', test))
         p.start()
         processes.append(p)
         
