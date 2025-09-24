@@ -5,6 +5,21 @@ import glob
 import logging
 import h5py
 import numpy as np
+from torch.utils.data import Dataset, DataLoader
+
+__all__ = [
+           "get_config_from_yaml",
+           "extract_all_files_from_dir",
+           "gen_log",
+           "read_log",
+           "delete_log",
+           "initialize_hdf5",
+           "append_to_hdf5",
+           "load_octaveband_datasets",
+           "load_or_create_emb_index",
+           "save_emb_index",
+           "combine_hdf5_files"
+          ]
 
 ### Get model, training and spectrogram configuration from yaml ###
 
@@ -246,6 +261,134 @@ def append_to_hdf5(file_path, embeddings_buffer, spectrograms_buffer, names_buff
         new_size = current_size + len(names_buffer)
         names_ds.resize(new_size, axis=0)
         names_ds[current_size:] = np.array(names_buffer, dtype=h5py.string_dtype(encoding='utf-8'))
+
+def combine_hdf5_files(root_dir, cut_secs_list, splits_list=['train', 'es', 'valid', 'test'], embedding_dim=1024, spec_shape=(128, 1024)):
+    """
+    Combines individual HDF5 files for each class and split into unified HDF5 files
+    for each split.
+
+    Args:
+        root_dir (str): The root directory where the cut_secs directories are located.
+        cut_secs_list (list): A list of cut_secs values (e.g., [1, 2, 4]).
+        splits_list (list): A list of data splits (e.g., ['train', 'valid', 'test']).
+        embedding_dim (int): The dimension of the embeddings.
+        spec_shape (tuple): The shape of the spectrograms.
+    """
+    classes_list = sorted([d for d in os.listdir(os.path.join(root_dir, f'{cut_secs_list[0]}_secs')) \
+                            if os.path.isdir(os.path.join(root_dir, f'{cut_secs_list[0]}_secs', d))])
+    for cut_secs in cut_secs_list:
+        logging.info(f"Processing cut_secs: {cut_secs}...")
+        
+        for split_name in splits_list:
+            output_h5_path = os.path.join(root_dir, f'{cut_secs}_secs', f'combined_{split_name}.h5')
+            
+            # Crea un nuovo file HDF5 per lo split corrente
+            with h5py.File(output_h5_path, 'w') as out_h5:
+                # Inizializza i dataset nel file unificato
+                dt = h5py.string_dtype(encoding='utf-8')
+                out_h5.create_dataset('embeddings', shape=(0, embedding_dim), maxshape=(None, embedding_dim), dtype='f4', chunks=True)
+                out_h5.create_dataset('spectrograms', shape=(0,) + spec_shape, maxshape=(None,) + spec_shape, dtype='f4', chunks=True)
+                out_h5.create_dataset('names', shape=(0,), maxshape=(None,), dtype=dt, chunks=True)
+                out_h5.create_dataset('classes', shape=(0,), maxshape=(None,), dtype=dt, chunks=True)
+
+                for class_name in classes_list:
+                    class_h5_path = os.path.join(root_dir, f'{cut_secs}_secs', class_name, f'{class_name}_{split_name}.h5')
+                    
+                    if not os.path.exists(class_h5_path):
+                        logging.warning(f"File non trovato per la classe '{class_name}' e split '{split_name}': {class_h5_path}. Salto.")
+                        continue
+                    
+                    logging.info(f"Adding data from class: {class_name}...")
+                    
+                    try:
+                        with h5py.File(class_h5_path, 'r') as in_h5:
+                            # Aggiungi i dati al file unificato
+                            in_embeddings = in_h5['embeddings'][:]
+                            in_spectrograms = in_h5['spectrograms'][:]
+                            in_names = in_h5['names'][:]
+                            
+                            current_size = out_h5['embeddings'].shape[0]
+                            new_size = current_size + len(in_embeddings)
+                            
+                            out_h5['embeddings'].resize(new_size, axis=0)
+                            out_h5['spectrograms'].resize(new_size, axis=0)
+                            out_h5['names'].resize(new_size, axis=0)
+                            out_h5['classes'].resize(new_size, axis=0)
+                            
+                            out_h5['embeddings'][current_size:] = in_embeddings
+                            out_h5['spectrograms'][current_size:] = in_spectrograms
+                            out_h5['names'][current_size:] = in_names
+                            out_h5['classes'][current_size:] = [class_name] * len(in_embeddings)
+
+                    except Exception as e:
+                        logging.error(f"Errore durante l'unione dei file di classe '{class_name}': {e}. Continuo.")
+
+            logging.info(f"Combinazione completata per '{split_name}'. File salvato in: {output_h5_path}")
+
+class HDF5Dataset(Dataset):
+    def __init__(self, h5_path, data_types):
+        super().__init__()
+        if not data_types:
+            self._data_types = ['embeddings']
+        for data_type in set(data_types):
+            if data_type not in ['embeddings', 'spectrograms', 'names']:
+                raise ValueError("ValueError: incorrect data type for Dataset.")
+        self._data_types = list(set(data_types))
+        self.h5_path = h5_path
+        # Apri il file HDF5 in modalità di sola lettura
+        self.hdf5_file = h5py.File(self.h5_path, 'r')
+        
+        # Ottieni i riferimenti ai dataset
+        self.embeddings = self.hdf5_file['embeddings']
+        self.spectrograms = self.hdf5_file['spectrograms']
+        self.names = self.hdf5_file['names']
+        self.classes = self.hdf5_file['classes']
+
+    def __len__(self):
+        # Restituisce il numero totale di elementi nel dataset
+        return self.embeddings.shape[0]
+
+    def __getitem__(self, idx):
+        # Carica il campione corrispondente all'indice idx
+        embedding = torch.from_numpy(self.embeddings[idx]).float()
+        spectrogram = torch.from_numpy(self.spectrograms[idx]).float()
+        name = self.names[idx]
+        class_ = self.classes[idx]
+        item = ()
+        if 'embeddings' in self._data_types:
+            item = item + (embedding,)
+        if 'spectrograms' in self._data_types:
+            item = item + (spectrogram,)
+        if 'names' in self._data_types:
+            item = item + (name,)
+        
+        # Restituisci il campione
+        return item + (class_,)
+
+    def close(self):
+        # Chiudi il file HDF5
+        self.hdf5_file.close()
+
+def load_octaveband_datasets(octaveband_dir, batch_size, data_types):
+    """
+    Generates lists of DataLoaders for embeddings and/or spectrograms
+    of a given octaveband run.
+    
+    args:
+     - octaveband_dir: directory for a given octaveband run;
+     - batch_size: batch size for DataLoaders;
+     - data_types: list of types of data to be yielded by the Dataset items;
+       must choose between a combination of 'embeddings', 'spectrograms' and
+       'names'.
+
+    returns:
+     - dataloaders: list of DataLoader objects containing the datasets.
+    """
+    dataloaders = {fp: [torch.utils.data.DataLoader(HDF5Dataset(
+        h5_path=os.path.join(octaveband_dir, fp, f'combined_{type_ds}.h5'),
+        data_types=data_types
+    ), batch_size=batch_size, shuffle=True) for type_ds in ['train', 'es', 'valid', 'test']] for fp in os.listdir(octaveband_dir)}
+    return dataloaders
 
 ### Indexing for embeddings ###
 

@@ -6,7 +6,7 @@ import logging
 sys.path.append('.')
 
 from src.utils import get_config_from_yaml
-from src.utils_directories import *
+from src.dirs_config import *
 from src.distributed_clap_embeddings import run_distributed_slurm, run_local_multiprocess
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'

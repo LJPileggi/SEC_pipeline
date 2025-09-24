@@ -18,7 +18,7 @@ import pydub
 
 from .models import CLAP_initializer, spectrogram_n_octaveband_generator
 from .utils import *
-from .utils_directories import *
+from .dirs_config import *
 
 
 ### Embedding generation ###

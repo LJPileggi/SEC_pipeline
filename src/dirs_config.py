@@ -13,6 +13,7 @@ __all__ = ["basedir",
            "model_filepath_test"
            ]
 
+### standard dirs ###
 # cineca base directory     
 basedir = os.getenv('TMPDIR', os.path.join('..', 'dataSEC'))
 
@@ -32,8 +33,7 @@ results_validation_filepath_project = os.path.join(results_filepath_project, 'va
 model_filepath = os.path.join(results_filepath_project, 'finetuned_model')
 
 
-# testing directories
-
+### testing dirs ###
 # testing directory
 basedir_testing = os.getenv('TMPDIR', os.path.join('..', 'dataSEC', 'testing'))
 

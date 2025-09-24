@@ -2,9 +2,8 @@ import argparse
 import sys
 sys.path.append('.')
 
-from src.utils import get_config_from_yaml
-from src.utils_directories import basedir_preprocessed, results_validation_filepath_project
-from src.data_handler import load_octaveband_embeddings
+from src.utils import get_config_from_yaml, load_octaveband_datasets
+from src.dirs_config import basedir_preprocessed, results_validation_filepath_project
 from src.models import CLAP_initializer
 from src.distributed_finetuning import select_optim_distributed
 
@@ -57,7 +56,7 @@ def main():
 
     # 1. Carica i dataloader e i dataset
     print("Caricamento degli embeddings in corso...")
-    dataloaders_dict, _ = load_octaveband_embeddings(octaveband_dir, batch_size)
+    dataloaders_dict, _ = load_octaveband_datasets(octaveband_dir, batch_size, ["embeddings"])
     print("Caricamento completato.")
     
     # 2. Ottieni la lista delle classi dal primo dataset caricato
@@ -75,6 +74,10 @@ def main():
         nprocs=world_size,
         join=True
     )
+
+    for splits in dataloaders_dict.values():
+        for split in splits:
+            split.close()
 
 
 if __name__ == "__main__":

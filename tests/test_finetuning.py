@@ -4,9 +4,8 @@ import shutil
 import logging
 sys.path.append('.')
 
-from src.utils import get_config_from_yaml
-from src.utils_directories import basedir_preprocessed, results_validation_filepath_project_test
-from src.data_handler import load_octaveband_embeddings
+from src.utils import get_config_from_yaml, load_octaveband_datasets
+from src.dirs_config import basedir_preprocessed, results_validation_filepath_project_test
 from src.models import CLAP_initializer
 from src.distributed_finetuning import select_optim_distributed
 
@@ -25,7 +24,7 @@ class FinetuningTestCase(unittest.TestCase):
         if not os.path.exists(validation_filepath):
             os.makedirs(validation_filepath)
         print("Caricamento degli embeddings in corso...")
-        dataloaders_dict, _ = load_octaveband_embeddings(octaveband_dir, batch_size)
+        dataloaders_dict, _ = load_octaveband_datasets(octaveband_dir, batch_size, ["embeddings"])
         print("Caricamento completato.")
 
         # 2. Ottieni la lista delle classi dal primo dataset caricato
@@ -43,6 +42,10 @@ class FinetuningTestCase(unittest.TestCase):
             nprocs=world_size,
             join=True
         )
+
+        for splits in dataloaders_dict.values():
+            for split in splits:
+                split.close()
 
     def tearDown(self):
         pass

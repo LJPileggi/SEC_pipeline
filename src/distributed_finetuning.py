@@ -9,7 +9,7 @@ from tqdm import tqdm
 from xgboost import XGBClassifier
 
 from .utils import *
-from .utils_directories import *
+from .dirs_config import *
 from .losses import *
 from .models import *
 

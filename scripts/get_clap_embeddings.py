@@ -4,7 +4,7 @@ import os
 import logging
 sys.path.append('.')
 
-from src.utils_directories import basedir_preprocessed
+from src.dirs_config import basedir_preprocessed
 from src.distributed_clap_embeddings import run_distributed_slurm, run_local_multiprocess
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
