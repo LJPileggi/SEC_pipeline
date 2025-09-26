@@ -24,7 +24,7 @@ __all__ = [
            "load_or_create_emb_index",
            "save_emb_index",
 
-           "setup_rank_and_world_size",
+           "setup_environ_vars",
            "setup_distributed_environment",
            "cleanup_distributed_environment"
           ]
