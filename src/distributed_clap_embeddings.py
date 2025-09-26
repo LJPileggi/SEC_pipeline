@@ -179,43 +179,44 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
                                     initialize_hdf5(output_file_path, embedding_dim, spec_shape)
 
 
-                            new_fp_base = f'{audio_fp}_{cut_secs}s_({b}_{round_})'
+                            try:
+                                new_fp_base = f'{audio_fp}_{cut_secs}s_({b}_{round_})'
 
-                            if new_fp_base in existing_names_index:
+                                if new_fp_base in existing_names_index:
+                                    continue
+
+                                start = b * window_size + offset
+                                end = start + window_size
+                                cut_data = data[start:end]
+
+                                if len(cut_data) < window_size:
+                                    pad_length = window_size - len(cut_data)
+                                    cut_data = np.pad(cut_data, (0, pad_length), 'constant')
+
+                                abs_cutdata = np.abs(cut_data)
+                                max_threshold = np.mean(abs_cutdata)
+                                noise = (np.random.rand(*cut_data.shape) * 2 - 1) * max_threshold
+                                new_audio = (1 - noise_perc) * cut_data + noise_perc * noise
+                            
+                                preprocessed_audio = clap_model.preprocess_audio([new_audio], is_path=False)
+                                preprocessed_audio = preprocessed_audio.reshape(preprocessed_audio.shape[0], preprocessed_audio.shape[2])
+                                x = preprocessed_audio.to(device)
+                                with torch.no_grad():
+                                    embedding = audio_embedding(x)[0][0]
+
+                                local_embeddings_buffer.append(embedding.cpu().numpy())
+                                local_spectrograms_buffer.append(spec3o)
+                                local_names_buffer.append(new_fp_base)
+
+                                existing_names_index[new_fp_base] = True
+
+                                results += 1
+
+                            except Exception as e:
+                                logging.error(f"Errore durante l'elaborazione del bucket {b} da "
+                                              f"{filepath}: {e}. Salto il resto di questo file.")
+                                traceback.print_exc(file=sys.stderr)
                                 continue
-
-                            start = b * window_size + offset
-                            end = start + window_size
-                            cut_data = data[start:end]
-
-                            if len(cut_data) < window_size:
-                                pad_length = window_size - len(cut_data)
-                                cut_data = np.pad(cut_data, (0, pad_length), 'constant')
-
-                            abs_cutdata = np.abs(cut_data)
-                            max_threshold = np.mean(abs_cutdata)
-                            noise = (np.random.rand(*cut_data.shape) * 2 - 1) * max_threshold
-                            new_audio = (1 - noise_perc) * cut_data + noise_perc * noise
-                            
-                            preprocessed_audio = clap_model.preprocess_audio([new_audio], is_path=False)
-                            preprocessed_audio = preprocessed_audio.reshape(preprocessed_audio.shape[0], preprocessed_audio.shape[2])
-                            x = preprocessed_audio.to(device)
-                            with torch.no_grad():
-                                embedding = audio_embedding(x)[0][0]
-                            
-                            local_embeddings_buffer.append(embedding.cpu().numpy())
-                            local_spectrograms_buffer.append(spec3o)
-                            local_names_buffer.append(new_fp_base)
-
-                            existing_names_index[new_fp_base] = True
-
-                            results += 1
-
-                    except Exception as e:
-                        logging.error(f"Errore durante l'elaborazione del bucket {b} da "
-                                      f"{filepath}: {e}. Salto il resto di questo file.")
-                        traceback.print_exc(file=sys.stderr)
-                        continue
 
                     except Exception as e:
                         logging.error(f"Errore durante il caricamento del file {filepath}: {e}. Salto il file.")
@@ -226,12 +227,13 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
                             sys.exit(0)
                         continue
 
-                    embeddings_buffer.extend(local_embeddings_buffer)
-                    spectrograms_buffer.extend(local_spectrograms_buffer)
-                    names_buffer.extend(local_names_buffer)
+                    finally:
+                        embeddings_buffer.extend(local_embeddings_buffer)
+                        spectrograms_buffer.extend(local_spectrograms_buffer)
+                        names_buffer.extend(local_names_buffer)
 
-                    if finish_class:
-                        break
+                        if finish_class:
+                            break
                 
                 # Dopo il ciclo esterno, se il buffer globale è pieno, salvalo su disco
                 if len(embeddings_buffer) >= buffer_size_limit:
