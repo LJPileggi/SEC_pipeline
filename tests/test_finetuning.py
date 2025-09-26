@@ -24,11 +24,11 @@ class FinetuningTestCase(unittest.TestCase):
         if not os.path.exists(validation_filepath):
             os.makedirs(validation_filepath)
         print("Caricamento degli embeddings in corso...")
-        dataloaders_dict, _ = load_octaveband_datasets(octaveband_dir, batch_size, ["embeddings"])
+        self._dataloaders_dict, _ = load_octaveband_datasets(octaveband_dir, batch_size, ["embeddings"])
         print("Caricamento completato.")
 
         # 2. Ottieni la lista delle classi dal primo dataset caricato
-        first_dataset = list(dataloaders_dict.values())[0][0].dataset
+        first_dataset = list(self._dataloaders_dict.values())[0][0].dataset
         classes = first_dataset.classes
 
         # 3. Inizializza il modello CLAP su CPU, sarà spostato su GPU dai processi
@@ -38,17 +38,16 @@ class FinetuningTestCase(unittest.TestCase):
         import torch.multiprocessing as mp
         mp.spawn(
             select_optim_distributed,
-            args=(world_size, validation_filepath, dataloaders_dict, classes, epochs, patience, clap_model, self._classifier_model),
+            args=(world_size, validation_filepath, self._dataloaders_dict, classes, epochs, patience, clap_model, self._classifier_model),
             nprocs=world_size,
             join=True
         )
 
-        for splits in dataloaders_dict.values():
-            for split in splits:
-                split.close()
 
     def tearDown(self):
-        pass
+        for splits in self._dataloaders_dict.values():
+            for split in splits:
+                split.close()
 
 if __name__ == '__main__':
     unittest.main()

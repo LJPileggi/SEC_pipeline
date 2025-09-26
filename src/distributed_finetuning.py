@@ -98,23 +98,23 @@ def train_xgboost(tr_set, config):
     return model
 
 
-def setup_distributed_environment(rank, world_size):
-    """Setup the distributed environment."""
-    os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '12355'
-    if torch.cuda.is_available():
-        dist.init_process_group("nccl", rank=rank, world_size=world_size)
-        torch.cuda.set_device(rank)
-        device = torch.device(f'cuda:{rank}')
-        print(f"Processo {rank} di {world_size} avviato su GPU {rank}.")
-    else:
-        dist.init_process_group("gloo", rank=rank, world_size=world_size)
-        device = torch.device('cpu')
-        print(f"Processo {rank} di {world_size} avviato su CPU {rank}.")
+# def setup_distributed_environment(rank, world_size):
+#     """Setup the distributed environment."""
+#     os.environ['MASTER_ADDR'] = 'localhost'
+#     os.environ['MASTER_PORT'] = '12355'
+#     if torch.cuda.is_available():
+#         dist.init_process_group("nccl", rank=rank, world_size=world_size)
+#         torch.cuda.set_device(rank)
+#         device = torch.device(f'cuda:{rank}')
+#         print(f"Processo {rank} di {world_size} avviato su GPU {rank}.")
+#     else:
+#         dist.init_process_group("gloo", rank=rank, world_size=world_size)
+#         device = torch.device('cpu')
+#         print(f"Processo {rank} di {world_size} avviato su CPU {rank}.")
 
-def cleanup_distributed_environment():
-    """Cleanup the distributed environment."""
-    dist.destroy_process_group()
+# def cleanup_distributed_environment():
+#     """Cleanup the distributed environment."""
+#     dist.destroy_process_group()
 
 def select_optim_distributed(rank, world_size, validation_filepath, dataloaders, classes, \
                                           epochs, patience, clap_model, classifier_model):
