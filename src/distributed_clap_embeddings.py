@@ -135,8 +135,6 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
                         local_embeddings_buffer = []
                         local_spectrograms_buffer = []
                         local_names_buffer = []
-                        
-                        bucket_error = False
 
                         for b in range(n_buckets):
                             # VEDI MODIFICA: La logica per il cambio split è ora qui
@@ -213,19 +211,11 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
 
                             results += 1
 
-                        except Exception as e:
-                            logging.error(f"Errore durante l'elaborazione del bucket {b} da "
-                                          f"{filepath}: {e}. Salto il resto di questo file.")
-                            traceback.print_exc(file=sys.stderr)
-                            bucket_error = True
-                            break
-
-                        if bucket_error:
-                            continue
-
-                        embeddings_buffer.extend(local_embeddings_buffer)
-                        spectrograms_buffer.extend(local_spectrograms_buffer)
-                        names_buffer.extend(local_names_buffer)
+                    except Exception as e:
+                        logging.error(f"Errore durante l'elaborazione del bucket {b} da "
+                                      f"{filepath}: {e}. Salto il resto di questo file.")
+                        traceback.print_exc(file=sys.stderr)
+                        continue
 
                     except Exception as e:
                         logging.error(f"Errore durante il caricamento del file {filepath}: {e}. Salto il file.")
@@ -235,6 +225,10 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
                             logging.error(f"Tutti i {n_corrupt_files} file sono corrotti. Uscita.")
                             sys.exit(0)
                         continue
+
+                    embeddings_buffer.extend(local_embeddings_buffer)
+                    spectrograms_buffer.extend(local_spectrograms_buffer)
+                    names_buffer.extend(local_names_buffer)
 
                     if finish_class:
                         break
