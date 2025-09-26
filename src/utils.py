@@ -9,16 +9,24 @@ from torch.utils.data import Dataset, DataLoader
 
 __all__ = [
            "get_config_from_yaml",
+
            "extract_all_files_from_dir",
+
            "gen_log",
            "read_log",
            "delete_log",
+
            "initialize_hdf5",
            "append_to_hdf5",
+           "combine_hdf5_files",
            "load_octaveband_datasets",
+
            "load_or_create_emb_index",
            "save_emb_index",
-           "combine_hdf5_files"
+
+           "setup_rank_and_world_size",
+           "setup_distributed_environment",
+           "cleanup_distributed_environment"
           ]
 
 ### Get model, training and spectrogram configuration from yaml ###
@@ -403,4 +411,45 @@ def save_emb_index(index, index_path):
     """Salva l'indice in un file JSON."""
     with open(index_path, 'w') as f:
         json.dump(index, f)
+
+### Distributed environment functions ###
+
+def setup_environ_vars(slurm=True):
+    if slurm:
+        rank = int(os.environ.get("SLURM_PROCID", 0))
+        world_size = int(os.environ.get("SLURM_NTASKS", 4))
+        return rank, world_size
+    else:
+        os.environ['MASTER_ADDR'] = 'localhost'
+        os.environ['MASTER_PORT'] = '29500'
+
+def setup_distributed_environment(rank, world_size, slurm=True):
+    """
+    Setup the distributed environment.
+
+    args:
+     - rank: process rank;
+     - world_size: n. of distributed units;
+     - slurm: whether we are running on a SLURM environment or not; default to True.
+    """
+    if slurm:
+        dist.init_process_group("nccl", rank=rank, world_size=world_size)
+        torch.cuda.set_device(rank)
+        device = torch.device(f'cuda:{rank}')
+        logging.info(f"Processo locale {rank} avviato su {device}.")
+    else:
+        dist.init_process_group("gloo", rank=rank, world_size=world_size) # Usiamo il backend 'gloo' per la CPU
+    
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if torch.cuda.is_available():
+            torch.cuda.set_device(rank)
+            device = torch.device(f'cuda:{rank}')
+        logging.info(f"Processo locale {rank} avviato su {device}.")
+
+def cleanup_distributed_environment():
+    """Cleanup the distributed environment."""
+    dist.barrier()
+    dist.destroy_process_group()
+    logging.info(f"Processo {rank} ha terminato il suo lavoro.")
+
 

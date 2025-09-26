@@ -141,10 +141,29 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
                         for b in range(n_buckets):
                             # VEDI MODIFICA: La logica per il cambio split è ora qui
                             if results >= target_counts_list[di]:
-                                # Esegui il salvataggio finale per lo split precedente
+                                logging.info(f"Split '{division_names[di]}' completato con {results} elementi. Avvio flush...")
+
+                                # 1. TRASFERIMENTO FORZATO: Sposta i dati processati finora (che non hanno causato l'interruzione)
+                                # dai buffer locali a quelli globali PRIMA del flush.
+                                # L'elemento che ha fatto sforare il limite non è ancora nel buffer locale.
+                                # L'elemento che HA FATTO SFORARE il limite è l'ULTIMO elaborato nel ciclo 'b'.
+                                # Dato che il check è PRIMA dell'elaborazione del bucket 'b' corrente:
+                                # - Se il check è TRUE, l'elemento che ha completato lo split è l'ULTIMO del bucket precedente (b-1), 
+                                #   e la sua elaborazione è stata completata (si è aggiornato 'results').
+                                # - **Quindi, l'elemento finale è già nei buffer locali.**
+                                embeddings_buffer.extend(local_embeddings_buffer)
+                                spectrograms_buffer.extend(local_spectrograms_buffer)
+                                names_buffer.extend(local_names_buffer)
+
+                                # 2. PULIZIA DEI BUFFER LOCALI DOPO IL TRASFERIMENTO
+                                local_embeddings_buffer = []
+                                local_spectrograms_buffer = []
+                                local_names_buffer = []
+
+                                # 3. FLUSH DEL BUFFER GLOBALE
                                 if len(embeddings_buffer) > 0:
                                     append_to_hdf5(output_file_path, embeddings_buffer, spectrograms_buffer, names_buffer)
-                                    save_emb_index(existing_names_index, index_path)
+                                    save_index(existing_names_index, index_path)
                                     embeddings_buffer = []
                                     spectrograms_buffer = []
                                     names_buffer = []
@@ -269,15 +288,13 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
      - pbar_instance: MultiProcessTqdm instance to implement a progress bar on rank 0;
      - test (bool): whether to execute process for dummy testing dataset; defaul to False.
     """
-    dist.init_process_group("nccl", rank=rank, world_size=world_size)
-    torch.cuda.set_device(rank)
-    device = torch.device(f'cuda:{rank}')
+    setup_distributed_environment(rank, world_size)
 
     clap_model, audio_embedding, _ = CLAP_initializer(device, use_cuda=True)
 
     config['dirs']['root_source'] = os.path.join(basedir_raw if not test else basedir_raw_test, f'{audio_format}')
     config['dirs']['root_target'] = os.path.join(basedir_preprocessed if not test else basedir_preprocessed_test,
-                                                                f'{audio_format}', f'{n_octave}_octave')
+                                                                          f'{audio_format}', f'{n_octave}_octave')
     if not os.path.exists(config['dirs']['root_target']):
         os.makedirs(config['dirs']['root_target'])
     config['audio']['audio_format'] = audio_format
@@ -304,9 +321,7 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
             logging.error(f"Errore critico nel processo {rank} per task ({cut_secs}, {class_name}): {e}")
 
     # Sincronizza i processi prima di distruggere il gruppo
-    dist.barrier()
-    dist.destroy_process_group()
-    logging.info(f"Processo {rank} ha terminato il suo lavoro.")
+    cleanup_distributed_environment()
 
 
 # Funzione Worker per l'ambiente locale (richiamata da mp.Process)
@@ -315,16 +330,7 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
     """
     Funzione worker per l'esecuzione parallela in ambiente locale.
     """
-    # L'inizializzazione DDP è diversa per i processi lanciati con mp.Process
-    dist.init_process_group("gloo", rank=rank, world_size=world_size) # Usiamo il backend 'gloo' per la CPU
-    
-    # Non usiamo torch.cuda.set_device qui, dato che siamo su CPU (o se usi una GPU locale, gestiscila manualmente)
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    if torch.cuda.is_available():
-        torch.cuda.set_device(rank)
-        device = torch.device(f'cuda:{rank}')
-
-    logging.info(f"Processo locale {rank} avviato su {device}.")
+    setup_distributed_environment(rank, world_size, False)
 
     clap_model, audio_embedding, _ = CLAP_initializer(device, use_cuda=True)
 
@@ -332,21 +338,19 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
     logging.info(f"Processo {rank} ha {len(my_tasks)} task da elaborare.")
 
     # Itera sui task assegnati
-    with MultiProcessTqdm(message_queue, tqdm_id, desc=f"Processo {rank}", total=len(my_tasks)) as worker_pbar:
-        for cut_secs, class_name in my_tasks:
-            try:
-                # Esegui la funzione di elaborazione degli embedding
-                process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n_octave,
-                                                          device, rank, start_log_data, class_name)
-                # Aggiorna la barra di avanzamento locale (che invia il messaggio alla coda)
-                worker_pbar.update(1)
-            except Exception as e:
-                logging.error(f"Errore critico nel processo {rank}: {e}")
+    for cut_secs, class_name in my_tasks:
+        try:
+            # Esegui la funzione di elaborazione degli embedding
+            process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n_octave,
+                                                      device, rank, start_log_data, class_name)
+            # Aggiorna la barra di avanzamento locale (che invia il messaggio alla coda)
+            if pbar_instance:
+                pbar_instance.update(1)
+        except Exception as e:
+            logging.error(f"Errore critico nel processo {rank}: {e}")
 
     # Sincronizza i processi prima di distruggere il gruppo
-    dist.barrier()
-    dist.destroy_process_group()
-    logging.info(f"Processo {rank} ha terminato il suo lavoro.")
+    cleanup_distributed_environment()
 
 
 ### Executions ###
@@ -373,15 +377,14 @@ def run_distributed_slurm(config_file, audio_format, n_octave, test=False):
 
     # Recupera rank e world_size dalle variabili d'ambiente di SLURM
     # Assicurati che SLURM_PROCID e SLURM_NTASKS siano impostati nel tuo script .sbatch
-    rank = int(os.environ.get("SLURM_PROCID", 0))
-    world_size = int(os.environ.get("SLURM_NTASKS", 1))
+    rank, world_size = setup_environ_vars()
 
     # Inizializza il logging una volta per processo
     embed_folder = os.path.join(basedir_preprocessed if not test else basedir_preprocessed_test,
                                                         f'{audio_format}', f'{n_octave}_octave')
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s',
                                              handlers=[logging.StreamHandler(),
-                   logging.FileHandler(filename=os.path.join(embed_folder, 'log.txt'))])
+           logging.FileHandler(filename=os.path.join(embed_folder, 'log.txt'))])
 
     config = {
             'dirs' : {},
@@ -482,8 +485,7 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size, test
     # Calcola la lista completa all_tasks
     
     # Prepara l'ambiente DDP locale (un solo processo parent)
-    os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '29500'
+    setup_environ_vars(False)
 
     embed_folder = os.path.join(basedir_preprocessed if not test else basedir_preprocessed_test,
                                                         f'{audio_format}', f'{n_octave}_octave')
@@ -560,15 +562,15 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size, test
 
     # Crea l'istanza di MultiProcessTqdm nel processo principale
     total_tasks = len(all_tasks)
-    my_tasks = all_tasks[rank::world_size]
     pbar = None
     if total_tasks > 0:
         pbar = MultiProcessTqdm(message_queue, f"main_pbar", desc="Progresso Totale", total=total_tasks)
 
     for rank in range(world_size):
         # Passa i task, il lock e le code a ogni processo
+        my_tasks = all_tasks[rank::world_size]
         p = mp.Process(target=local_worker_process, args=(audio_format, n_octave, config, rank,
-                                      world_size, my_tasks, log_data, f'pbar_id_{rank}', test))
+                                                    world_size, my_tasks, log_data, pbar, test))
         p.start()
         processes.append(p)
         
