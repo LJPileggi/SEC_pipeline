@@ -447,6 +447,7 @@ def setup_distributed_environment(rank, world_size, slurm=True):
             torch.cuda.set_device(rank)
             device = torch.device(f'cuda:{rank}')
         logging.info(f"Processo locale {rank} avviato su {device}.")
+    return device
 
 def cleanup_distributed_environment():
     """Cleanup the distributed environment."""

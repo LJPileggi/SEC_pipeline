@@ -284,7 +284,7 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
      - pbar_instance: MultiProcessTqdm instance to implement a progress bar on rank 0;
      - test (bool): whether to execute process for dummy testing dataset; defaul to False.
     """
-    setup_distributed_environment(rank, world_size)
+    device = setup_distributed_environment(rank, world_size)
 
     clap_model, audio_embedding, _ = CLAP_initializer(device, use_cuda=True)
 
@@ -326,7 +326,7 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
     """
     Funzione worker per l'esecuzione parallela in ambiente locale.
     """
-    setup_distributed_environment(rank, world_size, False)
+    device = setup_distributed_environment(rank, world_size, False)
 
     clap_model, audio_embedding, _ = CLAP_initializer(device, use_cuda=True)
 
