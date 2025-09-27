@@ -5,6 +5,7 @@ import glob
 import logging
 import h5py
 import numpy as np
+import torch.distributed as dist
 from torch.utils.data import Dataset, DataLoader
 
 __all__ = [
