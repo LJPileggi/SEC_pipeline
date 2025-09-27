@@ -425,18 +425,18 @@ def run_distributed_slurm(config_file, audio_format, n_octave, test=False):
             if log_data:
                 # Se siamo già oltre il punto di ripresa, mettiamo tutto in coda
                 if found_resume_point:
-                    all_tasks.put((cut_secs, class_name))
+                    all_tasks.append((cut_secs, class_name))
                     continue
 
                 # Confronto lessicografico per trovare il punto di ripresa
                 if cut_secs > log_cut_secs:
                     found_resume_point = True
-                    all_tasks.put((cut_secs, class_name))
+                    all_tasks.append((cut_secs, class_name))
                     continue
                 elif cut_secs == log_cut_secs and class_name >= log_class_name:
                     found_resume_point = True
                     # Inserisci il task in corso
-                    all_tasks.put((cut_secs, class_name))
+                    all_tasks.append((cut_secs, class_name))
                     continue
                 else:
                     # Salta i task precedenti al punto di ripresa
@@ -444,7 +444,7 @@ def run_distributed_slurm(config_file, audio_format, n_octave, test=False):
                     continue
             else:
                 # Nessun log, aggiungi tutti i task normalmente
-                all_tasks.put((cut_secs, class_name))
+                all_tasks.append((cut_secs, class_name))
     
     # Dividi i task per il rank corrente
     my_tasks = all_tasks[rank::world_size]
@@ -529,18 +529,18 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size, test
             if log_data:
                 # Se siamo già oltre il punto di ripresa, mettiamo tutto in coda
                 if found_resume_point:
-                    all_tasks.put((cut_secs, class_name))
+                    all_tasks.append((cut_secs, class_name))
                     continue
 
                 # Confronto lessicografico per trovare il punto di ripresa
                 if cut_secs > log_cut_secs:
                     found_resume_point = True
-                    all_tasks.put((cut_secs, class_name))
+                    all_tasks.append((cut_secs, class_name))
                     continue
                 elif cut_secs == log_cut_secs and class_name >= log_class_name:
                     found_resume_point = True
                     # Inserisci il task in corso
-                    all_tasks.put((cut_secs, class_name))
+                    all_tasks.append((cut_secs, class_name))
                     continue
                 else:
                     # Salta i task precedenti al punto di ripresa
@@ -548,7 +548,7 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size, test
                     continue
             else:
                 # Nessun log, aggiungi tutti i task normalmente
-                all_tasks.put((cut_secs, class_name))
+                all_tasks.append((cut_secs, class_name))
 
     # Avvia i processi worker (come nel tuo codice iniziale)
     processes = []
