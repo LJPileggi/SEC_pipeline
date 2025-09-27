@@ -22,15 +22,18 @@ source .venv/bin/activate
 
 # Setta MASTER_ADDR e MASTER_PORT per la comunicazione DDP
 # SLURM_JOB_NODELIST ti darà l'hostname del nodo
-# Questa è una pratica comune per il master_addr
 export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
-# Scegli una porta alta e non in uso
 export MASTER_PORT=29500
+
 
 embed_test="./tests/test_embeddings.py"
 
 cp -r $ROOT_SOURCE_PATH $TMPDIR/RAW_DATASET
 cp -r $FINAL_TARGET_PATH $TMPDIR/PREPROCESSED_DATASET
+
+mkdir .CLAP_weights/
+wget -P .CLAP_weights/ https://huggingface.co/microsoft/msclap/resolve/main/CLAP_weights_2023.pth
+export CLAP_CKPT_PATH="/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.CLAP_weights/CLAP_weights_2023.pth"
 
 # Avvia ogni processo con srun, che imposterà RANK e WORLD_SIZE
 srun python3 "$embed_test"

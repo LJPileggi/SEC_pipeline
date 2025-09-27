@@ -15,7 +15,13 @@ def CLAP_initializer(device='cpu', use_cuda=False):
      - audio_embedding: CLAP audio encoder;
      - original_parameters: CLAP original parameters.
     """
-    clap_model = CLAP(version = '2023', use_cuda=use_cuda)
+    ckpt_path = os.getenv("CLAP_CKPT_PATH")
+    if not ckpt_path or not os.path.exists(ckpt_path):
+        raise FileNotFoundError(f"Impossibile trovare i pesi CLAP al percorso specificato "
+                                f"da CLAP_CKPT_PATH: {ckpt_path}. Assicurati di scaricare "
+                                f"i pesi e impostare la variabile d'ambiente nello script Slurm.")
+
+    clap_model = CLAP(version='2023', use_cuda=use_cuda, ckpt_path=ckpt_path, download_if_missing=False)
     original_parameters = clap_model.clap.audio_encoder.to('cpu').state_dict()
     clap_model.clap.audio_encoder = clap_model.clap.audio_encoder.to(device)
     audio_embedding=clap_model.clap.audio_encoder
