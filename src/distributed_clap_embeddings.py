@@ -316,8 +316,9 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
         except Exception as e:
             logging.error(f"Errore critico nel processo {rank} per task ({cut_secs}, {class_name}): {e}")
 
-    # Sincronizza i processi prima di distruggere il gruppo
-    cleanup_distributed_environment()
+        finally:
+            # Sincronizza i processi prima di distruggere il gruppo
+            cleanup_distributed_environment()
 
 
 # Funzione Worker per l'ambiente locale (richiamata da mp.Process)
@@ -345,8 +346,9 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
         except Exception as e:
             logging.error(f"Errore critico nel processo {rank}: {e}")
 
-    # Sincronizza i processi prima di distruggere il gruppo
-    cleanup_distributed_environment()
+        finally:
+            # Sincronizza i processi prima di distruggere il gruppo
+            cleanup_distributed_environment()
 
 
 ### Executions ###
