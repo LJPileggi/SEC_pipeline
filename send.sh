@@ -31,9 +31,8 @@ embed_test="./tests/test_embeddings.py"
 cp -r $ROOT_SOURCE_PATH $TMPDIR/RAW_DATASET
 cp -r $FINAL_TARGET_PATH $TMPDIR/PREPROCESSED_DATASET
 
-mkdir .CLAP_weights/
-wget -P .CLAP_weights/ https://huggingface.co/microsoft/msclap/resolve/main/CLAP_weights_2023.pth
-export CLAP_CKPT_PATH="/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.CLAP_weights/CLAP_weights_2023.pth"
+export LOCAL_CLAP_WEIGHTS_PATH="/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.CLAP_weights/CLAP_weights_2023.pth"
+export LOCAL_TEXT_ENCODER_PATH="/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.clap_text_encoder/roberta-base"
 
 # Avvia ogni processo con srun, che imposterà RANK e WORLD_SIZE
 srun python3 "$embed_test"

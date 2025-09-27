@@ -2,4 +2,5 @@ old/
 .config/git/
 .git/
 .venv/
-.CLAP_weights/
+.clap_weights/
+.clap_text_encoder/
