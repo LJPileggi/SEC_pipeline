@@ -60,7 +60,7 @@ COPY_START_TIME=$(date +%s)
 # A. Copia VENV (Risolve i 5 minuti di import latency)
 if [ ! -d "$VENV_DEST" ]; then
     echo "  Copia ambiente virtuale in corso..."
-    cp -R "$VENV_SOURCE" "$VENV_DEST"
+    rsync -a --progress "$VENV_SOURCE" "$VENV_DEST"
 fi
 
 # B. Copia Pesi CLAP (Risolve i 10 minuti di I/O contention)
@@ -72,19 +72,19 @@ fi
 # C. Copia Text Encoder (Risolve i 10 minuti di I/O contention)
 if [ ! -d "$TEXT_ENCODER_DEST" ]; then
     echo "  Copia Text Encoder in corso..."
-    cp -R "$TEXT_ENCODER_SOURCE" "$TEXT_ENCODER_DEST"
+    rsync -a --progress "$TEXT_ENCODER_SOURCE" "$TEXT_ENCODER_DEST"
 fi
 
 # D. Copia Raw Dataset (Risolve latenze in operazioni I/O con singoli audio)
 if [ ! -d "${TEMP_BASE_DIR}/RAW_DATASET" ]; then
     echo "  Copia Raw Dataset in corso..."
-    cp -r $ROOT_SOURCE_PATH ${TEMP_BASE_DIR}/RAW_DATASET
+    rsync -a --progress $ROOT_SOURCE_PATH ${TEMP_BASE_DIR}/RAW_DATASET
 fi
 
 # E. Copia Preprocessed Dataset Folder (Risolve latenze in operazioni I/O di salvataggio)
 if [ ! -d "${TEMP_BASE_DIR}/PREPROCESSED_DATASET" ]; then
     echo "  Copia Preprocessed Dataset in corso..."
-    cp -r $FINAL_TARGET_PATH ${TEMP_BASE_DIR}/PREPROCESSED_DATASET
+    rsync -a --progress $FINAL_TARGET_PATH ${TEMP_BASE_DIR}/PREPROCESSED_DATASET
 fi
 
 COPY_END_TIME=$(date +%s)
