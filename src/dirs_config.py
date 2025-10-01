@@ -15,7 +15,7 @@ __all__ = ["basedir",
 
 ### standard dirs ###
 # cineca base directory     
-basedir = os.getenv('TMPDIR', os.path.join('..', 'dataSEC'))
+basedir = os.getenv('NODE_TEMP_BASE_DIR', os.path.join('..', 'dataSEC'))
 
 # raw audio files directory
 basedir_raw = os.path.join(basedir, 'RAW_DATASET')
@@ -35,7 +35,7 @@ model_filepath = os.path.join(results_filepath_project, 'finetuned_model')
 
 ### testing dirs ###
 # testing directory
-basedir_testing = os.getenv('TMPDIR', os.path.join('..', 'dataSEC', 'testing'))
+basedir_testing = os.getenv('NODE_TEMP_BASE_DIR', os.path.join('..', 'dataSEC', 'testing'))
 
 # raw audio files directory
 basedir_raw_test = os.path.join(basedir_testing, 'RAW_DATASET')
