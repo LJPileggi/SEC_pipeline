@@ -1,5 +1,5 @@
 # Usa la stessa base NVIDIA PyTorch
-FROM nvcr.io/nvidia/pytorch:23.09-py3-devel-ubuntu22.04
+FROM nvcr.io/nvidia/pytorch:23.09-py3-devel
 
 # Imposta variabili d'ambiente globali
 ENV PATH="/usr/local/bin:${PATH}"
