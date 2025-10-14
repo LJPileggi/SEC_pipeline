@@ -15,11 +15,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 \
     libsox-fmt-all \
     python3-dev \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
 # Installazione dipendenze Python
-RUN python3 -m pip install --upgrade pip
-RUN install tensorflow torch scikit-learn xgboost transformers pandas matplotlib scipy msclap pydub librosa soundfile pyyaml tqdm_multiprocess h5py
+RUN pip install --no-cache-dir --upgrade \
+    pip tensorflow torch scikit-learn xgboost \
+    transformers pandas matplotlib scipy msclap pydub \
+    librosa soundfile pyyaml tqdm_multiprocess h5py
 
 # Scarica e salva il Text Encoder (equivalente a %post script)
 RUN mkdir -p /opt/models/roberta-base && \
