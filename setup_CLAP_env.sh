@@ -26,7 +26,7 @@ CLAP_WEIGHTS_FILE="CLAP_weights_2023.pth"
 CLAP_WEIGHTS_PATH="${CLAP_WEIGHTS_DIR}/${CLAP_WEIGHTS_FILE}"
 CLAP_WEIGHTS_URL="https://huggingface.co/microsoft/msclap/resolve/main/CLAP_weights_2023.pth"
 
-CONTAINER_DIR="$PROJECT_ROOT_DIR/containers"
+CONTAINER_DIR="$PROJECT_ROOT_DIR/.containers"
 SIF_PATH="$CONTAINER_DIR/clap_pipeline.sif"
 
 
