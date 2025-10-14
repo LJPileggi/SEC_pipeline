@@ -16,19 +16,27 @@ def CLAP_initializer(device='cpu', use_cuda=False):
      - audio_embedding: CLAP audio encoder;
      - original_parameters: CLAP original parameters.
     """
+    # 1. Recupera il percorso dei pesi (dal disco locale del nodo /tmp)
     clap_weights_path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
-    text_encoder_path = os.getenv("LOCAL_TEXT_ENCODER_PATH")
-    if not clap_weights_path or not os.path.exists(clap_weights_path):
-        raise FileNotFoundError(f"Impossibile trovare i pesi CLAP al percorso specificato "
-                                f"da LOCAL_CLAP_WEIGHTS_PATH: {clap_weights_path}. Assicurati di scaricare "
-                                f"i pesi e impostare la variabile d'ambiente nello script Slurm.")
-    if not text_encoder_path or not os.path.exists(text_encoder_path):
-        raise FileNotFoundError(f"Impossibile trovare il text encoder di CLAP al percorso specificato "
-                                f"da LOCAL_TEXT_ENCODER_PATH: {text_encoder_path}. Assicurati di scaricare "
-                                f"il text encoder e impostare la variabile d'ambiente nello script Slurm.")
-
+    
+    # 2. Recupera il percorso del Text Encoder (dall'interno del Container)
+    #    NOTA: Il nome corretto della variabile d'ambiente è CLAP_TEXT_ENCODER_PATH
+    text_encoder_path = os.getenv("CLAP_TEXT_ENCODER_PATH")
+    
+    # --- Verifica dei percorsi (Solo i pesi devono esistere sulla macchina) ---
+    if not clap_weights_path:
+        raise ValueError("Variabile d'ambiente LOCAL_CLAP_WEIGHTS_PATH non impostata.")
+    if not os.path.exists(clap_weights_path):
+         raise FileNotFoundError(f"Impossibile trovare i pesi CLAP al percorso: {clap_weights_path} (Errore: il file non è stato copiato correttamente su /tmp)")
+         
+    if not text_encoder_path:
+        raise ValueError("Variabile d'ambiente CLAP_TEXT_ENCODER_PATH non impostata. (Dovrebbe puntare all'interno del container)")
+        
+    # --- Inizializzazione CLAP (USA IL PERCORSO LOCALE) ---
     clap_model = CLAP(version='2023', use_cuda=use_cuda, clap_weights_path=clap_weights_path,
                                         model_id=text_encoder_path, download_if_missing=False)
+    
+    # ... (resto del codice CLAP, non modificato)
     original_parameters = clap_model.clap.audio_encoder.to('cpu').state_dict()
     clap_model.clap.audio_encoder = clap_model.clap.audio_encoder.to(device)
     audio_embedding=clap_model.clap.audio_encoder

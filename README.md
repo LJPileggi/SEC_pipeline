@@ -7,4 +7,6 @@ An easy-to-use interface to train a Sound-Event Classificatio (SEC) pipeline by 
 2. Set working directory:
    `cd tuo-repo`
 3. Execute setup script to create working directories:
-   `./setup.sh`
+   `./setup_CLAP_env.sh *your_docker_username*` or alternatively via environment variables:
+   `export DOCKER_USER="*your_docker_username*"`
+   `bash Setup_CLAP_Environment.sh`
