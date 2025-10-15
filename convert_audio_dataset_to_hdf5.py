@@ -124,7 +124,7 @@ if __name__ == '__main__':
     
     # Assumiamo che la tua struttura sia: BASE_DIR/PREPROCESSED_DATASET/
     user = os.environ.get('USER')
-    BASE_DIR = Path(f'/leonardo_scratch/large/{user}/dataSEC/RAW_DATASET') 
+    BASE_DIR = Path(f'/leonardo_scratch/large/userexternal/{user}/dataSEC/RAW_DATASET') 
     
     # Formati da processare
     for fmt in ['wav', 'mp3', 'flac']:

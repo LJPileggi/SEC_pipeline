@@ -4,7 +4,7 @@ import sys
 
 # SOSTITUISCI QUESTO CON IL TUO VERO PERCORSO RADICE
 user = os.environ.get('USER')
-BASE_DIR = Path(f'/leonardo_scratch/large/{user}/dataSEC/RAW_DATASET') 
+BASE_DIR = Path(f'/leonardo_scratch/large/userexternal/{user}/dataSEC/RAW_DATASET') 
 
 AUDIO_FORMAT = 'wav'
 
