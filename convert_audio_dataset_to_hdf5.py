@@ -129,7 +129,7 @@ if __name__ == '__main__':
     # Formati da processare
     for fmt in ['wav', 'mp3', 'flac']:
         # Percorso dove salvare il file HDF5 (es. nella cartella principale del dataset)
-        basedir_format = Path(os.path.join(BASE_DIR, fmt))
+        basedir_format = Path(os.path.join(BASE_DIR, f'raw_{fmt}'))
         OUTPUT_H5_PATH = Path(os.path.join(BASE_DIR, f'SEC_SuperDataset_{fmt}.h5'))
         process_audio_dir_to_hdf5(basedir_format, OUTPUT_H5_PATH, fmt)
         # Nota: L'attuale implementazione sovrascrive il file H5 ad ogni iterazione.
