@@ -2,5 +2,4 @@ old/
 .config/git/
 .git/
 .clap_weights/
-.clap_text_encoder/
 .containers/
