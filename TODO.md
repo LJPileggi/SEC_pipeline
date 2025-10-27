@@ -4,6 +4,29 @@
 ### Pending
 
 ```diff
+- /src/distributed_clap_embeddings.py ; worker_process_slurm ; 27/10/2025 - pending ; modify logging logic to take into
+- account class only (no more inner loop counters)
+- /src/distributed_clap_embeddings.py ; run_distributed_slurm ; 27/10/2025 - pending ; fix function according to new logic
+- /src/distributed_clap_embeddings.py ; local_worker_process ; 27/10/2025 - pending ; readapt function according to new
+- worker_process_slurm version
+- /src/distributed_clap_embeddings.py ; run_local_multiprocess ; 27/10/2025 - pending ; readapt function according to new
+- run_distributed_slurm version
+```
+---------------------------------------------------------------------------------------------------------------
+```diff
+- /scr/utils.py ; read_log, write_log, delete_log ; 27/10/2025 - pending ; readapt those functions to take into account
+- new logging logic (possibly simply use logging library)
+```
+---------------------------------------------------------------------------------------------------------------
+```diff
+- /src/tests ;  27/10/2025 - pending ; write new tests for all new utils functions and classes
+```
+---------------------------------------------------------------------------------------------------------------
+```diff
+- /src/distributed_training.py ; 27/10/2025 - pending ; rewrite functions according to new data framework
+```
+---------------------------------------------------------------------------------------------------------------
+```diff
 ! /src/explainability/LMAC.py ; listenable_wav_from_n_octaveband ; 06/08/2025 - pending ; set correct directory to save explanations
 !    from listenable_wav_from_n_octaveband
 ! /src/explainability/LMAC.py ; LMAC -- generate_listenable_interpretation ; 06/08/2025 - pending ; set correct reconstructed audio

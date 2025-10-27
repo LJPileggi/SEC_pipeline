@@ -5,6 +5,7 @@ import glob
 import logging
 import h5py
 import numpy as np
+import pandas as pd
 import torch
 import torch.distributed as dist
 from torch.utils.data import Dataset, DataLoader
@@ -12,23 +13,19 @@ from torch.utils.data import Dataset, DataLoader
 __all__ = [
            "get_config_from_yaml",
 
-           "extract_all_files_from_dir",
-
            "gen_log",
            "read_log",
            "delete_log",
 
-           "initialize_hdf5",
-           "append_to_hdf5",
+           "HDF5DatasetManager",
+           "HDF5EmbeddingDatasetsManager",
            "combine_hdf5_files",
-           "load_octaveband_datasets",
-
-           "load_or_create_emb_index",
-           "save_emb_index",
 
            "setup_environ_vars",
            "setup_distributed_environment",
-           "cleanup_distributed_environment"
+           "cleanup_distributed_environment",
+
+           "get_reproducible_permutation"
           ]
 
 ### Get model, training and spectrogram configuration from yaml ###
@@ -62,35 +59,6 @@ def get_config_from_yaml(config_file="config0.yaml"):
                             seed, center_freqs, valid_cut_secs, splits_xc_sizes_names
 
    
-### Files and directory handling functions ###
-
-def extract_all_files_from_dir(source_class_dir, extension='.wav'):
-    """
-    Extracts recursively files of a certain extension from nested directories.
-    
-    args:
-     - source_class_dir: root directory from which to start the recursive search;
-     - extension: the required extension for files. All other files are going to
-       be neglected. Has to be an audio format extension like wav, mp3, flac etc.
-       
-    returns:
-     - list of paths to audio files of the said extension.
-    """
-    subdirs = [source_class_dir]
-    audio_fp_list = []
-    while len(subdirs) > 0:
-        basedir = subdirs.pop(0)
-        for fn in os.listdir(basedir):
-            full_fn = os.path.join(basedir, fn)
-            if full_fn.lower().endswith(extension):
-                short_path = full_fn.replace(source_class_dir, '')
-                if short_path[0] == '/':
-                    short_path = short_path[1:]
-                audio_fp_list.append(short_path)
-            if os.path.isdir(full_fn):
-                subdirs.append(full_fn)
-    return sorted(audio_fp_list)
-
 ### Log file functions for embedding calculation ###
 
 def gen_log(log_path, cut_secs, ic, di, results, round_, finish_class, \
@@ -206,73 +174,248 @@ def delete_log(log_path):
     except FileNotFoundError:
         return
 
-### hdf5 data generation and appending for embeddings and spectrograms ###
+### hdf5 raw dataset class ###
 
-def initialize_hdf5(file_path, embedding_dim, spec_shape, split):
+class HDF5DatasetManager:
+    """
+    Gestisce l'accesso rapido ai dati in un file HDF5 (il Super-Dataset), 
+    accedendo ai metadati tramite un DataFrame che mantiene l'indice HDF5.
+    """
+    
+    def __init__(self, h5_file_path: str, audio_format: str = 'wav'):
+        self.h5_file_path = h5_file_path
+        self.hf = None
+        self.audio_format = audio_format
+        self.metadata_df = None
+        self.metadata_dset_name = f'metadata_{self.audio_format}'
+        self.audio_dset_name = f'audio_{self.audio_format}'
+        
+        try:
+            # Apri il file in modalità di sola lettura
+            self.hf = h5py.File(self.h5_file_path, 'r')
+            self._load_metadata()
+            logging.info(f"HDF5 Dataset Manager pronto. Formato: {audio_format}")
+        except Exception as e:
+            logging.error(f"Errore nell'apertura o caricamento metadati HDF5: {e}")
+            raise
+
+    def __getitem__(self, hdf5_index: int) -> np.ndarray:
+        """
+        Accede rapidamente ai dati audio tramite l'indice HDF5.
+        Restituisce un array NumPy [samples,].
+        """
+        # Accede direttamente al dataset VLEN. L'indice di riga corrisponde all'indice HDF5
+        return self.hf[self.audio_dset_name][hdf5_index]
+
+    def get_audio_metadata(self, hdf5_index):
+        """
+        Restituisce i metadati di una data traccia.
+        """
+        return self.metadata_df[self.metadata_df['hdf5_index'] == hdf5_index]
+  
+    def _load_metadata(self):
+        """Carica il dataset strutturato dei metadati in un DataFrame Pandas."""
+        if self.metadata_dset_name not in self.hf:
+            raise KeyError(f"Dataset metadati '{self.metadata_dset_name}' non trovato nel file HDF5.")
+            
+        # Carica l'intero dataset strutturato come un array NumPy
+        metadata_array = self.hf[self.metadata_dset_name][:]
+        
+        # Converti in DataFrame. L'indice di Pandas è l'indice HDF5 implicito.
+        self.metadata_df = pd.DataFrame(metadata_array)
+        
+        # Rinominare l'indice Pandas per chiarezza (anche se non usato)
+        self.metadata_df.index.name = 'hdf5_index'
+        
+        # Aggiungi una colonna esplicita per l'indice HDF5, utile per il debug e i check
+        self.metadata_df['hdf5_index'] = self.metadata_df.index
+
+    def get_reproducible_permutation(self, seed: int) -> pd.DataFrame:
+        """
+        Applica una permutazione fissa al DataFrame di una classe, 
+        basata su un seed univoco per quella classe.
+    
+        Args:
+            seed: Seed base per la permutazione (es. dal config file).
+        
+        Returns:
+            DataFrame con l'ordine delle tracce permutato.
+        """
+        # Combiniamo il seed fisso con un hash della stringa della classe per univocità
+        unique_seed = seed + hash(class_name) % 1000000
+    
+        # Permuta gli indici (non i valori originali)
+        # df.sample(frac=1, random_state=...) è il modo più pulito con Pandas
+        to_permute = self.metadata_df.copy()
+        return to_permute.sample(frac=1, random_state=unique_seed).reset_index(drop=False)
+
+    def close(self):
+        """Chiude il file HDF5."""
+        if self.hf:
+            self.hf.close()
+            print(f"HDF5 Dataset Manager chiuso.")
+            
+    def __del__(self):
+        self.close()
+
+class HDF5EmbeddingDatasetsManager(Dataset):
+    def __init__(self, h5_path, mode='r', partitions=set('classes', 'splits')):
+        """
+        Container to handle the hdf5 files for the embedding dataset.
+        The dataset is designed as a set of materialised partitions for the
+        combination (classes, splits) and (splits,).
+
+        args:
+         - h5_path: path to a .h5 file; has to be of the 2 types of partitions specified above;
+         - partitions: tuple or set for the types of supported partitions (either (classes, splits) or (splits,)).
+        """
+        super().__init__()
+        self.h5_path = h5_path
+        self.partitions = set(partitions)
+            if not ((self.partitions == set('splits',)) or (self.partitions == set('classes', 'splits'))):
+                raise ValueError("ValueError: incorrect view type.")
+        self.mode = mode
+        self.hf = h5py.File(self.h5_path, self.mode)
+        if 'embedding_dataset' in self.hf:
+            self.dt = self._set_dataset_format(self.hf.attrs['embedding_dim'], self.hf.attrs['spec_shape'])
+        else:
+            self.dt = None
+        if self.mode == 'a':
+            self.embeddings_buffer = []
+            self.spectrograms_buffer = []
+            self.hash_keys_buffer = []
+            self.track_names_buffer = []
+            if self.partitions == set('splits',):
+                self.classes_buffer = []
+            self.subclasses_buffer = []
+
+    def __len__(self):
+        return self.hf.shape[0]
+
+    def __getitem__(self, idx):
+        """
+        Valid only if object is in read or append mode.
+        """
+        if self.mode not in ['r', 'a']:
+            raise Exception("Exception: can't use getitem method in mode different than read.")
+        return self.hf[hf['embedding_dataset']['ID'] == idx]
+        
+
+    def _set_dataset_format(self, embedding_dim, spec_shape):
+        if 'classes' in self.partitions:
+            dt = np.dtype([
+                    ('ID', 'S100'),
+                    ('embeddings', (np.float64, (embedding_dim,))),
+                    ('spectrograms', (np.float64, spec_shape)),
+                    ('track_names', 'S100'),
+                    ('subclasses', 'S100')
+                ])
+        else:
+            dt = np.dtype([
+                    ('ID', 'S100'),
+                    ('embeddings', (np.float64, (embedding_dim,))),
+                    ('spectrograms', (np.float64, spec_shape)),
+                    ('track_names', 'S100'),
+                    ('classes', 'S100'),
+                    ('subclasses', 'S100')
+                ])
+        return dt
+
+    def initialize_hdf5(self, embedding_dim, spec_shape, audio_format, cut_secs, n_octave, \
+                                          sample_rate, noise_perc, split, class_name=None):
     """
     Creates HDF5 file with resizable embedding and spectrogram datasets.
+    Must provide split and class name according to the selected partition.
 
     args:
-     - file_path: path of HDF5 file;
      - embedding_dim: dimension of single embedding;
      - spec_shape: shape of single spectrogram;
-     - split: dataset split the embedding belongs to.
+     - audio_format: format of the original audio;
+     - split: dataset split the embedding belongs to;
+     - class_name: class the embedding belongs to.
     """
-    # 'a' per aprire in modalità append, crea il file se non esiste
-    with h5py.File(file_path, 'a') as hf:
-        if 'embeddings' not in hf:
-            hf.create_dataset(
-                'embeddings',
-                shape=(0, embedding_dim),  # La prima dimensione è 0, sarà ridimensionata
-                maxshape=(None, embedding_dim), # Può crescere indefinitamente lungo la prima dimensione
-                dtype='f4', # Float a 32 bit
-                chunks=True
-            )
-        if 'spectrograms' not in hf:
-            hf.create_dataset(
-                'spectrograms',
-                shape=(0,) + spec_shape,
-                maxshape=(None,) + spec_shape,
-                dtype='f4',
-                chunks=True
-            )
-        if 'names' not in hf:
-            dt = h5py.string_dtype(encoding='utf-8')
-            hf.create_dataset('names', shape=(0,), maxshape=(None,), dtype=dt, chunks=True)
+    if self.mode == 'a':
+        self.hf.attrs['audio_format'] = audio_format
+        self.hf.attrs['cut_secs'] = cut_secs
+        self.hf.attrs['n_octave'] = n_octave
+        self.hf.attrs['sample_rate'] = sample_rate
+        self.hf.attrs['noise_perc'] = noise_perc
+        self.hf.attrs['split'] = split
+        self.hf.attrs['embedding_dim'] = embedding_dim
+        self.hf.attrs['spec_shape'] = spec_shape
+        self.dt = self._set_dataset_format(embedding_dim, spec_shape)
+        if 'classes' in self.partitions:
+            self.hf.attrs['class'] = class_name
+        self.hf.create_dataset('embedding_dataset', 
+                                shape=(0,),
+                                maxshape=(None,),
+                                dtype=self.dt,
+                                chunks=True
+                                )
+        else:
+            raise Exception(f'Invalid privileges for {self.h5_path}.')
 
-def append_to_hdf5(file_path, embeddings_buffer, spectrograms_buffer, names_buffer):
-    """
-    Appends embedding and spectrogram batches to preexisting HDF5 file.
+    def add_to_data_buffer(self, embedding, spectrogram, hash_keys, track_name, class_=None, subclass=None):
+        """
+        Extends internal buffers to be then flushed to hdf5 file.
+        """
+        self.embeddings_buffer.append(embedding)
+        self.spectrograms_buffer.append(spectrogram)
+        self.hash_keys_buffer.append(hash_keys)
+        self.track_names_buffer.append(track_name)
+        self.classes_buffer.append(class_)
+        self.subclasses_buffer.append(subclass)
 
-    args:
-     - file_path: path of HDF5 file to append data;
-     - embeddings_buffer: buffer of embeddings to append;
-     - spectrograms_buffer: buffer of spectrograms to append;
-     - names_buffer: buffer of embeddings' IDs.
-    """
-    with h5py.File(file_path, 'a') as hf:
-        # Aggiungi gli embeddings
-        embeddings_ds = hf['embeddings']
-        current_size = embeddings_ds.shape[0]
-        new_size = current_size + len(embeddings_buffer)
-        embeddings_ds.resize(new_size, axis=0) # Ridimensiona il dataset
-        embeddings_ds[current_size:] = embeddings_buffer # Scrivi i nuovi dati
+    def flush_buffers(self):
+        """
+        Flushes buffers to hdf5 file.
+        """
+        data_buffer = list(zip(
+                    self.hash_keys_buffer,
+                    self.embeddings_buffer,
+                    self.spectrograms_buffer,
+                    [s.encode('utf-8') for s in self.track_names_buffer],
+                    [s.encode('utf-8') for s in self.subclasses_buffer]
+            )) if 'classes' in self.partitions else list(zip(
+                    self.hash_keys_buffer,
+                    self.embeddings_buffer,
+                    self.spectrograms_buffer,
+                    [s.encode('utf-8') for s in self.track_names_buffer],
+                    [s.encode('utf-8') for s in self.classes_buffer],
+                    [s.encode('utf-8') for s in self.subclasses_buffer]
+            ))
+        data_buffer = numpy.array(data_buffer, dtype=self.dt)
 
-        # Aggiungi gli spettrogrammi
-        spectrograms_ds = hf['spectrograms']
-        current_size = spectrograms_ds.shape[0]
-        new_size = current_size + len(spectrograms_buffer)
-        spectrograms_ds.resize(new_size, axis=0) # Ridimensiona il dataset
-        spectrograms_ds[current_size:] = spectrograms_buffer # Scrivi i nuovi dati
+        dataset = hf['embedding_dataset']
+        current_size = dataset.shape[0]
+        new_size = current_size + len(data_buffer)
+        dataset.resize(new_size, axis=0)
+        dataset[current_size:] = data_buffer
 
-        # Aggiungi i nomi
-        names_ds = hf['names']
-        current_size = names_ds.shape[0]
-        new_size = current_size + len(names_buffer)
-        names_ds.resize(new_size, axis=0)
-        names_ds[current_size:] = np.array(names_buffer, dtype=h5py.string_dtype(encoding='utf-8'))
+    def extend_dataset(self, new_data):
+        """
+        Extends dataset content directly without going through the buffers.
+        Data has to be compatible with the native dtype of the dataset.
+        """
+        if new_data.dtype != self.dt:
+            raise TypeError(f"TypeError: new data dtype {new_data.dtype} is "
+                            f"incompatible with native dataset dtype {self.dt}")
+        dataset = self.hf['embedding_dataset']
+        current_size = dataset.shape[0]
+        new_size = current_size + len(new_data)
+        dataset.resize(new_size, axis=0)
+        dataset[current_size:] = new_data
 
-def combine_hdf5_files(root_dir, cut_secs_list, splits_list=['train', 'es', 'valid', 'test'], embedding_dim=1024, spec_shape=(128, 1024)):
+    def close(self):
+        if self.hf:
+            self.hf.close()
+            print(f"HDF5 Dataset Manager chiuso.")
+            
+    def __del__(self):
+        self.close()
+
+def combine_hdf5_files(root_dir, cut_secs_list, audio_format, splits_list=['train', 'es', 'valid', 'test'], \
+                                                                embedding_dim=1024, spec_shape=(128, 1024)):
     """
     Combines individual HDF5 files for each class and split into unified HDF5 files
     for each split.
@@ -280,7 +423,8 @@ def combine_hdf5_files(root_dir, cut_secs_list, splits_list=['train', 'es', 'val
     Args:
         root_dir (str): The root directory where the cut_secs directories are located.
         cut_secs_list (list): A list of cut_secs values (e.g., [1, 2, 4]).
-        splits_list (list): A list of data splits (e.g., ['train', 'valid', 'test']).
+        audio_format (str): Original audio format
+        splits_list (list): A list of data splits (e.g., ['train', 'es', 'valid', 'test']).
         embedding_dim (int): The dimension of the embeddings.
         spec_shape (tuple): The shape of the spectrograms.
     """
@@ -291,128 +435,127 @@ def combine_hdf5_files(root_dir, cut_secs_list, splits_list=['train', 'es', 'val
         
         for split_name in splits_list:
             output_h5_path = os.path.join(root_dir, f'{cut_secs}_secs', f'combined_{split_name}.h5')
-            
-            # Crea un nuovo file HDF5 per lo split corrente
-            with h5py.File(output_h5_path, 'w') as out_h5:
-                # Inizializza i dataset nel file unificato
-                dt = h5py.string_dtype(encoding='utf-8')
-                out_h5.create_dataset('embeddings', shape=(0, embedding_dim), maxshape=(None, embedding_dim), dtype='f4', chunks=True)
-                out_h5.create_dataset('spectrograms', shape=(0,) + spec_shape, maxshape=(None,) + spec_shape, dtype='f4', chunks=True)
-                out_h5.create_dataset('names', shape=(0,), maxshape=(None,), dtype=dt, chunks=True)
-                out_h5.create_dataset('classes', shape=(0,), maxshape=(None,), dtype=dt, chunks=True)
+            out_h5 = HDF5EmbeddingDatasetsManager(output_h5_path, mode='a', partitions=set('splits',))
+            out_h5.initialize_hdf5(embedding_dim, spec_shape, audio_format, split_name)
 
-                for class_name in classes_list:
-                    class_h5_path = os.path.join(root_dir, f'{cut_secs}_secs', class_name, f'{class_name}_{split_name}.h5')
+            for class_name in classes_list:
+                class_h5_path = os.path.join(root_dir, f'{cut_secs}_secs', class_name, f'{class_name}_{split_name}.h5')
                     
-                    if not os.path.exists(class_h5_path):
-                        logging.warning(f"File non trovato per la classe '{class_name}' e split '{split_name}': {class_h5_path}. Salto.")
-                        continue
+                if not os.path.exists(class_h5_path):
+                    logging.warning(f"File non trovato per la classe '{class_name}' e split '{split_name}': {class_h5_path}. Salto.")
+                    continue
                     
-                    logging.info(f"Adding data from class: {class_name}...")
+                logging.info(f"Adding data from class: {class_name}...")
                     
-                    try:
-                        with h5py.File(class_h5_path, 'r') as in_h5:
-                            # Aggiungi i dati al file unificato
-                            in_embeddings = in_h5['embeddings'][:]
-                            in_spectrograms = in_h5['spectrograms'][:]
-                            in_names = in_h5['names'][:]
-                            
-                            current_size = out_h5['embeddings'].shape[0]
-                            new_size = current_size + len(in_embeddings)
-                            
-                            out_h5['embeddings'].resize(new_size, axis=0)
-                            out_h5['spectrograms'].resize(new_size, axis=0)
-                            out_h5['names'].resize(new_size, axis=0)
-                            out_h5['classes'].resize(new_size, axis=0)
-                            
-                            out_h5['embeddings'][current_size:] = in_embeddings
-                            out_h5['spectrograms'][current_size:] = in_spectrograms
-                            out_h5['names'][current_size:] = in_names
-                            out_h5['classes'][current_size:] = [class_name] * len(in_embeddings)
-
-                    except Exception as e:
-                        logging.error(f"Errore durante l'unione dei file di classe '{class_name}': {e}. Continuo.")
+                try:
+                    in_h5 = HDF5EmbeddingDatasetsManager(class_h5_path, 'r', set('splits', 'classes'))
+                    class_data = in_h5['embedding_dataset'][:]
+                    class_data_extended = np.empty(class_data.shape, dtype=out_h5.dt)
+                    for name in class_data_extended.names:
+                        class_data_extended[name] = class_data[name]
+                    class_data_extended['classes'] = [class_name] * len(class_data)
+                    out_h5.extend_dataset(class_data_extended)
+                except Exception as e:
+                    logging.error(f"Errore durante l'unione dei file di classe '{class_name}': {e}. Continuo.")
 
             logging.info(f"Combinazione completata per '{split_name}'. File salvato in: {output_h5_path}")
 
-class HDF5Dataset(Dataset):
-    def __init__(self, h5_path, data_types):
-        super().__init__()
-        if not data_types:
-            self._data_types = ['embeddings']
-        for data_type in set(data_types):
-            if data_type not in ['embeddings', 'spectrograms', 'names']:
-                raise ValueError("ValueError: incorrect data type for Dataset.")
-        self._data_types = list(set(data_types))
-        self.h5_path = h5_path
-        # Apri il file HDF5 in modalità di sola lettura
-        self.hdf5_file = h5py.File(self.h5_path, 'r')
-        
-        # Ottieni i riferimenti ai dataset
-        self.embeddings = self.hdf5_file['embeddings']
-        self.spectrograms = self.hdf5_file['spectrograms']
-        self.names = self.hdf5_file['names']
-        self.classes = self.hdf5_file['classes']
-
-    def __len__(self):
-        # Restituisce il numero totale di elementi nel dataset
-        return self.embeddings.shape[0]
-
-    def __getitem__(self, idx):
-        # Carica il campione corrispondente all'indice idx
-        embedding = torch.from_numpy(self.embeddings[idx]).float()
-        spectrogram = torch.from_numpy(self.spectrograms[idx]).float()
-        name = self.names[idx]
-        class_ = self.classes[idx]
-        item = ()
-        if 'embeddings' in self._data_types:
-            item = item + (embedding,)
-        if 'spectrograms' in self._data_types:
-            item = item + (spectrogram,)
-        if 'names' in self._data_types:
-            item = item + (name,)
-        
-        # Restituisci il campione
-        return item + (class_,)
-
-    def close(self):
-        # Chiudi il file HDF5
-        self.hdf5_file.close()
-
-def load_octaveband_datasets(octaveband_dir, batch_size, data_types):
+def get_track_reproducibility_parameters(self, idx):
     """
-    Generates lists of DataLoaders for embeddings and/or spectrograms
-    of a given octaveband run.
-    
+    Gives a dictionary containing all the information to reconstruct the track
+    an embedding was generated from. Needs the ID key for that embedding.
+
     args:
-     - octaveband_dir: directory for a given octaveband run;
-     - batch_size: batch size for DataLoaders;
-     - data_types: list of types of data to be yielded by the Dataset items;
-       must choose between a combination of 'embeddings', 'spectrograms' and
-       'names'.
+     - idx: embedding key given in the required format
+       ((class_idx)_(track hdf5 index)_(bucket number)_(round_)_(offset seed)_(results number)_(noise seed)).
 
     returns:
-     - dataloaders: list of DataLoader objects containing the datasets.
+     - rep_params: dictionary containing all the parameters to reconstruct the track.
     """
-    dataloaders = {fp: [torch.utils.data.DataLoader(HDF5Dataset(
-        h5_path=os.path.join(octaveband_dir, fp, f'combined_{type_ds}.h5'),
-        data_types=data_types
-    ), batch_size=batch_size, shuffle=True) for type_ds in ['train', 'es', 'valid', 'test']] for fp in os.listdir(octaveband_dir)}
-    return dataloaders
+    rep_params = {}
+    params = idx.split('_')
+    param_names = [
+            "class_idx",
+            "hdf5_index",
+            "bucket",
+            "round_",
+            "offset_seed",
+            "results",
+            "noise_seed"
+        ]
+    for param, name in zip(params, param_names):
+        rep_params[name] = param
+    return rep_params
 
-### Indexing for embeddings ###
+def reconstruct_tracks_from_embeddings(base_tracks_dir, hdf5_emb_path, idx_list):
+    """
+    Reconstructs a bunch of tracks relative to a given group of embeddings from their unique
+    indexing. Indices are written in such a way to parse all the information needed for the
+    reconstruction through the function get_track_reproducibility_parameters.
 
-def load_or_create_emb_index(index_path):
-    """Carica l'indice da un file JSON o ne crea uno nuovo."""
-    if os.path.exists(index_path):
-        with open(index_path, 'r') as f:
-            return json.load(f)
-    return {}
+    args:
+     - base_tracks_dir (str): base dir containing the various tracks datasets;
+       to be combined with the information coming from the metadata to get the
+       correct hdf5 file;
+     - hdf5_emb_path (str): path to the hdf5 file of the desired embeddings;
+       has to be relative to an entire split for completeness;
+     - idx_list (list): list containing the embedding indices formatted in
+       the appropriate way:
+       ((class)_(track hdf5 index)_(bucket number)_(round_)_(offset seed)_(results number)_(noise seed));
 
-def save_emb_index(index, index_path):
-    """Salva l'indice in un file JSON."""
-    with open(index_path, 'w') as f:
-        json.dump(index, f)
+    returns:
+     - reconstr_tracks (dict): dict of the recontructed tracks
+    """
+    hdf5_emb = HDF5EmbeddingDatasetsManager(hdf5_emb_path, 'r', ('splits',))
+    audio_format = hdf5_emb.hf.attrs['audio_format']
+    cut_secs = hdf5_emb.hf.attrs['cut_secs']
+    sample_rate = hdf5_emb.hf.attrs['sample_rate']
+    noise_perc = hdf5_emb.hf.attrs['noise_perc']
+    classes_list = hdf5_emb.hf['embedding_dataset']['classes'].unique().sort()
+    repr_params_list = [get_track_reproducibility_parameters(idx) for idx in idx_list]
+    repr_params_list = sorted(repr_params_list, key=lambda a : a['class_idx'])
+    curr_class = None
+    reconstr_tracks = {}
+
+    for track_idx, repr_params in zip(idx_list, repr_params_list):
+        if repr_params['class_idx'] != curr_class:
+            hdf5_class_tracks.close()
+            curr_class = repr_params['class_idx']
+            hdf5_class_path = os.path.join(base_tracks_dir, f'raw_{audio_format}', f'{classes_list[curr_class]}_{audio_format}_dataset.h5')
+            hdf5_class_tracks = HDF5DatasetManager(hdf5_class_path, audio_format)
+        original_track = hdf5_class_tracks[repr_params['hdf5_index']]
+
+        # set random number generator to reconstruct offset and noise
+        offset_rng = np.random.default_rng(repr_params['offset_seed'])
+        noise_rng = np.random.default_rng(repr_params['noise_seed'])
+
+        # generate right offset
+        offset = 0
+        window_size = int(cut_secs * sample_rate)
+        if repr_params['round_'] > 1 and original_track.shape[0] > window_size:
+            max_offset = original_track.shape[0] - window_size
+            if max_offset > 0:
+                for _ in range(repr_params['round_'] + 1)
+                    offset = offset_rng.integers(0, max_offset)
+
+        # generate noise
+        start = repr_params['bucket'] * window_size + offset
+        end = start + window_size
+        cut_track = original_track[start:end]
+
+        if len(cut_track) < window_size:
+            pad_length = window_size - len(cut_track)
+            cut_track = np.pad(cut_track, (0, pad_length), 'constant')
+
+        abs_cut_track = np.abs(cut_track)
+        max_threshold = np.mean(abs_cut_track)
+        for _ in range(repr_params['results']):
+            noise = noise_rng.uniform(-max_threshold, max_threshold, cut_track.shape)
+        reconstr_track = (1 - noise_perc) * cut_track + noise_perc * noise
+        reconstr_tracks[track_idx] = reconstr_track
+
+    hdf5_class_tracks.close()
+    return reconstr_tracks
 
 ### Distributed environment functions ###
 
@@ -454,5 +597,4 @@ def cleanup_distributed_environment():
     dist.barrier()
     dist.destroy_process_group()
     logging.info(f"Processo {rank} ha terminato il suo lavoro.")
-
 

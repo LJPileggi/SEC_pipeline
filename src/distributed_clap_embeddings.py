@@ -24,8 +24,8 @@ from .dirs_config import *
 ### Embedding generation ###
 
 
-def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n_octave, \
-                                        device, rank, start_log_data, class_to_process):
+def process_class_with_cut_secs(clap_model, audio_embedding, tracks_to_run, config, cut_secs, \
+                                    n_octave, device, rank, start_log_data, class_to_process):
     """
     Main job to submit to GPU workers to generate CLAP embeddings for a given class and
     cut_secs value.
@@ -53,6 +53,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
     args:
      - clap_model (CLAP_model): The pre-trained CLAP model instance;
      - audio_embedding (torch.nn.Module): The audio embedding module from the model;
+     - tracks_to_run (pd.DataFrame): Tracks dataset of the given class;
      - config (dict): The configuration dictionary containing all necessary parameters;
      - cut_secs (float): The duration in seconds of each audio segment;
      - n_octave (int): The number of octave bands for the spectrogram;
@@ -68,196 +69,121 @@ def process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n
     root_source = config['dirs']['root_source']
     root_target = config['dirs']['root_target']
     cut_secs_dir = os.path.join(root_target, f'{cut_secs}_secs')
+    target_class_dir = os.path.join(cut_secs_dir, class_to_process)
+    os.makedirs(target_class_dir, exist_ok=True)
     
     audio_format = config['audio']['audio_format']
     sr = config['spectrogram']['sr']
     ref = config['spectrogram']['ref']
     center_freqs = config['spectrogram']['center_freqs']
     noise_perc = config['audio']['noise_perc']
-    seed = config['audio']['seed']
+    perm_seed = config['audio']['perm_seed']
+    offset_seed = config['audio']['offset_seed']
+    noise_seed = config['audio']['noise_seed']
     save_log_every = config['log']['save_log_every']
-    
-    # Inizializzazione della logica di ripresa
+
+    offset_rng = np.random.default_rng(offset_seed)
+    noise_rng = np.random.default_rng(noise_seed)
+
     division_names = [d[0] for d in config['data']['divisions_xc_sizes_names']]
     target_counts_list = [d[1] for d in config['data']['divisions_xc_sizes_names']]
+    target_counts_list = np.cumsum(target_counts_list)
 
     di = 0
     results = 0
     round_ = 0
     finish_class = False
 
-    if start_log_data and start_log_data.get('cut_secs') == cut_secs and start_log_data.get('class_name') == class_to_process:
-        di = start_log_data.get('di', 0)
-        results = start_log_data.get('results', 0)
-        round_ = start_log_data.get('round', 0)
-        finish_class = start_log_data.get('finish_class', False)
-        
-    source_class_dir = os.path.join(root_source, class_to_process)
-    audio_fp_list = extract_all_files_from_dir(source_class_dir, extension=f'.{audio_format}')
-    
-    target_class_dir = os.path.join(cut_secs_dir, class_to_process)
-    os.makedirs(target_class_dir, exist_ok=True)
+    audio_dataset_manager = HDF5DatasetManager(os.path.join(target_class_dir,
+                              f'{class_to_process}_{audio_format}_dataset.h5'))
 
-    # Inizializzazione dei buffer globali e dei percorsi dei file
-    embeddings_buffer = []
-    spectrograms_buffer = []
-    names_buffer = []
-    buffer_size_limit = 100 # Regola questo valore in base alla RAM disponibile
-    
     # Specifica le dimensioni dei dati
     embedding_dim = 1024 # Esempio, metti la dimensione corretta del tuo embedding
     spec_shape = (128, 1024) # Esempio, metti la forma corretta dello spettrogramma
-    
-    # Carica l'indice esistente e inizializza il file HDF5 per lo split corrente
-    index_path = os.path.join(target_class_dir, f'{class_to_process}_{division_names[di]}.json')
-    existing_names_index = load_or_create_emb_index(index_path)
-    
-    output_file_path = os.path.join(target_class_dir, f'{class_to_process}_{division_names[di]}.h5')
-    initialize_hdf5(output_file_path, embedding_dim, spec_shape)
 
-    # Questo blocco 'try...finally' garantisce il salvataggio dei dati in caso di interruzione manuale
+    split_emb_dataset_manager = HDF5EmbeddingDatasetsManager(os.path.join(target_class_dir,
+                    f'{class_to_process}_{division_names[di]}_{audio_format}_emb.h5'), 'a')
+    split_emb_dataset_manager.initialize_hdf5(embedding_dim, spec_shape, audio_format, cut_secs,
+                                              n_octave, sr, division_names[di], class_to_process)
+
     try:
-        if len(audio_fp_list) > 0:
-            perms = np.random.RandomState(seed=seed).permutation(len(audio_fp_list))
-            
-            while not finish_class:
-                round_ += 1
-                n_corrupt_files = 0
-                for p in perms:
-                    audio_fp = audio_fp_list[p]
-                    filepath = os.path.join(source_class_dir, audio_fp)
-                    
-                    try:
-                        data, current_sr = librosa.load(filepath, sr=sr, mono=True)
-                        window_size = int(cut_secs * sr)
-                        n_buckets = math.ceil(len(data) / window_size)
+        perms_metadata = audio_dataset_manager.get_reproducible_permutation(perm_seed)
+        while not finish_class:
+            round_ += 1
+            n_corrupt_files = 0
+            for metadata in perms_metadata:
+                if finish_class:
+                    break
+                track_idx = metadata['hdf5_index']
+                track = audio_dataset_manager.get_audio_data(track_idx)
+                window_size = int(cut_secs * sr)
+                # Determina l'offset per l'elaborazione di questo file in questo round
+                offset = 0
+                if round_ > 1 and track.shape[0] > window_size:
+                    # Applica un offset casuale se non è il primo round
+                    max_offset = track.shape[0] - window_size
+                    if max_offset > 0:
+                        offset = offset_rng.integers(0, max_offset)
+                n_buckets = math.ceil((track.shape[0] - offset) / window_size)
+                for b in range(n_buckets):
+                if results >= target_counts_list[di]:
+                    logging.info(f"Split '{division_names[di]}' completato con {results} elementi. Avvio flush...")
+                    # Passa al prossimo split e reinizializza
+                    di += 1
+                    if di >= len(division_names):
+                        finish_class = True
+                        break
+                    else:
+                        # flush existing buffers and initialise new split file
+                        split_emb_dataset_manager.flush_buffers()
+                        split_emb_dataset_manager.close()
+                        split_emb_dataset_manager = HDF5EmbeddingDatasetsManager(os.path.join(target_class_dir,
+                                        f'{class_to_process}_{division_names[di]}_{audio_format}_emb.h5'), 'a')
+                        split_emb_dataset_manager.initialize_hdf5(embedding_dim, spec_shape, audio_format, cut_secs,
+                                                                  n_octave, sr, division_names[di], class_to_process)
 
-                        local_embeddings_buffer = []
-                        local_spectrograms_buffer = []
-                        local_names_buffer = []
+                    # the primary keys for the embedding follow the following format:
+                    # (class_idx)_(track hdf5 index)_(permutation seed)_(bucket number)_(round_)_(offset seed)_(results number)_(noise seed)
+                    emb_pkey = f"{audio_dataset_manager.hf.attrs['class_idx']}_{track_idx}"
+                               f"_{b}_{round}_{offset_seed}_{results}_{noise_seed}"
 
-                        for b in range(n_buckets):
-                            # VEDI MODIFICA: La logica per il cambio split è ora qui
-                            if results >= target_counts_list[di]:
-                                logging.info(f"Split '{division_names[di]}' completato con {results} elementi. Avvio flush...")
-
-                                # 1. TRASFERIMENTO FORZATO: Sposta i dati processati finora (che non hanno causato l'interruzione)
-                                # dai buffer locali a quelli globali PRIMA del flush.
-                                # L'elemento che ha fatto sforare il limite non è ancora nel buffer locale.
-                                # L'elemento che HA FATTO SFORARE il limite è l'ULTIMO elaborato nel ciclo 'b'.
-                                # Dato che il check è PRIMA dell'elaborazione del bucket 'b' corrente:
-                                # - Se il check è TRUE, l'elemento che ha completato lo split è l'ULTIMO del bucket precedente (b-1), 
-                                #   e la sua elaborazione è stata completata (si è aggiornato 'results').
-                                # - **Quindi, l'elemento finale è già nei buffer locali.**
-                                embeddings_buffer.extend(local_embeddings_buffer)
-                                spectrograms_buffer.extend(local_spectrograms_buffer)
-                                names_buffer.extend(local_names_buffer)
-
-                                # 2. PULIZIA DEI BUFFER LOCALI DOPO IL TRASFERIMENTO
-                                local_embeddings_buffer = []
-                                local_spectrograms_buffer = []
-                                local_names_buffer = []
-
-                                # 3. FLUSH DEL BUFFER GLOBALE
-                                if len(embeddings_buffer) > 0:
-                                    append_to_hdf5(output_file_path, embeddings_buffer, spectrograms_buffer, names_buffer)
-                                    save_index(existing_names_index, index_path)
-                                    embeddings_buffer = []
-                                    spectrograms_buffer = []
-                                    names_buffer = []
-                                
-                                # Passa al prossimo split e reinizializza
-                                di += 1
-                                if di >= len(division_names):
-                                    finish_class = True
-                                    break
-                                else:
-                                    results = 0
-                                    index_path = os.path.join(target_class_dir, f'{class_to_process}_{division_names[di]}.json')
-                                    existing_names_index = load_or_create_emb_index(index_path)
-                                    output_file_path = os.path.join(target_class_dir, f'{class_to_process}_{division_names[di]}.h5')
-                                    initialize_hdf5(output_file_path, embedding_dim, spec_shape)
-
-
-                            try:
-                                new_fp_base = f'{audio_fp}_{cut_secs}s_({b}_{round_})'
-
-                                if new_fp_base in existing_names_index:
-                                    continue
-
-                                start = b * window_size + offset
-                                end = start + window_size
-                                cut_data = data[start:end]
-
-                                if len(cut_data) < window_size:
-                                    pad_length = window_size - len(cut_data)
-                                    cut_data = np.pad(cut_data, (0, pad_length), 'constant')
-
-                                abs_cutdata = np.abs(cut_data)
-                                max_threshold = np.mean(abs_cutdata)
-                                noise = (np.random.rand(*cut_data.shape) * 2 - 1) * max_threshold
-                                new_audio = (1 - noise_perc) * cut_data + noise_perc * noise
-                            
-                                preprocessed_audio = clap_model.preprocess_audio([new_audio], is_path=False)
-                                preprocessed_audio = preprocessed_audio.reshape(preprocessed_audio.shape[0], preprocessed_audio.shape[2])
-                                x = preprocessed_audio.to(device)
-                                with torch.no_grad():
-                                    embedding = audio_embedding(x)[0][0]
-
-                                local_embeddings_buffer.append(embedding.cpu().numpy())
-                                local_spectrograms_buffer.append(spec3o)
-                                local_names_buffer.append(new_fp_base)
-
-                                existing_names_index[new_fp_base] = True
-
-                                results += 1
-
-                            except Exception as e:
-                                logging.error(f"Errore durante l'elaborazione del bucket {b} da "
-                                              f"{filepath}: {e}. Salto il resto di questo file.")
-                                traceback.print_exc(file=sys.stderr)
-                                continue
-
-                    except Exception as e:
-                        logging.error(f"Errore durante il caricamento del file {filepath}: {e}. Salto il file.")
-                        traceback.print_exc(file=sys.stderr)
-                        n_corrupt_files += 1
-                        if n_corrupt_files >= len(perms):
-                            logging.error(f"Tutti i {n_corrupt_files} file sono corrotti. Uscita.")
-                            sys.exit(0)
+                    if split_emb_dataset_manager[emb_pkey]:
                         continue
 
-                    finally:
-                        embeddings_buffer.extend(local_embeddings_buffer)
-                        spectrograms_buffer.extend(local_spectrograms_buffer)
-                        names_buffer.extend(local_names_buffer)
+                    start = b * window_size + offset
+                    end = start + window_size
+                    cut_data = track[start:end]
 
-                        if finish_class:
-                            break
-                
-                # Dopo il ciclo esterno, se il buffer globale è pieno, salvalo su disco
-                if len(embeddings_buffer) >= buffer_size_limit:
-                    append_to_hdf5(output_file_path, embeddings_buffer, spectrograms_buffer, names_buffer)
-                    save_emb_index(existing_names_index, index_path)
-                    embeddings_buffer = []
-                    spectrograms_buffer = []
-                    names_buffer = []
+                    if len(cut_data) < window_size:
+                        pad_length = window_size - len(cut_data)
+                        cut_data = np.pad(cut_data, (0, pad_length), 'constant')
 
-    except KeyboardInterrupt:
-        logging.info("Interruzione manuale rilevata. Avvio del salvataggio finale.")
+                    abs_cutdata = np.abs(cut_data)
+                    max_threshold = np.mean(abs_cutdata)
+                    noise = (np.random.rand(*cut_data.shape) * 2 - 1) * max_threshold
+                    new_audio = (1 - noise_perc) * cut_data + noise_perc * noise
+
+                    spec_n_o = spectrogram_n_octaveband_generator(new_audio, sr, integration_seconds=0.1,
+                                                  n_octave=n_octave, center_freqs=center_freqs, ref=ref)
+
+                    preprocessed_audio = clap_model.preprocess_audio([new_audio], is_path=False)
+                    preprocessed_audio = preprocessed_audio.reshape(preprocessed_audio.shape[0], preprocessed_audio.shape[2])
+                    x = preprocessed_audio.to(device)
+                    with torch.no_grad():
+                        embedding = audio_embedding(x)[0][0]
+
+                    split_emb_dataset_manager.add_to_data_buffer(embedding, spec_n_o, emb_pkey,
+                                metadata['track_name'], class_to_process, metadata['subclass'])
+                    results += 1
+
+
+    except Exception as e:
+        logging.info(f"{e}. Flushing existing buffers")
     finally:
-        if len(embeddings_buffer) > 0:
-            append_to_hdf5(output_file_path, embeddings_buffer, spectrograms_buffer, names_buffer)
-            save_emb_index(existing_names_index, index_path)
-            logging.info("Dati e indice rimanenti salvati con successo.")
-        
-        classes_list = sorted([d for d in os.listdir(root_source) if os.path.isdir(os.path.join(root_source, d))])
-        ic = classes_list.index(class_to_process)
-        gen_log(root_target, cut_secs, ic, di, results, round_, finish_class,
-                config['data']['divisions_xc_sizes_names'], noise_perc, seed, rank)
-        
-        logging.info(f"Classe '{class_to_process}' elaborata. Creazioni totali: {sum(target_counts_list[:di]) + results}")
-
+        split_emb_dataset_manager.flush_buffers()
+        split_emb_dataset_manager.close()
+        audio_dataset_manager.close()
+        logging.info(f"Classe '{class_to_process}' elaborata. Creazioni totali: {results}")
 
 ### Workers ###
 
@@ -279,7 +205,7 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
      - config: incomplete config dictionary; info about audio format and n octave is added inside the function;
      - rank (int): unique rank (ID) of current process;
      - world_size (int): total number of processes in the distributed group;
-     - task_queue (mp.Queue): shared queue containing tuples of (cut_secs, class_name) to be processed;
+     - task_queue (mp.Queue): shared queue containing tuples of (cut_secs, class_name, tracks_to_run) to be processed;
      - start_log_data (dict): dictionary containing log data to resume processing from a specific checkpoint;
      - pbar_instance: MultiProcessTqdm instance to implement a progress bar on rank 0;
      - test (bool): whether to execute process for dummy testing dataset; defaul to False.
@@ -299,15 +225,15 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
     logging.info(f"Processo {rank} avviato su GPU {rank}.")
 
     # Itera sulla lista di task che competono a questo rank
-    for cut_secs, class_name in my_tasks:
+    for cut_secs, class_name, tracks_to_run in my_tasks:
         try:
             # Stampa un messaggio per il task corrente (opzionale)
             if rank == 0:
                 print(f"[{rank}] Elaborando {cut_secs}, classe {class_name}", flush=True)
 
             # Esegui la funzione di elaborazione degli embedding
-            process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n_octave,
-                                                      device, rank, start_log_data, class_name)
+            process_class_with_cut_secs(clap_model, audio_embedding, tracks_to_run, config,
+                              cut_secs, n_octave, device, rank, start_log_data, class_name)
             
             # Aggiorna la barra di avanzamento dopo aver completato un task
             if pbar_instance:
@@ -404,7 +330,13 @@ def run_distributed_slurm(config_file, audio_format, n_octave, test=False):
     config['data']['divisions_xc_sizes_names'] = divisions_xc_sizes_names
 
     basedir_raw_format = os.path.join(basedir_raw if not test else basedir_raw_test, f'{audio_format}')
-    classes_list = sorted([d for d in os.listdir(basedir_raw_format) if os.path.isdir(os.path.join(basedir_raw_format, d))])
+    H5_FILE_PATH = os.path.join(base_dir, f'SEC_SuperDataset_{audio_format}.h5') 
+    h5_manager = HDF5DatasetManager(H5_FILE_PATH)
+    if h5_manager.metadata_df is None:
+        logging.error("Impossibile caricare il dataset HDF5. Uscita.")
+        return 
+
+    classes_list = sorted(h5_manager.metadata_df['class'].unique())
 
     log_data = {}
     log_path = os.path.join(basedir_preprocessed if not test else basedir_preprocessed_test,
@@ -427,18 +359,24 @@ def run_distributed_slurm(config_file, audio_format, n_octave, test=False):
             if log_data:
                 # Se siamo già oltre il punto di ripresa, mettiamo tutto in coda
                 if found_resume_point:
-                    all_tasks.append((cut_secs, class_name))
+                    tracks_to_run = h5_manager.get_class_tracks(class_to_process, config.seed, start_index_h5=None)
+                    all_tasks.append((cut_secs, class_name, tracks_to_run))
                     continue
-
                 # Confronto lessicografico per trovare il punto di ripresa
                 if cut_secs > log_cut_secs:
                     found_resume_point = True
-                    all_tasks.append((cut_secs, class_name))
+                    tracks_to_run = h5_manager.get_class_tracks(class_to_process, config.seed, start_index_h5=None)
+                    all_tasks.append((cut_secs, class_name, tracks_to_run))
                     continue
-                elif cut_secs == log_cut_secs and class_name >= log_class_name:
+                elif cut_secs == log_cut_secs and class_name > log_class_name:
                     found_resume_point = True
-                    # Inserisci il task in corso
-                    all_tasks.append((cut_secs, class_name))
+                    tracks_to_run = h5_manager.get_class_tracks(class_to_process, config.seed, start_index_h5=None)
+                    all_tasks.append((cut_secs, class_name, tracks_to_run))
+                    continue
+                elif cut_secs == log_cut_secs and class_name == log_class_name:
+                    found_resume_point = True
+                    tracks_to_run = h5_manager.get_class_tracks(class_to_process, config.seed, config.start_index_h5)
+                    all_tasks.append((cut_secs, class_name, tracks_to_run))
                     continue
                 else:
                     # Salta i task precedenti al punto di ripresa
@@ -470,6 +408,9 @@ def run_distributed_slurm(config_file, audio_format, n_octave, test=False):
     # delete_log (se vuoi una singola pulizia finale) dovrebbe essere chiamato solo dal rank 0
     if rank == 0:
         delete_log(log_path)
+
+    # close h5 manager
+    h5_manager.close()
 
     logging.info(f"Rank {rank}: tutti i processi hanno terminato il loro lavoro.")
 
