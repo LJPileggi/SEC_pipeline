@@ -1,14 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=CLAP_Pipeline_Execution
-#SBATCH --partition=boost_usr_prod # O la partizione che usi abitualmente
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=64G
+#SBATCH --ntasks-per-node=4           # <--- Esegui 4 processi per nodo
+#SBATCH --cpus-per-task=1             # Un CPU core per processo (controlla i requisiti CLAP)
 #SBATCH --time=01:00:00
-#SBATCH --account=TUO_ACCOUNT
-#SBATCH --output=clap_job.%j.out
-#SBATCH --error=clap_job.%j.err
+#SBATCH --exclusive                   # O --exclusive, o --gpus-per-task=1
+#SBATCH --gres=gpu:4                   # Richiedi 4 GPU per il nodo
+#SBATCH -A IscrC_Pb-skite
+#SBATCH -p boost_usr_prod
 
 # --- VARIABILI GLOBALI ---
 SIF_FILE="/leonardo_scratch/large/$USER/containers/clap_pipeline.sif"
@@ -43,6 +41,30 @@ apptainer exec \
     --bind $TEMP_DIR:/tmp_data \
     "$SIF_FILE" \
     python "$embed_test"
+
+TEMP_LOG_MERGE_SCRIPT="/tmp/temp_log_merge_script_$$.py"
+cat << EOF > "$TEMP_PYTHON_SCRIPT"
+import sys
+import os
+
+from src.utils import join_logs
+from src.dirs_config import basedir_preprocessed, basedir_preprocessed_test
+
+if __name__ == '__main__':
+    # when executing this script, call 'python3 TEMP_LOG_MERGE_SCRIPT {audio_format} {n_octave} {test}'
+    log_dir = os.path.join(basedir_preprocessed if not bool(sys.argv[3]) else basedir_preprocessed_test,
+                                                              f'{sys.argv[1]}', f'{sys.argv[2]}_octave')
+    join_logs(log_dir)
+EOF
+
+AUDIO_FORMAT="wav"
+N_OCTAVE=3
+TEST=True
+
+apptainer exec \
+    --bind $TEMP_DIR:/tmp_data \
+    "$SIF_FILE" \
+    python "$TEMP_LOG_MERGE_SCRIPT" "$AUDIO_FORMAT" "$N_OCTAVE" "$TEST"
 
 # --- 4. PULIZIA ---
 echo "Pulizia dei file temporanei su /tmp..."

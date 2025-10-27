@@ -13,9 +13,8 @@ from torch.utils.data import Dataset, DataLoader
 __all__ = [
            "get_config_from_yaml",
 
-           "gen_log",
-           "read_log",
-           "delete_log",
+           "write_log",
+           "join_logs",
 
            "HDF5DatasetManager",
            "HDF5EmbeddingDatasetsManager",
@@ -23,9 +22,7 @@ __all__ = [
 
            "setup_environ_vars",
            "setup_distributed_environment",
-           "cleanup_distributed_environment",
-
-           "get_reproducible_permutation"
+           "cleanup_distributed_environment"
           ]
 
 ### Get model, training and spectrogram configuration from yaml ###
@@ -41,10 +38,10 @@ def get_config_from_yaml(config_file="config0.yaml"):
     config_path = os.path.join('configs', config_file)
     with open(config_path, 'r') as f:
         configs = yaml.load(f, Loader=yaml.SafeLoader)
+    classes = configs["classes"]
     patience = configs["patience"]
     epochs = configs["epochs"]
     batch_size = configs["batch_size"]
-    save_log_every = configs["save_log_every"]
     sampling_rate = configs["sampling_rate"]
     ref = configs["ref"]
     noise_perc = configs["noise_perc"]
@@ -55,124 +52,64 @@ def get_config_from_yaml(config_file="config0.yaml"):
                                 ("es", configs["es_size"]),
                                 ("valid", configs["valid_size"]),
                                 ("test", configs["test_size"])]
-    return patience, epochs, batch_size, save_log_every, sampling_rate, ref, noise_perc, \
-                            seed, center_freqs, valid_cut_secs, splits_xc_sizes_names
+    return classes patience, epochs, batch_size, sampling_rate, ref, noise_perc, seed, \
+                                  center_freqs, valid_cut_secs, splits_xc_sizes_names
 
    
 ### Log file functions for embedding calculation ###
 
-def gen_log(log_path, cut_secs, ic, di, results, round_, finish_class, \
-                    splits_xc_sizes_names, noise_perc, seed, rank):
+def write_log(log_path, new_cut_secs_class, process_time, rank, **kwargs):
     """
-    Generates a log file to set up a check point for embedding generation.
-    This function is called every #save_log_every embedding creations or
-    as a consequence of a keyboard interruption. Args are among the ones
-    of the split_audio_tracks function. The log is organised as a dictionary
-    and then dumped into a json file.
-    
+    Generates or updates json log file after each process_class_with_cut_secs completion.
+    Saves completion time, rank plus general config information.
+
     args:
-     - cut_secs: the CLAP cut length for the embeddings;
-     - ic: class index
-     - di: index of the current dataset split. In order they are: 'train', 
-       'es', valid', 'test'; 
-     - results: embedding index among the total number to generate per class;
-     - round_: round of data augmentation. When the number of tracks if less
-       than the required number for each class, split_audio_tracks starts to
-       run subsequent data augmentation runs until the desired number is reached;
-     - finish_class: whether the current class has been completely swept of not;
-     - splits_xc_sizes_names: a list containing tuples of ('split_name', #samples);
-       the usual one is [('train', 500), ('es', 100), ('valid', 100), ('test', 100)];
-     - noise_perc: intensity of noise for data augmentation;
-     - seed: random seed for track permutations inside the same class;
-     - rank: rank of the log generating process to confront different logs and
-       sort them lexicographically.
+     - log_path (str): path to the log folder;
+     - new_cut_secs_class (tuple): couple (cut_secs, class) used as key in the json log
+       for O(1) time lookup;
+     - process_time (float): processing time in seconds for the process_class_with_cut_secs
+       instance;
+     - rank (int): rank of the process of the execution;
+     - **kwargs (dict): dictionary containing all the general config information for all
+       runs.
     """
-    lengths = list(zip(*splits_xc_sizes_names))[1]
-    results = sum(lengths[:di]) if di > 0 else 0
-    log = {
-        "cut_secs" : cut_secs,
-        "ic" : ic,
-        "di" : di,
-        "results" : results,
-        "round" : round_,
-        "finish_class" : finish_class,
-        "splits_xc_sizes_names" : splits_xc_sizes_names,
-        "noise_perc" : noise_perc,
-        "seed" : seed
-    }
-    with open(os.path.join(log_path, f"log_rank_{rank}.json"), 'w') as f:
+    logfile = os.path.join(log_path, f"log_rank_{rank}.json")
+    with open(logfile, 'r+') as f:
+        log = json.load(f)
+        if not log["config"]:
+            log["config"] = kwargs
+        log[new_cut_secs_class] = {
+                    "process_time" : process_time,
+                    "rank" : rank
+            }
         json.dump(log, f, indent=4)
-    print("Logfile saved successfully.\n"
-          f"cut_secs: {cut_secs}\n"
-          f"ic: {ic}\n"
-          f"di: {di}\n"
-          f"results: {results}\n"
-          f"round: {round_}\n"
-          f"finish_class: {finish_class}\n"
-          f"splits_xc_sizes_names: {splits_xc_sizes_names}\n"
-          f"noise_perc: {noise_perc}\n"
-          f"seed: {seed}\n"
-    )
 
-def read_log(log_path):
+def join_logs(log_dir):
     """
-    Reads all log files, finds the one lexicographically earliest, and returns its content.
-    returns:
-     - best_log_data: a dictionary containing the lexicographically earliest logging information.
-    """
-    all_logs = glob.glob(os.path.join(log_path, "log_rank_*.json"))
-    
-    if not all_logs:
-        raise FileNotFoundError
+    Joins logs relative to different processes at the end of each execution.
 
-    # Inizializza con un valore che sarà sicuramente superato
-    best_log_data = None
-    best_log_score = (float('inf'), float('inf'), float('inf'), float('inf'), float('inf')) # Imposta il valore iniziale più alto
-    
-    for log_file in all_logs:
+    args:
+     - log_dir: directory containing the logs.
+    """
+    final_log = {}
+    final_log_file = os.path.join(log_dir, "log.json")
+    pattern = os.path.join(log_dir, f"log_rank_*.json")
+    log_files = glob.glob(pattern)
+    if not log_files:
+        with open(final_log_file, 'w') as f:
+            json.dump(final_log, f)
+        return
+    for log_file in log_files:
         try:
             with open(log_file, 'r') as f:
-                current_log_data = json.load(f)
-            
-            # Crea un "punteggio" lessicografico per il confronto
-            current_log_score = (
-                current_log_data.get("cut_secs", float('inf')),
-                current_log_data.get("ic", float('inf')),
-                current_log_data.get("di", float('inf')),
-                current_log_data.get("results", float('inf')),
-                current_log_data.get("round", float('inf'))
-            )
-
-            # Confronta e trova il log più avanzato
-            if current_log_score < best_log_score:
-                best_log_score = current_log_score
-                best_log_data = current_log_data
+                log = json.load(f)
+                final_log.update(log)
         except Exception as e:
-            logging.error(f"Errore nella lettura del file di log {log_file}: {e}")
-            continue
-
-    if best_log_data:
-        logging.info("Trovato il log più recente. Proseguo dal punto di interruzione.")
-    else:
-        logging.info("Nessun log valido trovato. Avvio da zero.")
-
-    # Opzionale: pulisci i file temporanei dopo la lettura
-    for log_file in all_logs:
-        try:
-            os.remove(log_file)
-        except OSError as e:
-            logging.error(f"Errore nella rimozione del file {log_file}: {e}")
-
-    return best_log_data
-
-def delete_log(log_path):
-    """
-    Deletes the log file (if exists) after a complete embedding run.
-    """
-    try:
-        os.remove(os.path.join(log_path, "log.json"))
-    except FileNotFoundError:
-        return
+            raise Exception("{e}")
+    with open(final_log_file, 'w') as f:
+        json.dump(final_log, f, indent=4)
+    for log_file in log_files:
+        os.remove(log_file)
 
 ### hdf5 raw dataset class ###
 
@@ -197,7 +134,7 @@ class HDF5DatasetManager:
             logging.info(f"HDF5 Dataset Manager pronto. Formato: {audio_format}")
         except Exception as e:
             logging.error(f"Errore nell'apertura o caricamento metadati HDF5: {e}")
-            raise
+            raise Exception
 
     def __getitem__(self, hdf5_index: int) -> np.ndarray:
         """
@@ -241,9 +178,6 @@ class HDF5DatasetManager:
         Returns:
             DataFrame con l'ordine delle tracce permutato.
         """
-        # Combiniamo il seed fisso con un hash della stringa della classe per univocità
-        unique_seed = seed + hash(class_name) % 1000000
-    
         # Permuta gli indici (non i valori originali)
         # df.sample(frac=1, random_state=...) è il modo più pulito con Pandas
         to_permute = self.metadata_df.copy()
@@ -322,7 +256,7 @@ class HDF5EmbeddingDatasetsManager(Dataset):
         return dt
 
     def initialize_hdf5(self, embedding_dim, spec_shape, audio_format, cut_secs, n_octave, \
-                                          sample_rate, noise_perc, split, class_name=None):
+                                    sample_rate, seed, noise_perc, split, class_name=None):
     """
     Creates HDF5 file with resizable embedding and spectrogram datasets.
     Must provide split and class name according to the selected partition.
@@ -340,6 +274,7 @@ class HDF5EmbeddingDatasetsManager(Dataset):
         self.hf.attrs['n_octave'] = n_octave
         self.hf.attrs['sample_rate'] = sample_rate
         self.hf.attrs['noise_perc'] = noise_perc
+        self.hf.attrs['seed'] = seed
         self.hf.attrs['split'] = split
         self.hf.attrs['embedding_dim'] = embedding_dim
         self.hf.attrs['spec_shape'] = spec_shape
@@ -467,7 +402,7 @@ def get_track_reproducibility_parameters(self, idx):
 
     args:
      - idx: embedding key given in the required format
-       ((class_idx)_(track hdf5 index)_(bucket number)_(round_)_(offset seed)_(results number)_(noise seed)).
+       ((class_idx)_(track hdf5 index)_(bucket number)_(round_)_(results number)).
 
     returns:
      - rep_params: dictionary containing all the parameters to reconstruct the track.
@@ -479,9 +414,7 @@ def get_track_reproducibility_parameters(self, idx):
             "hdf5_index",
             "bucket",
             "round_",
-            "offset_seed",
-            "results",
-            "noise_seed"
+            "results"
         ]
     for param, name in zip(params, param_names):
         rep_params[name] = param
@@ -501,7 +434,7 @@ def reconstruct_tracks_from_embeddings(base_tracks_dir, hdf5_emb_path, idx_list)
        has to be relative to an entire split for completeness;
      - idx_list (list): list containing the embedding indices formatted in
        the appropriate way:
-       ((class)_(track hdf5 index)_(bucket number)_(round_)_(offset seed)_(results number)_(noise seed));
+       ((class)_(track hdf5 index)_(bucket number)_(round_)_(results number));
 
     returns:
      - reconstr_tracks (dict): dict of the recontructed tracks
@@ -511,6 +444,7 @@ def reconstruct_tracks_from_embeddings(base_tracks_dir, hdf5_emb_path, idx_list)
     cut_secs = hdf5_emb.hf.attrs['cut_secs']
     sample_rate = hdf5_emb.hf.attrs['sample_rate']
     noise_perc = hdf5_emb.hf.attrs['noise_perc']
+    seed = hdf5_emb.hf.attrs['seed']
     classes_list = hdf5_emb.hf['embedding_dataset']['classes'].unique().sort()
     repr_params_list = [get_track_reproducibility_parameters(idx) for idx in idx_list]
     repr_params_list = sorted(repr_params_list, key=lambda a : a['class_idx'])
@@ -519,15 +453,17 @@ def reconstruct_tracks_from_embeddings(base_tracks_dir, hdf5_emb_path, idx_list)
 
     for track_idx, repr_params in zip(idx_list, repr_params_list):
         if repr_params['class_idx'] != curr_class:
-            hdf5_class_tracks.close()
+            if curr_class:
+                hdf5_class_tracks.close()
             curr_class = repr_params['class_idx']
+            class_seed = seed + hash(classes_list[curr_class]) % 10000000
             hdf5_class_path = os.path.join(base_tracks_dir, f'raw_{audio_format}', f'{classes_list[curr_class]}_{audio_format}_dataset.h5')
             hdf5_class_tracks = HDF5DatasetManager(hdf5_class_path, audio_format)
         original_track = hdf5_class_tracks[repr_params['hdf5_index']]
 
         # set random number generator to reconstruct offset and noise
-        offset_rng = np.random.default_rng(repr_params['offset_seed'])
-        noise_rng = np.random.default_rng(repr_params['noise_seed'])
+        offset_rng = np.random.default_rng(class_seed)
+        noise_rng = np.random.default_rng(class_seed)
 
         # generate right offset
         offset = 0

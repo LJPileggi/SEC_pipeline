@@ -45,7 +45,7 @@ def main_worker(rank, world_size, validation_filepath, dataloaders, classes, epo
 def main():
     # Define your parameters here
     args = parsing()
-    patience, epochs, batch_size, _, _, _, _, _, _, _, _ = get_config_from_yaml(config_file)
+    _, patience, epochs, batch_size, _, _, _, _, _, _, _ = get_config_from_yaml(config_file)
     world_size = 4
     
     # Percorso dove si trovano gli embedding

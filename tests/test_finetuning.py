@@ -14,7 +14,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 class FinetuningTestCase(unittest.TestCase):
     def setUp(self):
         self._test_config = 'test_config.yaml'
-        patience, epochs, batch_size, _, _, _, _, _, _, _, _ = get_config_from_yaml(self._test_config)
+        _, patience, epochs, batch_size, _, _, _, _, _, _, _ = get_config_from_yaml(self._test_config)
         self._n_octave = 3
         self._audio_format = 'wav'
         self._classifier_model = 'linear'

@@ -1,7 +1,29 @@
+classes:
+ - Bells
+ - Birds
+ - Cat_fights_and_moans
+ - Chicken_coop
+ - Cicadas_and_crickets
+ - Crows_seagulls_and_magpies
+ - Dog_barkings_and_howlings
+ - Glass_breaking
+ - Horn
+ - Jet_aircrafts
+ - Lawn_mower_brush_cutter_and_olive_shaker
+ - Music
+ - Propeller_aircrafts
+ - Sirens_and_alarms
+ - Thunder_fireworks_and_gunshot
+ - Train
+ - Vacuum_cleaner_fan_and_hair_dryer
+ - Vehicle_idling
+ - Vehicle_pass-by
+ - Voices
+ - Wind_turbine
+ - Workshop
 patience: 10
 epochs: 10
 batch_size: 128
-save_log_every: 1000
 sampling_rate: 52100
 ref: 2.e-05
 noise_perc: 0.3

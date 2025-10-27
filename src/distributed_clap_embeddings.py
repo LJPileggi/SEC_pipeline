@@ -1,6 +1,7 @@
 import os
 import sys
 import math
+import time
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -24,8 +25,7 @@ from .dirs_config import *
 ### Embedding generation ###
 
 
-def process_class_with_cut_secs(clap_model, audio_embedding, tracks_to_run, config, cut_secs, \
-                                    n_octave, device, rank, start_log_data, class_to_process):
+def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, cut_secs, n_octave, config):
     """
     Main job to submit to GPU workers to generate CLAP embeddings for a given class and
     cut_secs value.
@@ -53,14 +53,10 @@ def process_class_with_cut_secs(clap_model, audio_embedding, tracks_to_run, conf
     args:
      - clap_model (CLAP_model): The pre-trained CLAP model instance;
      - audio_embedding (torch.nn.Module): The audio embedding module from the model;
-     - tracks_to_run (pd.DataFrame): Tracks dataset of the given class;
-     - config (dict): The configuration dictionary containing all necessary parameters;
+     - class_to_process (str): The name of the audio class to process;
      - cut_secs (float): The duration in seconds of each audio segment;
      - n_octave (int): The number of octave bands for the spectrogram;
-     - device (torch.device): The device (CPU or CUDA) to run the computation on;
-     - rank (int): The rank of the current process in a distributed setup;
-     - start_log_data (dict): Dictionary with logging data to resume a previous job;
-     - class_to_process (str): The name of the audio class to process.
+     - config (dict): The configuration dictionary containing all necessary parameters.
 
     returns:
         None. The function saves the generated embeddings and spectrograms as a side effect
@@ -77,13 +73,13 @@ def process_class_with_cut_secs(clap_model, audio_embedding, tracks_to_run, conf
     ref = config['spectrogram']['ref']
     center_freqs = config['spectrogram']['center_freqs']
     noise_perc = config['audio']['noise_perc']
-    perm_seed = config['audio']['perm_seed']
-    offset_seed = config['audio']['offset_seed']
-    noise_seed = config['audio']['noise_seed']
-    save_log_every = config['log']['save_log_every']
+    seed = config['audio']['seed']
+    device = config['device']
 
-    offset_rng = np.random.default_rng(offset_seed)
-    noise_rng = np.random.default_rng(noise_seed)
+    # Identify a unique seed for each class
+    class_seed = seed + hash(class_to_process) % 10000000
+    offset_rng = np.random.default_rng(class_seed)
+    noise_rng = np.random.default_rng(class_seed)
 
     division_names = [d[0] for d in config['data']['divisions_xc_sizes_names']]
     target_counts_list = [d[1] for d in config['data']['divisions_xc_sizes_names']]
@@ -92,7 +88,6 @@ def process_class_with_cut_secs(clap_model, audio_embedding, tracks_to_run, conf
     di = 0
     results = 0
     round_ = 0
-    finish_class = False
 
     audio_dataset_manager = HDF5DatasetManager(os.path.join(target_class_dir,
                               f'{class_to_process}_{audio_format}_dataset.h5'))
@@ -104,18 +99,17 @@ def process_class_with_cut_secs(clap_model, audio_embedding, tracks_to_run, conf
     split_emb_dataset_manager = HDF5EmbeddingDatasetsManager(os.path.join(target_class_dir,
                     f'{class_to_process}_{division_names[di]}_{audio_format}_emb.h5'), 'a')
     split_emb_dataset_manager.initialize_hdf5(embedding_dim, spec_shape, audio_format, cut_secs,
-                                              n_octave, sr, division_names[di], class_to_process)
+                          n_octave, sr, seed, noise_perc, division_names[di], class_to_process)
 
     try:
-        perms_metadata = audio_dataset_manager.get_reproducible_permutation(perm_seed)
-        while not finish_class:
+        perms_metadata = audio_dataset_manager.get_reproducible_permutation(class_seed)
+        while True:
             round_ += 1
-            n_corrupt_files = 0
             for metadata in perms_metadata:
                 if finish_class:
                     break
                 track_idx = metadata['hdf5_index']
-                track = audio_dataset_manager.get_audio_data(track_idx)
+                track = audio_dataset_manager[track_idx]
                 window_size = int(cut_secs * sr)
                 # Determina l'offset per l'elaborazione di questo file in questo round
                 offset = 0
@@ -131,8 +125,12 @@ def process_class_with_cut_secs(clap_model, audio_embedding, tracks_to_run, conf
                     # Passa al prossimo split e reinizializza
                     di += 1
                     if di >= len(division_names):
-                        finish_class = True
-                        break
+                        # flush existing buffers and close hdf5 files
+                        split_emb_dataset_manager.flush_buffers()
+                        split_emb_dataset_manager.close()
+                        audio_dataset_manager.close()
+                        logging.info(f"Classe '{class_to_process}' elaborata. Creazioni totali: {results}")
+                        return
                     else:
                         # flush existing buffers and initialise new split file
                         split_emb_dataset_manager.flush_buffers()
@@ -140,12 +138,11 @@ def process_class_with_cut_secs(clap_model, audio_embedding, tracks_to_run, conf
                         split_emb_dataset_manager = HDF5EmbeddingDatasetsManager(os.path.join(target_class_dir,
                                         f'{class_to_process}_{division_names[di]}_{audio_format}_emb.h5'), 'a')
                         split_emb_dataset_manager.initialize_hdf5(embedding_dim, spec_shape, audio_format, cut_secs,
-                                                                  n_octave, sr, division_names[di], class_to_process)
+                                              n_octave, seed, sr, noise_perc, division_names[di], class_to_process)
 
                     # the primary keys for the embedding follow the following format:
-                    # (class_idx)_(track hdf5 index)_(permutation seed)_(bucket number)_(round_)_(offset seed)_(results number)_(noise seed)
-                    emb_pkey = f"{audio_dataset_manager.hf.attrs['class_idx']}_{track_idx}"
-                               f"_{b}_{round}_{offset_seed}_{results}_{noise_seed}"
+                    # (class_idx)_(track hdf5 index)_(bucket number)_(round_)_(results number)
+                    emb_pkey = f"{audio_dataset_manager.hf.attrs['class_idx']}_{track_idx}_{b}_{round}_{results}"
 
                     if split_emb_dataset_manager[emb_pkey]:
                         continue
@@ -160,7 +157,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, tracks_to_run, conf
 
                     abs_cutdata = np.abs(cut_data)
                     max_threshold = np.mean(abs_cutdata)
-                    noise = (np.random.rand(*cut_data.shape) * 2 - 1) * max_threshold
+                    noise = noise_rng.uniform(-max_threshold, max_threshold, cut_data.shape)
                     new_audio = (1 - noise_perc) * cut_data + noise_perc * noise
 
                     spec_n_o = spectrogram_n_octaveband_generator(new_audio, sr, integration_seconds=0.1,
@@ -187,8 +184,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, tracks_to_run, conf
 
 ### Workers ###
 
-def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_tasks, \
-                                    start_log_data, pbar_instance=None, test=False):
+def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_tasks, pbar_instance=None, test=False):
     """
     Worker process for distributed training.
 
@@ -221,35 +217,37 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
         os.makedirs(config['dirs']['root_target'])
     config['audio']['audio_format'] = audio_format
     config['audio']['n_octave'] = n_octave
+    config['device'] = device
     
     logging.info(f"Processo {rank} avviato su GPU {rank}.")
 
     # Itera sulla lista di task che competono a questo rank
-    for cut_secs, class_name, tracks_to_run in my_tasks:
-        try:
+    try:
+        for cut_secs, class_name in my_tasks:
             # Stampa un messaggio per il task corrente (opzionale)
             if rank == 0:
                 print(f"[{rank}] Elaborando {cut_secs}, classe {class_name}", flush=True)
 
             # Esegui la funzione di elaborazione degli embedding
-            process_class_with_cut_secs(clap_model, audio_embedding, tracks_to_run, config,
-                              cut_secs, n_octave, device, rank, start_log_data, class_name)
+            start_time = time.time()
+            process_class_with_cut_secs(clap_model, audio_embedding, class_name, cut_secs, n_octave, config)
+            process_time = time.time() - start_time
+            write_log(config['dirs']['root_target'], (cut_secs, class_name), process_time, rank, **config)
             
             # Aggiorna la barra di avanzamento dopo aver completato un task
             if pbar_instance:
                 pbar_instance.update(1)
 
-        except Exception as e:
-            logging.error(f"Errore critico nel processo {rank} per task ({cut_secs}, {class_name}): {e}")
+    except Exception as e:
+        logging.error(f"Errore critico nel processo {rank} per task ({cut_secs}, {class_name}): {e}")
 
-        finally:
-            # Sincronizza i processi prima di distruggere il gruppo
-            cleanup_distributed_environment()
+    finally:
+        # Sincronizza i processi prima di distruggere il gruppo
+        cleanup_distributed_environment()
 
 
 # Funzione Worker per l'ambiente locale (richiamata da mp.Process)
-def local_worker_process(audio_format, n_octave, config, rank, world_size, my_tasks, \
-                                    start_log_data, pbar_instance=None, test=False):
+def local_worker_process(audio_format, n_octave, config, rank, world_size, my_tasks, pbar_instance=None, test=False):
     """
     Funzione worker per l'esecuzione parallela in ambiente locale.
     """
@@ -257,24 +255,35 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
 
     clap_model, audio_embedding, _ = CLAP_initializer(device, use_cuda=True)
 
+    config['dirs']['root_source'] = os.path.join(basedir_raw if not test else basedir_raw_test, f'{audio_format}')
+    config['dirs']['root_target'] = os.path.join(basedir_preprocessed if not test else basedir_preprocessed_test,
+                                                                          f'{audio_format}', f'{n_octave}_octave')
+    if not os.path.exists(config['dirs']['root_target']):
+        os.makedirs(config['dirs']['root_target'])
+    config['audio']['audio_format'] = audio_format
+    config['audio']['n_octave'] = n_octave
+    config['device'] = device
+
     # Dividi i task (come prima)
-    logging.info(f"Processo {rank} ha {len(my_tasks)} task da elaborare.")
+    logging.info(f"Processo {rank} avviato su CPU {rank}.")
 
     # Itera sui task assegnati
-    for cut_secs, class_name in my_tasks:
-        try:
+    try:
+        for cut_secs, class_name in my_tasks:
             # Esegui la funzione di elaborazione degli embedding
-            process_class_with_cut_secs(clap_model, audio_embedding, config, cut_secs, n_octave,
-                                                      device, rank, start_log_data, class_name)
+            start_time = time.time()
+            process_class_with_cut_secs(clap_model, audio_embedding, class_name, cut_secs, n_octave, config)
+            process_time = time.time() - start_time
+            write_log(config['dirs']['root_target'], (cut_secs, class_name), process_time, rank, **config)
             # Aggiorna la barra di avanzamento locale (che invia il messaggio alla coda)
             if pbar_instance:
                 pbar_instance.update(1)
-        except Exception as e:
-            logging.error(f"Errore critico nel processo {rank}: {e}")
+    except Exception as e:
+        logging.error(f"Errore critico nel processo {rank} per task ({cut_secs}, {class_name}): {e}")
 
-        finally:
-            # Sincronizza i processi prima di distruggere il gruppo
-            cleanup_distributed_environment()
+    finally:
+        # Sincronizza i processi prima di distruggere il gruppo
+        cleanup_distributed_environment()
 
 
 ### Executions ###
@@ -318,7 +327,7 @@ def run_distributed_slurm(config_file, audio_format, n_octave, test=False):
             'data' : {}
         }
 
-    _, _, _, save_log_every, sampling_rate, ref, noise_perc, seed, center_freqs, cut_secs_list, \
+    classes_list, _, _, _, sampling_rate, ref, noise_perc, seed, center_freqs, cut_secs_list, \
                                     divisions_xc_sizes_names = get_config_from_yaml(config_file)
 
     config['spectrogram']['sr'] = sampling_rate
@@ -330,61 +339,25 @@ def run_distributed_slurm(config_file, audio_format, n_octave, test=False):
     config['data']['divisions_xc_sizes_names'] = divisions_xc_sizes_names
 
     basedir_raw_format = os.path.join(basedir_raw if not test else basedir_raw_test, f'{audio_format}')
-    H5_FILE_PATH = os.path.join(base_dir, f'SEC_SuperDataset_{audio_format}.h5') 
-    h5_manager = HDF5DatasetManager(H5_FILE_PATH)
-    if h5_manager.metadata_df is None:
-        logging.error("Impossibile caricare il dataset HDF5. Uscita.")
-        return 
-
-    classes_list = sorted(h5_manager.metadata_df['class'].unique())
 
     log_data = {}
     log_path = os.path.join(basedir_preprocessed if not test else basedir_preprocessed_test,
                                                     f'{audio_format}', f'{n_octave}_octave')
     try:
-        log_data = read_log(log_path)
-        logging.info(f"Ripresa da log: {log_data}")
+        with open(os.path.join(log_path, 'log.json', 'r') as f:
+            log_data = json.load(f)
+            logging.info(f"Ripresa da log: {log_data}")
     except FileNotFoundError:
         logging.info("Nessun log trovato, avvio una nuova esecuzione.")
-
-    log_cut_secs = log_data.get('cut_secs', None)
-    log_class_name = log_data.get('class_name', None)
-
-    # Questo flag indica se abbiamo raggiunto il punto di ripresa
-    found_resume_point = False
 
     all_tasks = []
     for cut_secs in cut_secs_list:
         for class_name in classes_list:
-            if log_data:
-                # Se siamo già oltre il punto di ripresa, mettiamo tutto in coda
-                if found_resume_point:
-                    tracks_to_run = h5_manager.get_class_tracks(class_to_process, config.seed, start_index_h5=None)
-                    all_tasks.append((cut_secs, class_name, tracks_to_run))
-                    continue
-                # Confronto lessicografico per trovare il punto di ripresa
-                if cut_secs > log_cut_secs:
-                    found_resume_point = True
-                    tracks_to_run = h5_manager.get_class_tracks(class_to_process, config.seed, start_index_h5=None)
-                    all_tasks.append((cut_secs, class_name, tracks_to_run))
-                    continue
-                elif cut_secs == log_cut_secs and class_name > log_class_name:
-                    found_resume_point = True
-                    tracks_to_run = h5_manager.get_class_tracks(class_to_process, config.seed, start_index_h5=None)
-                    all_tasks.append((cut_secs, class_name, tracks_to_run))
-                    continue
-                elif cut_secs == log_cut_secs and class_name == log_class_name:
-                    found_resume_point = True
-                    tracks_to_run = h5_manager.get_class_tracks(class_to_process, config.seed, config.start_index_h5)
-                    all_tasks.append((cut_secs, class_name, tracks_to_run))
-                    continue
-                else:
-                    # Salta i task precedenti al punto di ripresa
-                    logging.info(f"Skipping task: cut_secs={cut_secs}, class_name={class_name} (already completed)")
-                    continue
-            else:
-                # Nessun log, aggiungi tutti i task normalmente
+            if not log_data[(cut_secs, class_name)]:
                 all_tasks.append((cut_secs, class_name))
+            else:
+                # Salta i task già eseguiti
+                logging.info(f"Skipping task: cut_secs={cut_secs}, class_name={class_name} (already completed)")
     
     # Dividi i task per il rank corrente
     my_tasks = all_tasks[rank::world_size]
@@ -399,7 +372,7 @@ def run_distributed_slurm(config_file, audio_format, n_octave, test=False):
             pbar = MultiProcessTqdm(message_queue, "main_pbar", desc="Progresso Totale", total=len(all_tasks))
 
     # Esegui la logica del worker con la fetta di task
-    worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_tasks, log_data, pbar, test)
+    worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_tasks, pbar, test)
 
     # Assicurati che il rank 0 chiuda la pbar dopo che tutti hanno finito
     if rank == 0 and pbar:
@@ -408,9 +381,6 @@ def run_distributed_slurm(config_file, audio_format, n_octave, test=False):
     # delete_log (se vuoi una singola pulizia finale) dovrebbe essere chiamato solo dal rank 0
     if rank == 0:
         delete_log(log_path)
-
-    # close h5 manager
-    h5_manager.close()
 
     logging.info(f"Rank {rank}: tutti i processi hanno terminato il loro lavoro.")
 
@@ -440,7 +410,7 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size, test
             'data' : {}
         }
 
-    _, _, _, save_log_every, sampling_rate, ref, noise_perc, seed, center_freqs, cut_secs_list, \
+    classes_list, _, _, _, sampling_rate, ref, noise_perc, seed, center_freqs, cut_secs_list, \
                                     divisions_xc_sizes_names = get_config_from_yaml(config_file)
 
     config['spectrogram']['sr'] = sampling_rate
@@ -452,46 +422,25 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size, test
     config['data']['divisions_xc_sizes_names'] = divisions_xc_sizes_names
 
     basedir_raw_format = os.path.join(basedir_raw if not test else basedir_raw_test, f'{audio_format}')
-    classes_list = sorted([d for d in os.listdir(basedir_raw_format) if os.path.isdir(os.path.join(basedir_raw_format, d))])
 
     log_data = {}
     log_path = os.path.join(basedir_preprocessed if not test else basedir_preprocessed_test,
                                                     f'{audio_format}', f'{n_octave}_octave')
     try:
-        log_data = read_log(log_path)
-        logging.info(f"Ripresa da log: {log_data}")
+        with open(os.path.join(log_path, 'log.json', 'r') as f:
+            log_data = json.load(f)
+            logging.info(f"Ripresa da log: {log_data}")
     except FileNotFoundError:
         logging.info("Nessun log trovato, avvio una nuova esecuzione.")
-
-    log_cut_secs = log_data.get('cut_secs', None)
-    log_class_name = log_data.get('class_name', None)
 
     all_tasks = []
     for cut_secs in cut_secs_list:
         for class_name in classes_list:
-            if log_data:
-                # Se siamo già oltre il punto di ripresa, mettiamo tutto in coda
-                if found_resume_point:
-                    all_tasks.append((cut_secs, class_name))
-                    continue
-
-                # Confronto lessicografico per trovare il punto di ripresa
-                if cut_secs > log_cut_secs:
-                    found_resume_point = True
-                    all_tasks.append((cut_secs, class_name))
-                    continue
-                elif cut_secs == log_cut_secs and class_name >= log_class_name:
-                    found_resume_point = True
-                    # Inserisci il task in corso
-                    all_tasks.append((cut_secs, class_name))
-                    continue
-                else:
-                    # Salta i task precedenti al punto di ripresa
-                    logging.info(f"Skipping task: cut_secs={cut_secs}, class_name={class_name} (already completed)")
-                    continue
-            else:
-                # Nessun log, aggiungi tutti i task normalmente
+            if not log_data[(cut_secs, class_name)]:
                 all_tasks.append((cut_secs, class_name))
+            else:
+                # Salta i task già eseguiti
+                logging.info(f"Skipping task: cut_secs={cut_secs}, class_name={class_name} (already completed)")
 
     # Avvia i processi worker (come nel tuo codice iniziale)
     processes = []
@@ -509,7 +458,7 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size, test
         # Passa i task, il lock e le code a ogni processo
         my_tasks = all_tasks[rank::world_size]
         p = mp.Process(target=local_worker_process, args=(audio_format, n_octave, config, rank,
-                                                    world_size, my_tasks, log_data, pbar, test))
+                                                              world_size, my_tasks, pbar, test))
         p.start()
         processes.append(p)
         

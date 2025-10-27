@@ -7,10 +7,14 @@ import yaml
 def main():
     print("Generate new configuration file.")
     config_file = input("Insert config file name.")
+    classes = []
+    class_ = input("Insert classes")
+    while class_ != None:
+        classes.append(class_)
+        class_ = input("Insert classes")
     patience = input("Insert patience")
     epochs = input("Insert epochs")
     batch_size = input("Insert batch_size")
-    save_log_every = input("Insert save_log_every")
     sampling_rate = input("Insert sampling_rate")
     ref = input("Insert ref")
     noise_perc = input("Insert noise_perc")
@@ -32,10 +36,10 @@ def main():
     valid_size = input("Insert valid set size")
     test_size = input("Insert test set size")
     config = {
+        "classes" : classes
         "patience" : patience,
         "epochs" : epochs,
         "batch_size" : batch_size,
-        "save_log_every" : save_log_every,
         "sampling_rate" : sampling_rate,
         "ref" : ref,
         "noise_perc" : noise_perc,

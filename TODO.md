@@ -4,21 +4,6 @@
 ### Pending
 
 ```diff
-- /src/distributed_clap_embeddings.py ; worker_process_slurm ; 27/10/2025 - pending ; modify logging logic to take into
-- account class only (no more inner loop counters)
-- /src/distributed_clap_embeddings.py ; run_distributed_slurm ; 27/10/2025 - pending ; fix function according to new logic
-- /src/distributed_clap_embeddings.py ; local_worker_process ; 27/10/2025 - pending ; readapt function according to new
-- worker_process_slurm version
-- /src/distributed_clap_embeddings.py ; run_local_multiprocess ; 27/10/2025 - pending ; readapt function according to new
-- run_distributed_slurm version
-```
----------------------------------------------------------------------------------------------------------------
-```diff
-- /scr/utils.py ; read_log, write_log, delete_log ; 27/10/2025 - pending ; readapt those functions to take into account
-- new logging logic (possibly simply use logging library)
-```
----------------------------------------------------------------------------------------------------------------
-```diff
 - /src/tests ;  27/10/2025 - pending ; write new tests for all new utils functions and classes
 ```
 ---------------------------------------------------------------------------------------------------------------
@@ -88,3 +73,12 @@
 - /src/distributed_finetuning.py ; ; 20/08/2025 - 09/09/2025 ; develop support for other classifier models
 - /run_tests.sh ; ; 18/08/2025 - 09/09/2025 ; add other tests and implement correctness check
 - src/distributed_clap_embeddings.py ; process_class_with_cut_secs ; 23/09/2025 - 23/09/2025 ; update cancelling logic according to new hdf5 framework
+- /src/distributed_clap_embeddings.py ; worker_process_slurm ; 27/10/2025 - 27/10/2025 ; modify logging logic to take into
+account class only (no more inner loop counters)
+- /src/distributed_clap_embeddings.py ; run_distributed_slurm ; 27/10/2025 - 27/10/2025 ; fix function according to new logic
+- /src/distributed_clap_embeddings.py ; local_worker_process ; 27/10/2025 - 27/10/2025 ; readapt function according to new
+worker_process_slurm version
+- /src/distributed_clap_embeddings.py ; run_local_multiprocess ; 27/10/2025 - 27/10/2025 ; readapt function according to new
+run_distributed_slurm version
+- /scr/utils.py ; read_log, write_log, delete_log ; 27/10/2025 - 27/10/2025 ; readapt those functions to take into account
+new logging logic (possibly simply use logging library)
