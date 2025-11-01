@@ -20,6 +20,9 @@ __all__ = [
            "HDF5EmbeddingDatasetsManager",
            "combine_hdf5_files",
 
+           "get_track_reproducibility_parameters",
+           "reconstruct_tracks_from_embeddings",
+
            "setup_environ_vars",
            "setup_distributed_environment",
            "cleanup_distributed_environment"
@@ -181,7 +184,7 @@ class HDF5DatasetManager:
         # Permuta gli indici (non i valori originali)
         # df.sample(frac=1, random_state=...) è il modo più pulito con Pandas
         to_permute = self.metadata_df.copy()
-        return to_permute.sample(frac=1, random_state=unique_seed).reset_index(drop=False)
+        return to_permute.sample(frac=1, random_state=seed).reset_index(drop=False)
 
     def close(self):
         """Chiude il file HDF5."""
@@ -298,8 +301,8 @@ class HDF5EmbeddingDatasetsManager(Dataset):
         self.spectrograms_buffer.append(spectrogram)
         self.hash_keys_buffer.append(hash_keys)
         self.track_names_buffer.append(track_name)
-        self.classes_buffer.append(class_)
-        self.subclasses_buffer.append(subclass)
+        self.classes_buffer.append(class_ if class_ else [None] * len(embedding))
+        self.subclasses_buffer.append(subclass if subclass else [None] * len(embedding)
 
     def flush_buffers(self):
         """
@@ -395,7 +398,7 @@ def combine_hdf5_files(root_dir, cut_secs_list, audio_format, splits_list=['trai
 
             logging.info(f"Combinazione completata per '{split_name}'. File salvato in: {output_h5_path}")
 
-def get_track_reproducibility_parameters(self, idx):
+def get_track_reproducibility_parameters(idx):
     """
     Gives a dictionary containing all the information to reconstruct the track
     an embedding was generated from. Needs the ID key for that embedding.
@@ -434,7 +437,7 @@ def reconstruct_tracks_from_embeddings(base_tracks_dir, hdf5_emb_path, idx_list)
        has to be relative to an entire split for completeness;
      - idx_list (list): list containing the embedding indices formatted in
        the appropriate way:
-       ((class)_(track hdf5 index)_(bucket number)_(round_)_(results number));
+       ((class_idx)_(track hdf5 index)_(bucket number)_(round_)_(results number));
 
     returns:
      - reconstr_tracks (dict): dict of the recontructed tracks
