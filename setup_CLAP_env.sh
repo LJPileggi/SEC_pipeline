@@ -3,6 +3,20 @@
 # Script di Setup Iniziale dell'Ambiente CLAP su Cineca (Flusso Apptainer/Docker)
 # Eseguire SOLO UNA VOLTA sul nodo di login.
 
+# --------------------------------------------------------------------------------
+# CARICAMENTO MODULI NECESSARI
+# --------------------------------------------------------------------------------
+echo "Caricamento del modulo Apptainer..."
+module load apptainer/1.2.5 # o una versione simile, controlla la versione disponibile
+# Oppure, per essere più generico e prendere l'ultima/default
+# module load apptainer 
+
+if [ $? -ne 0 ]; then
+    echo "ERRORE: Impossibile caricare il modulo Apptainer. Verifica la disponibilità."
+    exit 1
+fi
+echo "Modulo Apptainer caricato."
+
 # --- 1. VARIABILI DI CONFIGURAZIONE ---
 # Cerca la variabile nell'ambiente ($DOCKER_USER) o come primo argomento ($1)
 YOUR_DOCKER_USERNAME="${DOCKER_USER:-$1}" 
