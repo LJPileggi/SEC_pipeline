@@ -18,7 +18,7 @@ fi
 
 # --- 2. VARIABILI E PERCORSI ---
 # NOTA BENE: Se stai lavorando nella tua area su /leonardo_scratch/large/$USER/
-USER_SCRATCH="/leonardo_scratch/large/$USER"
+USER_SCRATCH="/leonardo_scratch/large/userexternal/$USER"
 PROJECT_ROOT_DIR="$USER_SCRATCH/SEC_pipeline" 
 
 CLAP_WEIGHTS_DIR="$PROJECT_ROOT_DIR/.clap_weights"
