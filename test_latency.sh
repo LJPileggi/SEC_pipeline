@@ -47,23 +47,23 @@ export CLAP_TEXT_ENCODER_PATH="/usr/local/clap_cache/tokenizer_model/"
 # Il percorso locale dove abbiamo copiato i pesi del modello CLAP
 export LOCAL_CLAP_WEIGHTS_PATH="$CLAP_LOCAL_WEIGHTS"
 
-# --- 3. ESECUZIONE (APPtainer/Singularity) ---
+# --- 3. ESECUZIONE (Apptainer/Singularity) ---
 
-echo "Avvio del test di import tramite Apptainer..."
+echo "Avvio del test di import tramite singularity..."
 
 # Esegui lo script Python che misura il tempo di import
-TIME_START_APPTAINER=$(date +%s.%N)
+TIME_START_singularity=$(date +%s.%N)
 
-# Usiamo /usr/bin/time per una misurazione dettagliata della chiamata Apptainer
-/usr/bin/time -v apptainer exec \
+# Usiamo /usr/bin/time per una misurazione dettagliata della chiamata singularity
+/usr/bin/time -v singularity exec \
     --bind $TEMP_DIR:/tmp_data \
     "$SIF_FILE" \
     python "$PYTHON_SCRIPT"
 
 EXIT_CODE=$?
 
-TIME_END_APPTAINER=$(date +%s.%N)
-echo "Tempo ESECUZIONE APPTAINER TOTALE: $(echo \"$TIME_END_APPTAINER - $TIME_START_APPTAINER\" | bc) s"
+TIME_END_singularity=$(date +%s.%N)
+echo "Tempo ESECUZIONE singularity TOTALE: $(echo \"$TIME_END_singularity - $TIME_START_singularity\" | bc) s"
 
 # --- 4. PULIZIA ---
 TIME_START_RM=$(date +%s.%N)

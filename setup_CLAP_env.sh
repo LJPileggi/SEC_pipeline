@@ -1,21 +1,21 @@
 #!/bin/bash
 #
-# Script di Setup Iniziale dell'Ambiente CLAP su Cineca (Flusso Apptainer/Docker)
+# Script di Setup Iniziale dell'Ambiente CLAP su Cineca (Flusso singularity/Docker)
 # Eseguire SOLO UNA VOLTA sul nodo di login.
 
 # --------------------------------------------------------------------------------
 # CARICAMENTO MODULI NECESSARI
 # --------------------------------------------------------------------------------
-echo "Caricamento del modulo Apptainer..."
-module load apptainer/1.2.5 # o una versione simile, controlla la versione disponibile
+echo "Caricamento del modulo singularity..."
+module load singularity/1.2.5 # o una versione simile, controlla la versione disponibile
 # Oppure, per essere più generico e prendere l'ultima/default
-# module load apptainer 
+# module load singularity 
 
 if [ $? -ne 0 ]; then
-    echo "ERRORE: Impossibile caricare il modulo Apptainer. Verifica la disponibilità."
+    echo "ERRORE: Impossibile caricare il modulo singularity. Verifica la disponibilità."
     exit 1
 fi
-echo "Modulo Apptainer caricato."
+echo "Modulo singularity caricato."
 
 # --- 1. VARIABILI DI CONFIGURAZIONE ---
 # Cerca la variabile nell'ambiente ($DOCKER_USER) o come primo argomento ($1)
@@ -73,9 +73,9 @@ fi
 # --- 5. DOWNLOAD E CONVERSIONE DEL CONTAINER (.SIF) ---
 echo "Controllo e download/conversione dell'immagine Docker da Hub (Utente: $YOUR_DOCKER_USERNAME)..."
 if [ -f "$SIF_PATH" ]; then
-    echo "Immagine Apptainer (.sif) già presente. Salto il pull."
+    echo "Immagine singularity (.sif) già presente. Salto il pull."
 else
-    apptainer pull "$SIF_PATH" docker://"$YOUR_DOCKER_USERNAME"/clap_pipeline:latest
+    singularity pull "$SIF_PATH" docker://"$YOUR_DOCKER_USERNAME"/clap_pipeline:latest
     if [ $? -ne 0 ]; then
         echo "ERRORE CRITICO: Pull del container fallito. Controlla che l'immagine sia pubblica o che tu sia autenticato."
         exit 1

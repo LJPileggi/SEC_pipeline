@@ -32,12 +32,12 @@ export CLAP_TEXT_ENCODER_PATH="/usr/local/clap_cache/tokenizer_model/"
 # Il percorso locale dove abbiamo copiato i pesi del modello CLAP
 export LOCAL_CLAP_WEIGHTS_PATH="$CLAP_LOCAL_WEIGHTS"
 
-# --- 3. ESECUZIONE (APPtainer/Singularity) ---
+# --- 3. ESECUZIONE (Apptainer/Singularity) ---
 
-echo "Avvio della pipeline CLAP tramite Apptainer..."
+echo "Avvio della pipeline CLAP tramite singularity..."
 
 embed_test="./tests/test_embeddings.py"
-apptainer exec \
+singularity exec \
     --bind $TEMP_DIR:/tmp_data \
     "$SIF_FILE" \
     python "$embed_test"
@@ -61,7 +61,7 @@ AUDIO_FORMAT="wav"
 N_OCTAVE=3
 TEST=True
 
-apptainer exec \
+singularity exec \
     --bind $TEMP_DIR:/tmp_data \
     "$SIF_FILE" \
     python "$TEMP_LOG_MERGE_SCRIPT" "$AUDIO_FORMAT" "$N_OCTAVE" "$TEST"
