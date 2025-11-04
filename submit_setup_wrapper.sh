@@ -4,7 +4,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --time=00:30:00       # 30 minuti sono un tempo ragionevole per il download
 #SBATCH --mem=8GB             # Richiediamo 8GB di RAM per la fase di 'squashfs'
-#SBATCH -p bsc_serial         # Partizione generale per task che non richiedono GPU
+#SBATCH -p boost_usr_prod         # Partizione generale per task che non richiedono GPU
 #SBATCH -A IscrC_Pb-skite     # Il tuo account
 
 # --- VARIABILE DOCKER HUB ---
