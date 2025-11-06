@@ -21,6 +21,14 @@ fi
 USER_SCRATCH="/leonardo_scratch/large/userexternal/$USER"
 PROJECT_ROOT_DIR="$USER_SCRATCH/SEC_pipeline" 
 
+# [NUOVA AGGIUNTA FONDAMENTALE] 
+# Forziamo Singularity a usare la nostra area scratch per i file temporanei e la cache, 
+# aggirando i limiti di quota della directory HOME.
+export SINGULARITY_TMPDIR="$USER_SCRATCH/singularity_tmp"
+
+# Creiamo la cartella temporanea se non esiste
+mkdir -p "$SINGULARITY_TMPDIR"
+
 CLAP_WEIGHTS_DIR="$PROJECT_ROOT_DIR/.clap_weights"
 CLAP_WEIGHTS_FILE="CLAP_weights_2023.pth"
 CLAP_WEIGHTS_PATH="${CLAP_WEIGHTS_DIR}/${CLAP_WEIGHTS_FILE}"
