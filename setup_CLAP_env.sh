@@ -21,6 +21,10 @@ fi
 USER_SCRATCH="/leonardo_scratch/large/userexternal/$USER"
 PROJECT_ROOT_DIR="$USER_SCRATCH/SEC_pipeline" 
 
+# [AGGIUNTA FONDAMENTALE] - Disabilita la cache del filesystem
+# Questo risolve i problemi con xattrs su filesystem come Lustre
+export SINGULARITY_DISABLE_FSCACHE=true
+
 # [NUOVA AGGIUNTA FONDAMENTALE] - Forza la directory di CACHE per i blob scaricati
 # (Questo risolve il problema "disk quota exceeded" nella home)
 export SINGULARITY_CACHEDIR="$USER_SCRATCH/singularity_cache"
