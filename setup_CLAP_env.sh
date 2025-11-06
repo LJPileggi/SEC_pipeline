@@ -21,16 +21,17 @@ fi
 USER_SCRATCH="/leonardo_scratch/large/userexternal/$USER"
 PROJECT_ROOT_DIR="$USER_SCRATCH/SEC_pipeline" 
 
-# [NUOVA AGGIUNTA FONDAMENTALE] 
-# Forziamo Singularity a usare la nostra area scratch per i file temporanei e la cache, 
-# aggirando i limiti di quota della directory HOME.
+# [NUOVA AGGIUNTA FONDAMENTALE] - Forza la directory di CACHE per i blob scaricati
+# (Questo risolve il problema "disk quota exceeded" nella home)
+export SINGULARITY_CACHEDIR="$USER_SCRATCH/singularity_cache"
+
+# [VARIABILE GIÀ PRESENTE] - Forza lo spazio temporaneo per l'assemblaggio
 export SINGULARITY_TMPDIR="$USER_SCRATCH/singularity_tmp"
 
-echo "DEBUG: Valore di SINGULARITY_TMPDIR appena impostato: $SINGULARITY_TMPDIR"
-# Visualizza l'intero ambiente per cercare potenziali sovrascritture
-env | grep SINGULARITY_TMPDIR
-
-# Creiamo la cartella temporanea se non esiste
+# Creiamo entrambe le cartelle se non esistono
+echo "Impostazione CACHEDIR a: $SINGULARITY_CACHEDIR"
+mkdir -p "$SINGULARITY_CACHEDIR"
+echo "Impostazione TMPDIR a: $SINGULARITY_TMPDIR"
 mkdir -p "$SINGULARITY_TMPDIR"
 
 CLAP_WEIGHTS_DIR="$PROJECT_ROOT_DIR/.clap_weights"
@@ -67,9 +68,6 @@ else
     fi
     echo "Download dei pesi CLAP completato con successo."
 fi
-
-echo "DEBUG: Valore di SINGULARITY_TMPDIR prima del pull: $SINGULARITY_TMPDIR"
-env | grep SINGULARITY_TMPDIR
 
 # --- 5. DOWNLOAD E CONVERSIONE DEL CONTAINER (.SIF) ---
 echo "Controllo e download/conversione dell'immagine Docker da Hub (Utente: $YOUR_DOCKER_USERNAME)..."
