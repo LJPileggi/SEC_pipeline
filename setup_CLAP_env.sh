@@ -26,6 +26,10 @@ PROJECT_ROOT_DIR="$USER_SCRATCH/SEC_pipeline"
 # aggirando i limiti di quota della directory HOME.
 export SINGULARITY_TMPDIR="$USER_SCRATCH/singularity_tmp"
 
+echo "DEBUG: Valore di SINGULARITY_TMPDIR appena impostato: $SINGULARITY_TMPDIR"
+# Visualizza l'intero ambiente per cercare potenziali sovrascritture
+env | grep SINGULARITY_TMPDIR
+
 # Creiamo la cartella temporanea se non esiste
 mkdir -p "$SINGULARITY_TMPDIR"
 
@@ -63,6 +67,9 @@ else
     fi
     echo "Download dei pesi CLAP completato con successo."
 fi
+
+echo "DEBUG: Valore di SINGULARITY_TMPDIR prima del pull: $SINGULARITY_TMPDIR"
+env | grep SINGULARITY_TMPDIR
 
 # --- 5. DOWNLOAD E CONVERSIONE DEL CONTAINER (.SIF) ---
 echo "Controllo e download/conversione dell'immagine Docker da Hub (Utente: $YOUR_DOCKER_USERNAME)..."
