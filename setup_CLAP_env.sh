@@ -78,7 +78,8 @@ echo "Controllo e download/conversione dell'immagine Docker da Hub (Utente: $YOU
 if [ -f "$SIF_PATH" ]; then
     echo "Immagine singularity (.sif) già presente. Salto il pull."
 else
-    singularity pull "$SIF_PATH" docker://"$YOUR_DOCKER_USERNAME"/clap_pipeline:latest
+    # singularity pull "$SIF_PATH" docker://"$YOUR_DOCKER_USERNAME"/clap_pipeline:latest
+    singularity pull "$SIF_PATH" docker://alpine:latest
     if [ $? -ne 0 ]; then
         echo "ERRORE CRITICO: Pull del container fallito. Controlla che l'immagine sia pubblica o che tu sia autenticato."
         exit 1
