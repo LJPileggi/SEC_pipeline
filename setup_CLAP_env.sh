@@ -75,16 +75,35 @@ fi
 
 # --- 5. DOWNLOAD E CONVERSIONE DEL CONTAINER (.SIF) ---
 echo "Controllo e download/conversione dell'immagine Docker da Hub (Utente: $YOUR_DOCKER_USERNAME)..."
-if [ -f "$SIF_PATH" ]; then
-    echo "Immagine singularity (.sif) già presente. Salto il pull."
-else
-    singularity pull --no-cleanup "$SIF_PATH" docker://"$YOUR_DOCKER_USERNAME"/clap_pipeline:latest
-    # singularity pull "$SIF_PATH" docker://alpine:latest
+
+# --- NUOVA AREA DI PULL LOCALE ---
+# Serve per bypassare errore Unrecognised xattr prefix lustre.lov di Lustre su Leonardo
+LOCAL_PULL_DIR="/scratch_local/$USER"
+LOCAL_SIF_PATH="${LOCAL_PULL_DIR}/clap_pipeline.sif"
+
+echo "Preparazione del pull nell'area locale temporanea: $LOCAL_PULL_DIR"
+mkdir -p "$LOCAL_PULL_DIR"
+
+# Eseguire il pull nell'area locale
+if [ ! -f "$SIF_PATH" ]; then # Controlla se il SIF finale esiste
+    singularity pull --no-cleanup "$LOCAL_SIF_PATH" docker://"$YOUR_DOCKER_USERNAME"/clap_pipeline:latest
+
     if [ $? -ne 0 ]; then
-        echo "ERRORE CRITICO: Pull del container fallito. Controlla che l'immagine sia pubblica o che tu sia autenticato."
+        echo "ERRORE CRITICO: Pull del container fallito in $LOCAL_PULL_DIR."
         exit 1
     fi
-    echo "Download e conversione del container completati con successo."
+    echo "Download e conversione del container completati con successo nell'area locale."
+
+    # --- Passo 2 - Spostamento ---
+    echo "Spostamento del container SIF nella destinazione finale su Lustre: $SIF_PATH"
+    mv "$LOCAL_SIF_PATH" "$SIF_PATH"
+
+    if [ $? -ne 0 ]; then
+        echo "ERRORE CRITICO: Spostamento del file SIF fallito. Controlla i permessi."
+        exit 1
+    fi
+else
+    echo "Immagine singularity (.sif) già presente. Salto il pull."
 fi
 
 echo "Setup dell'ambiente CLAP su Cineca completato con successo. Immagine pronta per l'uso."
