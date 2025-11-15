@@ -84,37 +84,50 @@ echo "rclone è disponibile: $(command -v rclone)"
 # --- FINE CONTROLLO RCLONE ---
 
 # --- 5. DOWNLOAD DEL CONTAINER (.SIF) ---
-echo "Controllo e download del container da Hub (Utente: $YOUR_DOCKER_USERNAME)..."
+echo "--- 5. DOWNLOAD CONTAINER ---"
 
-# Eseguire il pull nell'area locale
-if [ ! -f "$SIF_PATH" ]; then # Controlla se il SIF finale esiste
-    echo "Setup correct rclone config for transfer."
-    module load rclone 2>/dev/null
-    rclone config
+# La variabile SIF_PATH dovrebbe essere definita all'inizio dello script
+# Esempio: SIF_PATH="$CONTAINER_DIR/clap_pipeline.sif"
 
-    RCLONE_REMOTE="$1"
-    SOURCE_FOLDER="$2"
+# Rimuovi qualsiasi 'module load rclone' residuo da qui!
+# DEVE ESSERE STATO GESTITO NEL PUNTO 4.
 
-    # Verifica che i parametri siano stati passati correttamente
-    if [ -z "$RCLONE_REMOTE" ] || [ -z "$SOURCE_FOLDER" ]; then
-        echo "ERRORE CRITICO: Parametri rclone mancanti. Esegui lo script con ./setup_CLAP_env.sh <NOME_REMOTO> <NOME_CARTELLA_DRIVE>"
-        exit 1
-    fi
-    
-    # Questo comando deve essere eseguito la prima volta per configurare il remoto di rclone
-    # NON deve essere nello script di setup automatico se l'autenticazione è interattiva.
-    # rclone config
+# CORREZIONE SINTASSI: Nessuno spazio attorno a '='
+RCLONE_REMOTE="$1"
+SOURCE_FOLDER="$2"
 
-    echo "Downloading SIF file from remote source..."
-    rclone copy "$RCLONE_REMOTE:$SOURCE_FOLDER/clap_pipeline.sif" "$CONTAINER_DIR"
-
-    if [ $? -ne 0 ]; then
-        echo "CRITICAL ERROR: container download in $CONTAINER_DIR failed."
-        exit 1
-    fi
-    echo "Download e conversione del container completati con successo nell'area locale."
-else
-    echo "Immagine singularity (.sif) già presente. Salto il pull."
+# Verifica che i parametri siano stati passati correttamente
+if [ -z "$RCLONE_REMOTE" ] || [ -z "$SOURCE_FOLDER" ]; then
+    echo "ERRORE CRITICO: Parametri rclone mancanti. Esegui lo script con ./setup_CLAP_env.sh <NOME_REMOTO_RCLONE> <NOME_CARTELLA_DRIVE>"
+    exit 1
 fi
 
+# Controlla se il SIF finale esiste
+if [ ! -f "$SIF_PATH" ]; then
+    echo "Container SIF non trovato. Tentativo di download da Google Drive..."
+    
+    # Verifica che il remoto rclone sia configurato
+    # Questo è un controllo di base, non avvia la configurazione interattiva
+    if ! rclone config show "$RCLONE_REMOTE" &> /dev/null; then
+        echo "ERRORE CRITICO: Il remoto rclone '$RCLONE_REMOTE' non è configurato. Esegui 'rclone config' manualmente una volta."
+        exit 1
+    fi
+
+    echo "Avvio download del file SIF da '$RCLONE_REMOTE:$SOURCE_FOLDER/clap_pipeline.sif' a '$CONTAINER_DIR'..."
+    
+    # Esegue il comando rclone copy
+    rclone copy "$RCLONE_REMOTE:$SOURCE_FOLDER/clap_pipeline.sif" "$CONTAINER_DIR"
+    
+    # CONTROLLO RIGOROSO DELL'ESITO DEL COMANDO
+    if [ $? -ne 0 ]; then
+        echo "ERRORE CRITICO: Download del container SIF con rclone fallito. Controllare i log sopra."
+        echo "Verificare: 1. Nomi remoti e cartelle. 2. Stato della connessione Drive."
+        exit 1
+    fi
+    echo "Download del container SIF completato con successo nell'area locale."
+else
+    echo "Immagine singularity (.sif) già presente in '$SIF_PATH'. Salto il download."
+fi
+
+echo "--- FINE DOWNLOAD CONTAINER ---"
 echo "Setup dell'ambiente CLAP su Cineca completato con successo. Immagine pronta per l'uso."
