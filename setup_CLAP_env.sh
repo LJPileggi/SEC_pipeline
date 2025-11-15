@@ -40,24 +40,24 @@ else
 fi
 
 # --- 4. CONTROLLO E INSTALLAZIONE DI RCLONE PER TRASFERIMENTO CLOUD ---
-echo "--- 6. CONTROLLO RCLONE ---"
-
+echo "CONTROLLO RCLONE"
 # 1. Tenta di caricare il modulo CINECA (il metodo preferito)
 module load rclone 2>/dev/null
 
-# 2. Controlla se rclone è ora disponibile (o se era già nel PATH)
+# Controlla se rclone è ora disponibile
 if ! command -v rclone &> /dev/null; then
-    echo "rclone non trovato o modulo non disponibile. Tentativo di installazione locale in ~/bin/..."
+    echo "rclone non trovato o modulo non disponibile. Tentativo di installazione locale in area Scratch..."
     
-    # Variabili per l'installazione locale
+    # NUOVA POSIZIONE DI INSTALLAZIONE NELL'AREA SCRATCH PER EVITARE LA QUOTA HOME
     RCLONE_VERSION="1.66.0" 
-    ARCH="amd64" # Architettura standard per i nodi login di Leonardo
-    INSTALL_DIR="$HOME/bin"
+    ARCH="amd64" 
+    INSTALL_DIR="$PROJECT_ROOT_DIR/bin" # Installazione nello Scratch
     TEMP_FILE="rclone-v${RCLONE_VERSION}-linux-${ARCH}.zip"
 
-    # Creazione della cartella bin
+    # Creazione della cartella bin e aggiunta al PATH per questa sessione
     mkdir -p "$INSTALL_DIR"
-    
+    export PATH="$INSTALL_DIR:$PATH" # Aggiunge il path prima del download
+
     # Download del binario
     if wget -q -O "$TEMP_FILE" "https://downloads.rclone.org/v${RCLONE_VERSION}/rclone-v${RCLONE_VERSION}-linux-${ARCH}.zip"; then
         echo "Download rclone completato."
@@ -68,11 +68,9 @@ if ! command -v rclone &> /dev/null; then
     
     # Decompressione e installazione
     unzip -q "$TEMP_FILE"
-    
-    # La cartella scompattata avrà la versione inclusa nel nome
     FOLDER_NAME="rclone-v${RCLONE_VERSION}-linux-${ARCH}"
     
-    # Spostamento dell'eseguibile nella cartella bin personale
+    # Spostamento dell'eseguibile nella cartella bin personale nello scratch
     cp "$FOLDER_NAME/rclone" "$INSTALL_DIR/"
     chmod +x "$INSTALL_DIR/rclone"
     
@@ -80,9 +78,6 @@ if ! command -v rclone &> /dev/null; then
     rm -rf "$FOLDER_NAME" "$TEMP_FILE"
     
     echo "rclone v${RCLONE_VERSION} installato con successo in $INSTALL_DIR/."
-    
-    # Aggiungi la cartella bin al PATH per questa sessione (utile se non è persistente)
-    export PATH="$INSTALL_DIR:$PATH"
 fi
 
 echo "rclone è disponibile: $(command -v rclone)"
@@ -97,8 +92,18 @@ if [ ! -f "$SIF_PATH" ]; then # Controlla se il SIF finale esiste
     module load rclone
     rclone config
 
-    RCLONE_REMOTE = $1
-    SOURCE_FOLDER = $2
+    RCLONE_REMOTE="$1"
+    SOURCE_FOLDER="$2"
+
+    # Verifica che i parametri siano stati passati correttamente
+    if [ -z "$RCLONE_REMOTE" ] || [ -z "$SOURCE_FOLDER" ]; then
+        echo "ERRORE CRITICO: Parametri rclone mancanti. Esegui lo script con ./setup_CLAP_env.sh <NOME_REMOTO> <NOME_CARTELLA_DRIVE>"
+        exit 1
+    fi
+    
+    # Questo comando deve essere eseguito la prima volta per configurare il remoto di rclone
+    # NON deve essere nello script di setup automatico se l'autenticazione è interattiva.
+    # rclone config
 
     echo "Downloading SIF file from remote source..."
     rclone copy "$RCLONE_REMOTE:$SOURCE_FOLDER/clap_pipeline.sif" "$CONTAINER_DIR"
