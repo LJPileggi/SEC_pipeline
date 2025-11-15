@@ -15,15 +15,14 @@ from unittest.mock import patch, MagicMock
 # Assumendo che il file di test sia nella root o in una cartella 'tests'
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# Importa i moduli da testare
-try:
-    from src.distributed_clap_embeddings import run_distributed_slurm, run_local_multiprocess
-    # Importiamo i path di test da dirs_config per usarli nel test (assumiamo dirs_config in src)
-    from src.dirs_config import basedir_raw_test, basedir_preprocessed_test
-except ImportError as e:
-    # Gestione dell'errore di importazione
-    raise ImportError(f"Errore nell'importazione dei moduli src: {e}. Assicurati che 'src/' sia nel PYTHONPATH.")
+# Crea directory di test
+BASEDIR_TEST = os.path.join('..', 'tests')
+BASEDIR_RAW_TEST = os.path.join(BASEDIR_TEST, 'RAW_DATASET')
+BASEDIR_PREPROCESSED_TEST = os.path.join(BASEDIR_TEST, 'PREPROCESSED_DATASET')
 
+os.makedirs(BASEDIR_TEST, exist_ok=True)
+os.makedirs(BASEDIR_RAW_TEST, exist_ok=True)
+os.makedirs(BASEDIR_PREPROCESSED_TEST, exist_ok=True)
 
 # --- Configurazione Test ---
 TEST_CLASSES = ['Music', 'Voices', 'Birds']
@@ -102,7 +101,7 @@ def mock_process_class_with_cut_secs(clap_model, audio_embedding, class_to_proce
     """Simula il lavoro di embedding, creando i file HDF5 e i log finali di completamento."""
     
     # Simula il percorso di output (usa basedir_preprocessed_test per i test)
-    output_dir = os.path.join(basedir_preprocessed_test, TEST_AUDIO_FORMAT, f'{n_octave}_octave', f'cut_{cut_secs}')
+    output_dir = os.path.join(BASEDIR_PREPROCESSED_TEST, TEST_AUDIO_FORMAT, f'{n_octave}_octave', f'cut_{cut_secs}')
     os.makedirs(output_dir, exist_ok=True)
     h5_path = os.path.join(output_dir, f'{class_to_process}_emb.h5')
     
@@ -142,8 +141,8 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
         importlib.reload(dirs_config)
         
         # 2. Imposta i percorsi per il test
-        cls.raw_dir = dirs_config.basedir_raw_test # .../testing/RAW_DATASET
-        cls.preprocessed_dir = dirs_config.basedir_preprocessed_test # .../testing/PREPROCESSED_DATASET
+        cls.raw_dir = BASEDIR_RAW_TEST
+        cls.preprocessed_dir = BASEDIR_PREPROCESSED_TEST
         
         # 3. Crea il dataset HDF5 'RAW' fittizio
         global MOCKED_ALL_FILES_DF

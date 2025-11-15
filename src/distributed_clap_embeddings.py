@@ -184,7 +184,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
 
 ### Workers ###
 
-def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_tasks, pbar_instance=None, test=False):
+def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_tasks, pbar_instance=None):
     """
     Worker process for distributed training.
 
@@ -203,16 +203,14 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
      - world_size (int): total number of processes in the distributed group;
      - task_queue (mp.Queue): shared queue containing tuples of (cut_secs, class_name, tracks_to_run) to be processed;
      - start_log_data (dict): dictionary containing log data to resume processing from a specific checkpoint;
-     - pbar_instance: MultiProcessTqdm instance to implement a progress bar on rank 0;
-     - test (bool): whether to execute process for dummy testing dataset; defaul to False.
+     - pbar_instance: MultiProcessTqdm instance to implement a progress bar on rank 0.
     """
     device = setup_distributed_environment(rank, world_size)
 
     clap_model, audio_embedding, _ = CLAP_initializer(device, use_cuda=True)
 
-    config['dirs']['root_source'] = os.path.join(basedir_raw if not test else basedir_raw_test, f'{audio_format}')
-    config['dirs']['root_target'] = os.path.join(basedir_preprocessed if not test else basedir_preprocessed_test,
-                                                                          f'{audio_format}', f'{n_octave}_octave')
+    config['dirs']['root_source'] = os.path.join(basedir_raw, f'{audio_format}')
+    config['dirs']['root_target'] = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave')
     if not os.path.exists(config['dirs']['root_target']):
         os.makedirs(config['dirs']['root_target'])
     config['audio']['audio_format'] = audio_format
@@ -247,7 +245,7 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
 
 
 # Funzione Worker per l'ambiente locale (richiamata da mp.Process)
-def local_worker_process(audio_format, n_octave, config, rank, world_size, my_tasks, pbar_instance=None, test=False):
+def local_worker_process(audio_format, n_octave, config, rank, world_size, my_tasks, pbar_instance=None):
     """
     Funzione worker per l'esecuzione parallela in ambiente locale.
     """
@@ -255,9 +253,8 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
 
     clap_model, audio_embedding, _ = CLAP_initializer(device, use_cuda=True)
 
-    config['dirs']['root_source'] = os.path.join(basedir_raw if not test else basedir_raw_test, f'{audio_format}')
-    config['dirs']['root_target'] = os.path.join(basedir_preprocessed if not test else basedir_preprocessed_test,
-                                                                          f'{audio_format}', f'{n_octave}_octave')
+    config['dirs']['root_source'] = os.path.join(basedir_raw, f'{audio_format}')
+    config['dirs']['root_target'] = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave')
     if not os.path.exists(config['dirs']['root_target']):
         os.makedirs(config['dirs']['root_target'])
     config['audio']['audio_format'] = audio_format
@@ -288,7 +285,7 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
 
 ### Executions ###
 
-def run_distributed_slurm(config_file, audio_format, n_octave, test=False):
+def run_distributed_slurm(config_file, audio_format, n_octave):
     """
     Sets up and launches the distributed data generation pipeline.
 
@@ -303,8 +300,7 @@ def run_distributed_slurm(config_file, audio_format, n_octave, test=False):
     args:
      - config_file: name of the config file from shell;
      - audio_format: format of the audio to embed from shell;
-     - n_octave: octave band split for the spectrogram from shell;
-     - test (bool): whether to execute pipeline for dummy testing dataset; default to False.
+     - n_octave: octave band split for the spectrogram from shell.
     """
     # Questo è ora il punto di ingresso per OGNI processo SLURM (rank)
 
@@ -313,8 +309,7 @@ def run_distributed_slurm(config_file, audio_format, n_octave, test=False):
     rank, world_size = setup_environ_vars()
 
     # Inizializza il logging una volta per processo
-    embed_folder = os.path.join(basedir_preprocessed if not test else basedir_preprocessed_test,
-                                                        f'{audio_format}', f'{n_octave}_octave')
+    embed_folder = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave')
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s',
                                              handlers=[logging.StreamHandler(),
            logging.FileHandler(filename=os.path.join(embed_folder, 'log.txt'))])
@@ -338,11 +333,10 @@ def run_distributed_slurm(config_file, audio_format, n_octave, test=False):
     config['log']['save_log_every'] = save_log_every
     config['data']['divisions_xc_sizes_names'] = divisions_xc_sizes_names
 
-    basedir_raw_format = os.path.join(basedir_raw if not test else basedir_raw_test, f'{audio_format}')
+    basedir_raw_format = os.path.join(basedir_raw, f'{audio_format}')
 
     log_data = {}
-    log_path = os.path.join(basedir_preprocessed if not test else basedir_preprocessed_test,
-                                                    f'{audio_format}', f'{n_octave}_octave')
+    log_path = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave')
     try:
         with open(os.path.join(log_path, 'log.json', 'r') as f:
             log_data = json.load(f)
@@ -372,7 +366,7 @@ def run_distributed_slurm(config_file, audio_format, n_octave, test=False):
             pbar = MultiProcessTqdm(message_queue, "main_pbar", desc="Progresso Totale", total=len(all_tasks))
 
     # Esegui la logica del worker con la fetta di task
-    worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_tasks, pbar, test)
+    worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_tasks, pbar)
 
     # Assicurati che il rank 0 chiuda la pbar dopo che tutti hanno finito
     if rank == 0 and pbar:
@@ -385,7 +379,7 @@ def run_distributed_slurm(config_file, audio_format, n_octave, test=False):
     logging.info(f"Rank {rank}: tutti i processi hanno terminato il loro lavoro.")
 
 
-def run_local_multiprocess(config_file, audio_format, n_octave, world_size, test=False):
+def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
     """
     Funzione per l'esecuzione locale in parallelo.
     """
@@ -396,8 +390,7 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size, test
     # Prepara l'ambiente DDP locale (un solo processo parent)
     setup_environ_vars(False)
 
-    embed_folder = os.path.join(basedir_preprocessed if not test else basedir_preprocessed_test,
-                                                        f'{audio_format}', f'{n_octave}_octave')
+    embed_folder = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave')
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s',
                                              handlers=[logging.StreamHandler(),
                    logging.FileHandler(filename=os.path.join(embed_folder, f'log.txt'))])
@@ -421,11 +414,10 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size, test
     config['log']['save_log_every'] = save_log_every
     config['data']['divisions_xc_sizes_names'] = divisions_xc_sizes_names
 
-    basedir_raw_format = os.path.join(basedir_raw if not test else basedir_raw_test, f'{audio_format}')
+    basedir_raw_format = os.path.join(basedir_raw, f'{audio_format}')
 
     log_data = {}
-    log_path = os.path.join(basedir_preprocessed if not test else basedir_preprocessed_test,
-                                                    f'{audio_format}', f'{n_octave}_octave')
+    log_path = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave')
     try:
         with open(os.path.join(log_path, 'log.json', 'r') as f:
             log_data = json.load(f)
@@ -458,7 +450,7 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size, test
         # Passa i task, il lock e le code a ogni processo
         my_tasks = all_tasks[rank::world_size]
         p = mp.Process(target=local_worker_process, args=(audio_format, n_octave, config, rank,
-                                                              world_size, my_tasks, pbar, test))
+                                                                    world_size, my_tasks, pbar))
         p.start()
         processes.append(p)
         

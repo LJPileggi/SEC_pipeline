@@ -13,13 +13,6 @@ __all__ = ["basedir",
            "results_validation_filepath_project",
            "model_filepath",
 
-           "basedir_testing",
-           "basedir_raw_test",
-           "basedir_preprocessed_test",
-           "results_filepath_project_test",
-           "results_validation_filepath_project_test",
-           "model_filepath_test",
-
            "get_config_from_yaml",
            "write_log",
            "join_logs",
