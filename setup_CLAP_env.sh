@@ -89,7 +89,7 @@ echo "Controllo e download del container da Hub (Utente: $YOUR_DOCKER_USERNAME).
 # Eseguire il pull nell'area locale
 if [ ! -f "$SIF_PATH" ]; then # Controlla se il SIF finale esiste
     echo "Setup correct rclone config for transfer."
-    module load rclone
+    module load rclone 2>/dev/null
     rclone config
 
     RCLONE_REMOTE="$1"
