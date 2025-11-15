@@ -5,6 +5,7 @@ echo "Run once only on login node."
 echo "Args 1 and 2 have to be rclone remote and remote source folder."
 
 # --- 1. VARIABILI E PERCORSI ---
+echo "--- 1. VARIABILI E PERCORSI ---"
 # NOTA BENE: Se stai lavorando nella tua area su /leonardo_scratch/large/$USER/
 USER_SCRATCH="/leonardo_scratch/large/userexternal/$USER"
 PROJECT_ROOT_DIR="$USER_SCRATCH/SEC_pipeline" 
@@ -18,7 +19,7 @@ CONTAINER_DIR="$PROJECT_ROOT_DIR/.containers"
 SIF_PATH="$CONTAINER_DIR/clap_pipeline.sif"
 
 # --- 2. CREAZIONE DELLE DIRECTORY ---
-echo "Creazione delle directory di progetto e output..."
+echo "--- 2. CREAZIONE DELLE DIRECTORY ---"
 mkdir -p "$CLAP_WEIGHTS_DIR"
 mkdir -p "$CONTAINER_DIR"
 mkdir -p "$USER_SCRATCH/dataSEC/PREPROCESSED_DATASET"
@@ -26,7 +27,7 @@ mkdir -p "$USER_SCRATCH/dataSEC/results/validation"
 mkdir -p "$USER_SCRATCH/dataSEC/results/finetuned_model"
 
 # --- 3. DOWNLOAD CONDIZIONALE DEI PESI CLAP (.pth) ---
-echo "Controllo esistenza pesi CLAP..."
+echo "--- 3. DOWNLOAD CONDIZIONALE DEI PESI CLAP (.pth) ---"
 if [ -f "$CLAP_WEIGHTS_PATH" ]; then
     echo "Pesi CLAP già presenti. Salto il download."
 else
@@ -40,7 +41,7 @@ else
 fi
 
 # --- 4. CONTROLLO E INSTALLAZIONE DI RCLONE PER TRASFERIMENTO CLOUD ---
-echo "CONTROLLO RCLONE"
+echo "--- 4. CONTROLLO E INSTALLAZIONE DI RCLONE PER TRASFERIMENTO CLOUD ---"
 # 1. Tenta di caricare il modulo CINECA (il metodo preferito)
 module load rclone 2>/dev/null
 
@@ -86,42 +87,38 @@ echo "rclone è disponibile: $(command -v rclone)"
 # --- 5. DOWNLOAD DEL CONTAINER (.SIF) ---
 echo "--- 5. DOWNLOAD CONTAINER ---"
 
-# La variabile SIF_PATH dovrebbe essere definita all'inizio dello script
-# Esempio: SIF_PATH="$CONTAINER_DIR/clap_pipeline.sif"
-
-# Rimuovi qualsiasi 'module load rclone' residuo da qui!
-# DEVE ESSERE STATO GESTITO NEL PUNTO 4.
-
-# CORREZIONE SINTASSI: Nessuno spazio attorno a '='
 RCLONE_REMOTE="$1"
 SOURCE_FOLDER="$2"
+SIF_NAME="clap_pipeline.sif" # Nome del file SIF su Drive
 
-# Verifica che i parametri siano stati passati correttamente
+# 1. Verifica che i parametri siano stati passati
 if [ -z "$RCLONE_REMOTE" ] || [ -z "$SOURCE_FOLDER" ]; then
     echo "ERRORE CRITICO: Parametri rclone mancanti. Esegui lo script con ./setup_CLAP_env.sh <NOME_REMOTO_RCLONE> <NOME_CARTELLA_DRIVE>"
     exit 1
 fi
 
-# Controlla se il SIF finale esiste
+# 2. Controllo Condizionale sulla CONFIGURAZIONE di rclone
+echo "Controllo esistenza configurazione rclone per il remoto '$RCLONE_REMOTE'..."
+
+# rclone config show <remoto> restituisce un codice di uscita 0 solo se il remoto esiste
+if ! rclone config show "$RCLONE_REMOTE" &> /dev/null; then
+    echo "ERRORE CRITICO: Remoto rclone '$RCLONE_REMOTE' NON CONFIGURATO."
+    echo "Il sistema non può procedere senza l'autenticazione a Google Drive."
+    echo "--> Azione richiesta: Esegui il comando 'rclone config' sul nodo di login e configura il remoto con il nome '$RCLONE_REMOTE'."
+    exit 1
+fi
+
+echo "Configurazione rclone OK. Il remoto '$RCLONE_REMOTE' è pronto."
+
+# 3. Download Condizionale del Container SIF
 if [ ! -f "$SIF_PATH" ]; then
     echo "Container SIF non trovato. Tentativo di download da Google Drive..."
     
-    # Verifica che il remoto rclone sia configurato
-    # Questo è un controllo di base, non avvia la configurazione interattiva
-    if ! rclone config show "$RCLONE_REMOTE" &> /dev/null; then
-        echo "ERRORE CRITICO: Il remoto rclone '$RCLONE_REMOTE' non è configurato. Esegui 'rclone config' manualmente una volta."
-        exit 1
-    fi
-
-    echo "Avvio download del file SIF da '$RCLONE_REMOTE:$SOURCE_FOLDER/clap_pipeline.sif' a '$CONTAINER_DIR'..."
+    # Esegue il comando rclone copy (aggiunto -v per debug)
+    rclone -v copy "$RCLONE_REMOTE:$SOURCE_FOLDER/$SIF_NAME" "$CONTAINER_DIR"
     
-    # Esegue il comando rclone copy
-    rclone copy "$RCLONE_REMOTE:$SOURCE_FOLDER/clap_pipeline.sif" "$CONTAINER_DIR"
-    
-    # CONTROLLO RIGOROSO DELL'ESITO DEL COMANDO
     if [ $? -ne 0 ]; then
         echo "ERRORE CRITICO: Download del container SIF con rclone fallito. Controllare i log sopra."
-        echo "Verificare: 1. Nomi remoti e cartelle. 2. Stato della connessione Drive."
         exit 1
     fi
     echo "Download del container SIF completato con successo nell'area locale."
@@ -130,4 +127,3 @@ else
 fi
 
 echo "--- FINE DOWNLOAD CONTAINER ---"
-echo "Setup dell'ambiente CLAP su Cineca completato con successo. Immagine pronta per l'uso."
