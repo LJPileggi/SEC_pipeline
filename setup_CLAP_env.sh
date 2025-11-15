@@ -39,7 +39,56 @@ else
     echo "Download dei pesi CLAP completato con successo."
 fi
 
-# --- 4. DOWNLOAD DEL CONTAINER (.SIF) ---
+# --- 4. CONTROLLO E INSTALLAZIONE DI RCLONE PER TRASFERIMENTO CLOUD ---
+echo "--- 6. CONTROLLO RCLONE ---"
+
+# 1. Tenta di caricare il modulo CINECA (il metodo preferito)
+module load rclone 2>/dev/null
+
+# 2. Controlla se rclone è ora disponibile (o se era già nel PATH)
+if ! command -v rclone &> /dev/null; then
+    echo "rclone non trovato o modulo non disponibile. Tentativo di installazione locale in ~/bin/..."
+    
+    # Variabili per l'installazione locale
+    RCLONE_VERSION="1.66.0" 
+    ARCH="amd64" # Architettura standard per i nodi login di Leonardo
+    INSTALL_DIR="$HOME/bin"
+    TEMP_FILE="rclone-v${RCLONE_VERSION}-linux-${ARCH}.zip"
+
+    # Creazione della cartella bin
+    mkdir -p "$INSTALL_DIR"
+    
+    # Download del binario
+    if wget -q -O "$TEMP_FILE" "https://downloads.rclone.org/v${RCLONE_VERSION}/rclone-v${RCLONE_VERSION}-linux-${ARCH}.zip"; then
+        echo "Download rclone completato."
+    else
+        echo "ERRORE CRITICO: Download di rclone fallito. Controllare la versione e l'URL."
+        exit 1
+    fi
+    
+    # Decompressione e installazione
+    unzip -q "$TEMP_FILE"
+    
+    # La cartella scompattata avrà la versione inclusa nel nome
+    FOLDER_NAME="rclone-v${RCLONE_VERSION}-linux-${ARCH}"
+    
+    # Spostamento dell'eseguibile nella cartella bin personale
+    cp "$FOLDER_NAME/rclone" "$INSTALL_DIR/"
+    chmod +x "$INSTALL_DIR/rclone"
+    
+    # Pulizia
+    rm -rf "$FOLDER_NAME" "$TEMP_FILE"
+    
+    echo "rclone v${RCLONE_VERSION} installato con successo in $INSTALL_DIR/."
+    
+    # Aggiungi la cartella bin al PATH per questa sessione (utile se non è persistente)
+    export PATH="$INSTALL_DIR:$PATH"
+fi
+
+echo "rclone è disponibile: $(command -v rclone)"
+# --- FINE CONTROLLO RCLONE ---
+
+# --- 5. DOWNLOAD DEL CONTAINER (.SIF) ---
 echo "Controllo e download del container da Hub (Utente: $YOUR_DOCKER_USERNAME)..."
 
 # Eseguire il pull nell'area locale
@@ -48,11 +97,11 @@ if [ ! -f "$SIF_PATH" ]; then # Controlla se il SIF finale esiste
     module load rclone
     rclone config
 
-    RCLONE_REMOTE = "$1"
-    SCOURCE_FOLDER = "$2"
+    RCLONE_REMOTE = $1
+    SOURCE_FOLDER = $2
 
     echo "Downloading SIF file from remote source..."
-    rclone copy "$RCLONE_REMOTE:$SCOURCE_FOLDER/clap_pipeline.sif" "$CONTAINER_DIR"
+    rclone copy "$RCLONE_REMOTE:$SOURCE_FOLDER/clap_pipeline.sif" "$CONTAINER_DIR"
 
     if [ $? -ne 0 ]; then
         echo "CRITICAL ERROR: container download in $CONTAINER_DIR failed."
