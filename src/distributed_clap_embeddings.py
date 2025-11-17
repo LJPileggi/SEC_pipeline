@@ -121,57 +121,57 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                 n_buckets = math.ceil((track.shape[0] - offset) / window_size)
                 for b in range(n_buckets):
                 if results >= target_counts_list[di]:
-                    logging.info(f"Split '{division_names[di]}' completato con {results} elementi. Avvio flush...")
-                    # Passa al prossimo split e reinizializza
-                    di += 1
-                    if di >= len(division_names):
-                        # flush existing buffers and close hdf5 files
-                        split_emb_dataset_manager.flush_buffers()
-                        split_emb_dataset_manager.close()
-                        audio_dataset_manager.close()
-                        logging.info(f"Classe '{class_to_process}' elaborata. Creazioni totali: {results}")
-                        return
-                    else:
-                        # flush existing buffers and initialise new split file
-                        split_emb_dataset_manager.flush_buffers()
-                        split_emb_dataset_manager.close()
-                        split_emb_dataset_manager = HDF5EmbeddingDatasetsManager(os.path.join(target_class_dir,
-                                        f'{class_to_process}_{division_names[di]}_{audio_format}_emb.h5'), 'a')
-                        split_emb_dataset_manager.initialize_hdf5(embedding_dim, spec_shape, audio_format, cut_secs,
-                                              n_octave, seed, sr, noise_perc, division_names[di], class_to_process)
+                        logging.info(f"Split '{division_names[di]}' completato con {results} elementi. Avvio flush...")
+                        # Passa al prossimo split e reinizializza
+                        di += 1
+                        if di >= len(division_names):
+                            # flush existing buffers and close hdf5 files
+                            split_emb_dataset_manager.flush_buffers()
+                            split_emb_dataset_manager.close()
+                            audio_dataset_manager.close()
+                            logging.info(f"Classe '{class_to_process}' elaborata. Creazioni totali: {results}")
+                            return
+                        else:
+                            # flush existing buffers and initialise new split file
+                            split_emb_dataset_manager.flush_buffers()
+                            split_emb_dataset_manager.close()
+                            split_emb_dataset_manager = HDF5EmbeddingDatasetsManager(os.path.join(target_class_dir,
+                                            f'{class_to_process}_{division_names[di]}_{audio_format}_emb.h5'), 'a')
+                            split_emb_dataset_manager.initialize_hdf5(embedding_dim, spec_shape, audio_format, cut_secs,
+                                                  n_octave, seed, sr, noise_perc, division_names[di], class_to_process)
 
-                    # the primary keys for the embedding follow the following format:
-                    # (class_idx)_(track hdf5 index)_(bucket number)_(round_)_(results number)
-                    emb_pkey = f"{audio_dataset_manager.hf.attrs['class_idx']}_{track_idx}_{b}_{round}_{results}"
+                        # the primary keys for the embedding follow the following format:
+                        # (class_idx)_(track hdf5 index)_(bucket number)_(round_)_(results number)
+                        emb_pkey = f"{audio_dataset_manager.hf.attrs['class_idx']}_{track_idx}_{b}_{round}_{results}"
 
-                    if split_emb_dataset_manager[emb_pkey]:
-                        continue
+                        if split_emb_dataset_manager[emb_pkey]:
+                            continue
 
-                    start = b * window_size + offset
-                    end = start + window_size
-                    cut_data = track[start:end]
+                        start = b * window_size + offset
+                        end = start + window_size
+                        cut_data = track[start:end]
 
-                    if len(cut_data) < window_size:
-                        pad_length = window_size - len(cut_data)
-                        cut_data = np.pad(cut_data, (0, pad_length), 'constant')
+                        if len(cut_data) < window_size:
+                            pad_length = window_size - len(cut_data)
+                            cut_data = np.pad(cut_data, (0, pad_length), 'constant')
 
-                    abs_cutdata = np.abs(cut_data)
-                    max_threshold = np.mean(abs_cutdata)
-                    noise = noise_rng.uniform(-max_threshold, max_threshold, cut_data.shape)
-                    new_audio = (1 - noise_perc) * cut_data + noise_perc * noise
+                        abs_cutdata = np.abs(cut_data)
+                        max_threshold = np.mean(abs_cutdata)
+                        noise = noise_rng.uniform(-max_threshold, max_threshold, cut_data.shape)
+                        new_audio = (1 - noise_perc) * cut_data + noise_perc * noise
 
-                    spec_n_o = spectrogram_n_octaveband_generator(new_audio, sr, integration_seconds=0.1,
-                                                  n_octave=n_octave, center_freqs=center_freqs, ref=ref)
+                        spec_n_o = spectrogram_n_octaveband_generator(new_audio, sr, integration_seconds=0.1,
+                                                      n_octave=n_octave, center_freqs=center_freqs, ref=ref)
 
-                    preprocessed_audio = clap_model.preprocess_audio([new_audio], is_path=False)
-                    preprocessed_audio = preprocessed_audio.reshape(preprocessed_audio.shape[0], preprocessed_audio.shape[2])
-                    x = preprocessed_audio.to(device)
-                    with torch.no_grad():
-                        embedding = audio_embedding(x)[0][0]
+                        preprocessed_audio = clap_model.preprocess_audio([new_audio], is_path=False)
+                        preprocessed_audio = preprocessed_audio.reshape(preprocessed_audio.shape[0], preprocessed_audio.shape[2])
+                        x = preprocessed_audio.to(device)
+                        with torch.no_grad():
+                            embedding = audio_embedding(x)[0][0]
 
-                    split_emb_dataset_manager.add_to_data_buffer(embedding, spec_n_o, emb_pkey,
-                                metadata['track_name'], class_to_process, metadata['subclass'])
-                    results += 1
+                        split_emb_dataset_manager.add_to_data_buffer(embedding, spec_n_o, emb_pkey,
+                                    metadata['track_name'], class_to_process, metadata['subclass'])
+                        results += 1
 
 
     except Exception as e:
