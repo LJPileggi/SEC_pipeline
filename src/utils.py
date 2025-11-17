@@ -290,8 +290,8 @@ class HDF5EmbeddingDatasetsManager(Dataset):
                                     dtype=self.dt,
                                     chunks=True
                                     )
-            else:
-                raise Exception(f'Invalid privileges for {self.h5_path}.')
+        else:
+            raise Exception(f'Invalid privileges for {self.h5_path}.')
 
     def add_to_data_buffer(self, embedding, spectrogram, hash_keys, track_name, class_=None, subclass=None):
         """
