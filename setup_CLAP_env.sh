@@ -7,8 +7,8 @@ echo "Args 1 e 2 devono essere il nome del remoto rclone e la cartella sorgente.
 # --- 1. VARIABILI E PERCORSI ---
 echo "--- 1. VARIABILI E PERCORSI ---"
 # NOTA BENE: Se stai lavorando nella tua area su /leonardo_scratch/large/$USER/
-USER_SCRATCH="/leonardo_scratch/large/userexternal/$USER"
-PROJECT_ROOT_DIR="$USER_SCRATCH/SEC_pipeline" 
+USER_AREA="$1"
+PROJECT_ROOT_DIR="$USER_AREA/SEC_pipeline" 
 
 CLAP_WEIGHTS_DIR="$PROJECT_ROOT_DIR/.clap_weights"
 CLAP_WEIGHTS_FILE="CLAP_weights_2023.pth"
@@ -23,9 +23,9 @@ SIF_PATH="$CONTAINER_DIR/clap_pipeline.sif"
 echo "--- 2. CREAZIONE DELLE DIRECTORY ---"
 mkdir -p "$CLAP_WEIGHTS_DIR"
 mkdir -p "$CONTAINER_DIR"
-mkdir -p "$USER_SCRATCH/dataSEC/PREPROCESSED_DATASET"
-mkdir -p "$USER_SCRATCH/dataSEC/results/validation"
-mkdir -p "$USER_SCRATCH/dataSEC/results/finetuned_model"
+mkdir -p "$USER_AREA/dataSEC/PREPROCESSED_DATASET"
+mkdir -p "$USER_AREA/dataSEC/results/validation"
+mkdir -p "$USER_AREA/dataSEC/results/finetuned_model"
 
 
 # --- 3. DOWNLOAD CONDIZIONALE DEI PESI CLAP (.pth) ---
@@ -98,8 +98,8 @@ echo "rclone è disponibile: $RCLONE_ABS_PATH"
 # --- 4.5. CONTROLLO CONFIGURAZIONE MANUALE DI RCLONE ---
 # Questo blocco verifica se il remoto è configurato e FERMA lo script se non lo è.
 
-RCLONE_REMOTE="$1"
-SOURCE_FOLDER="$2"
+RCLONE_REMOTE="$2"
+SOURCE_FOLDER="$3"
 SIF_NAME="clap_pipeline.sif"
 
 # 1. Controllo Condizionale sulla CONFIGURAZIONE di rclone
