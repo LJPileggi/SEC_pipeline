@@ -196,7 +196,7 @@ class HDF5DatasetManager:
         self.close()
 
 class HDF5EmbeddingDatasetsManager(Dataset):
-    def __init__(self, h5_path, mode='r', partitions=set('classes', 'splits')):
+    def __init__(self, h5_path, mode='r', partitions=set(('classes', 'splits'))):
         """
         Container to handle the hdf5 files for the embedding dataset.
         The dataset is designed as a set of materialised partitions for the
@@ -209,7 +209,7 @@ class HDF5EmbeddingDatasetsManager(Dataset):
         super().__init__()
         self.h5_path = h5_path
         self.partitions = set(partitions)
-        if not ((self.partitions == set('splits',)) or (self.partitions == set('classes', 'splits'))):
+        if not ((self.partitions == set(('splits',))) or (self.partitions == set(('classes', 'splits')))):
             raise ValueError("ValueError: incorrect view type.")
         self.mode = mode
         self.hf = h5py.File(self.h5_path, self.mode)
@@ -222,7 +222,7 @@ class HDF5EmbeddingDatasetsManager(Dataset):
             self.spectrograms_buffer = []
             self.hash_keys_buffer = []
             self.track_names_buffer = []
-            if self.partitions == set('splits',):
+            if self.partitions == set(('splits',)):
                 self.classes_buffer = []
             self.subclasses_buffer = []
 
@@ -373,7 +373,7 @@ def combine_hdf5_files(root_dir, cut_secs_list, audio_format, splits_list=['trai
         
         for split_name in splits_list:
             output_h5_path = os.path.join(root_dir, f'{cut_secs}_secs', f'combined_{split_name}.h5')
-            out_h5 = HDF5EmbeddingDatasetsManager(output_h5_path, mode='a', partitions=set('splits',))
+            out_h5 = HDF5EmbeddingDatasetsManager(output_h5_path, mode='a', partitions=set(('splits',)))
             out_h5.initialize_hdf5(embedding_dim, spec_shape, audio_format, split_name)
 
             for class_name in classes_list:
@@ -386,7 +386,7 @@ def combine_hdf5_files(root_dir, cut_secs_list, audio_format, splits_list=['trai
                 logging.info(f"Adding data from class: {class_name}...")
                     
                 try:
-                    in_h5 = HDF5EmbeddingDatasetsManager(class_h5_path, 'r', set('splits', 'classes'))
+                    in_h5 = HDF5EmbeddingDatasetsManager(class_h5_path, 'r', set(('splits', 'classes')))
                     class_data = in_h5['embedding_dataset'][:]
                     class_data_extended = np.empty(class_data.shape, dtype=out_h5.dt)
                     for name in class_data_extended.names:
