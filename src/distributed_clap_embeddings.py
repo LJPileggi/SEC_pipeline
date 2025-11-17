@@ -338,7 +338,7 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
     log_data = {}
     log_path = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave')
     try:
-        with open(os.path.join(log_path, 'log.json', 'r') as f:
+        with open(os.path.join(log_path, 'log.json', 'r')) as f:
             log_data = json.load(f)
             logging.info(f"Ripresa da log: {log_data}")
     except FileNotFoundError:
