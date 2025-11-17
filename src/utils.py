@@ -260,38 +260,38 @@ class HDF5EmbeddingDatasetsManager(Dataset):
 
     def initialize_hdf5(self, embedding_dim, spec_shape, audio_format, cut_secs, n_octave, \
                                     sample_rate, seed, noise_perc, split, class_name=None):
-    """
-    Creates HDF5 file with resizable embedding and spectrogram datasets.
-    Must provide split and class name according to the selected partition.
+        """
+        Creates HDF5 file with resizable embedding and spectrogram datasets.
+        Must provide split and class name according to the selected partition.
 
-    args:
-     - embedding_dim: dimension of single embedding;
-     - spec_shape: shape of single spectrogram;
-     - audio_format: format of the original audio;
-     - split: dataset split the embedding belongs to;
-     - class_name: class the embedding belongs to.
-    """
-    if self.mode == 'a':
-        self.hf.attrs['audio_format'] = audio_format
-        self.hf.attrs['cut_secs'] = cut_secs
-        self.hf.attrs['n_octave'] = n_octave
-        self.hf.attrs['sample_rate'] = sample_rate
-        self.hf.attrs['noise_perc'] = noise_perc
-        self.hf.attrs['seed'] = seed
-        self.hf.attrs['split'] = split
-        self.hf.attrs['embedding_dim'] = embedding_dim
-        self.hf.attrs['spec_shape'] = spec_shape
-        self.dt = self._set_dataset_format(embedding_dim, spec_shape)
-        if 'classes' in self.partitions:
-            self.hf.attrs['class'] = class_name
-        self.hf.create_dataset('embedding_dataset', 
-                                shape=(0,),
-                                maxshape=(None,),
-                                dtype=self.dt,
-                                chunks=True
-                                )
-        else:
-            raise Exception(f'Invalid privileges for {self.h5_path}.')
+        args:
+         - embedding_dim: dimension of single embedding;
+         - spec_shape: shape of single spectrogram;
+         - audio_format: format of the original audio;
+         - split: dataset split the embedding belongs to;
+         - class_name: class the embedding belongs to.
+        """
+        if self.mode == 'a':
+            self.hf.attrs['audio_format'] = audio_format
+            self.hf.attrs['cut_secs'] = cut_secs
+            self.hf.attrs['n_octave'] = n_octave
+            self.hf.attrs['sample_rate'] = sample_rate
+            self.hf.attrs['noise_perc'] = noise_perc
+            self.hf.attrs['seed'] = seed
+            self.hf.attrs['split'] = split
+            self.hf.attrs['embedding_dim'] = embedding_dim
+            self.hf.attrs['spec_shape'] = spec_shape
+            self.dt = self._set_dataset_format(embedding_dim, spec_shape)
+            if 'classes' in self.partitions:
+                self.hf.attrs['class'] = class_name
+            self.hf.create_dataset('embedding_dataset', 
+                                    shape=(0,),
+                                    maxshape=(None,),
+                                    dtype=self.dt,
+                                    chunks=True
+                                    )
+            else:
+                raise Exception(f'Invalid privileges for {self.h5_path}.')
 
     def add_to_data_buffer(self, embedding, spectrogram, hash_keys, track_name, class_=None, subclass=None):
         """
