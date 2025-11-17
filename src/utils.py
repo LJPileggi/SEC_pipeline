@@ -55,7 +55,7 @@ def get_config_from_yaml(config_file="config0.yaml"):
                                 ("es", configs["es_size"]),
                                 ("valid", configs["valid_size"]),
                                 ("test", configs["test_size"])]
-    return classes patience, epochs, batch_size, sampling_rate, ref, noise_perc, seed, \
+    return classes, patience, epochs, batch_size, sampling_rate, ref, noise_perc, seed, \
                                   center_freqs, valid_cut_secs, splits_xc_sizes_names
 
    
