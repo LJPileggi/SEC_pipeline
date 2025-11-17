@@ -474,7 +474,7 @@ def reconstruct_tracks_from_embeddings(base_tracks_dir, hdf5_emb_path, idx_list)
         if repr_params['round_'] > 1 and original_track.shape[0] > window_size:
             max_offset = original_track.shape[0] - window_size
             if max_offset > 0:
-                for _ in range(repr_params['round_'] + 1)
+                for _ in range(repr_params['round_'] + 1):
                     offset = offset_rng.integers(0, max_offset)
 
         # generate noise
