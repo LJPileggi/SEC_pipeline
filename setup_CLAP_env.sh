@@ -1,8 +1,8 @@
 #!/bin/bash
 
 echo "Setup script for the CLAP environment on Cineca."
-echo "Run once only on login node."
-echo "Args 1 and 2 have to be rclone remote and remote source folder."
+echo "Eseguire SOLO UNA VOLTA sul nodo di login."
+echo "Args 1 e 2 devono essere il nome del remoto rclone e la cartella sorgente."
 
 # --- 1. VARIABILI E PERCORSI ---
 echo "--- 1. VARIABILI E PERCORSI ---"
@@ -18,6 +18,7 @@ CLAP_WEIGHTS_URL="https://huggingface.co/microsoft/msclap/resolve/main/CLAP_weig
 CONTAINER_DIR="$PROJECT_ROOT_DIR/.containers"
 SIF_PATH="$CONTAINER_DIR/clap_pipeline.sif"
 
+
 # --- 2. CREAZIONE DELLE DIRECTORY ---
 echo "--- 2. CREAZIONE DELLE DIRECTORY ---"
 mkdir -p "$CLAP_WEIGHTS_DIR"
@@ -25,6 +26,7 @@ mkdir -p "$CONTAINER_DIR"
 mkdir -p "$USER_SCRATCH/dataSEC/PREPROCESSED_DATASET"
 mkdir -p "$USER_SCRATCH/dataSEC/results/validation"
 mkdir -p "$USER_SCRATCH/dataSEC/results/finetuned_model"
+
 
 # --- 3. DOWNLOAD CONDIZIONALE DEI PESI CLAP (.pth) ---
 echo "--- 3. DOWNLOAD CONDIZIONALE DEI PESI CLAP (.pth) ---"
@@ -40,10 +42,14 @@ else
     echo "Download dei pesi CLAP completato con successo."
 fi
 
+
 # --- 4. CONTROLLO E INSTALLAZIONE DI RCLONE PER TRASFERIMENTO CLOUD ---
 echo "--- 4. CONTROLLO E INSTALLAZIONE DI RCLONE PER TRASFERIMENTO CLOUD ---"
+
 # 1. Tenta di caricare il modulo CINECA (il metodo preferito)
 module load rclone 2>/dev/null
+
+RCLONE_ABS_PATH="" # Inizializza la variabile per il percorso assoluto
 
 # Controlla se rclone è ora disponibile
 if ! command -v rclone &> /dev/null; then
@@ -79,43 +85,70 @@ if ! command -v rclone &> /dev/null; then
     rm -rf "$FOLDER_NAME" "$TEMP_FILE"
     
     echo "rclone v${RCLONE_VERSION} installato con successo in $INSTALL_DIR/."
+    
+    RCLONE_ABS_PATH="$INSTALL_DIR/rclone" # Definisci il percorso assoluto se installazione locale
+else
+    RCLONE_ABS_PATH="$(command -v rclone)" # Usa il percorso di quello trovato (dal modulo o da home)
 fi
 
-echo "rclone è disponibile: $(command -v rclone)"
+echo "rclone è disponibile: $RCLONE_ABS_PATH"
 # --- FINE CONTROLLO RCLONE ---
+
+
+# --- 4.5. CONTROLLO CONFIGURAZIONE MANUALE DI RCLONE ---
+# Questo blocco verifica se il remoto è configurato e FERMA lo script se non lo è.
+
+RCLONE_REMOTE="$1"
+SOURCE_FOLDER="$2"
+SIF_NAME="clap_pipeline.sif"
+
+# 1. Controllo Condizionale sulla CONFIGURAZIONE di rclone
+echo "Controllo esistenza configurazione rclone per il remoto '$RCLONE_REMOTE'..."
+
+# Utilizza il percorso assoluto per rclone config show
+if ! "$RCLONE_ABS_PATH" config show "$RCLONE_REMOTE" &> /dev/null; then
+    
+    echo "========================================================================================="
+    echo "======================= AZIONE MANUALE RICHIESTA (RCLONE) ==============================="
+    echo "ERRORE CRITICO: Remoto rclone '$RCLONE_REMOTE' NON CONFIGURATO."
+    echo "Il sistema non può procedere senza l'autenticazione a Google Drive."
+    echo ""
+    echo "--> AZIONE RICHIESTA: Devi configurare rclone manualmente, in modo interattivo, prima di procedere."
+    echo "1. TERMINA L'ESECUZIONE DELLO SCRIPT (Ctrl+C)."
+    echo "2. RILANCIA QUESTO COMANDO NEL TUO TERMINALE CINECA (una volta):"
+    echo ""
+    echo "   $RCLONE_ABS_PATH config"
+    echo ""
+    echo "   # Segui i prompt, scegli 'drive', lascia client_id/secret vuoti, usa 'n' per Auto config."
+    echo "   # ASSICURATI DI DARE AL REMOTO IL NOME ESATTO: $RCLONE_REMOTE"
+    echo ""
+    echo "3. DOPO AVER COMPLETATO LA CONFIGURAZIONE, RILANCIA LO SCRIPT DI SETUP."
+    echo "========================================================================================="
+    
+    # FERMARE LO SCRIPT
+    exit 1 
+fi
+
+echo "Configurazione rclone OK. Il remoto '$RCLONE_REMOTE' è pronto per il download."
+
+# --- FINE CONTROLLO CONFIGURAZIONE ---
+
 
 # --- 5. DOWNLOAD DEL CONTAINER (.SIF) ---
 echo "--- 5. DOWNLOAD CONTAINER ---"
 
-RCLONE_REMOTE="$1"
-SOURCE_FOLDER="$2"
-SIF_NAME="clap_pipeline.sif" # Nome del file SIF su Drive
-
-# 1. Verifica che i parametri siano stati passati
+# 1. Verifica che i parametri siano stati passati (dopo il controllo di configurazione)
 if [ -z "$RCLONE_REMOTE" ] || [ -z "$SOURCE_FOLDER" ]; then
     echo "ERRORE CRITICO: Parametri rclone mancanti. Esegui lo script con ./setup_CLAP_env.sh <NOME_REMOTO_RCLONE> <NOME_CARTELLA_DRIVE>"
     exit 1
 fi
 
-# 2. Controllo Condizionale sulla CONFIGURAZIONE di rclone
-echo "Controllo esistenza configurazione rclone per il remoto '$RCLONE_REMOTE'..."
-
-# rclone config show <remoto> restituisce un codice di uscita 0 solo se il remoto esiste
-if ! rclone config show "$RCLONE_REMOTE" &> /dev/null; then
-    echo "ERRORE CRITICO: Remoto rclone '$RCLONE_REMOTE' NON CONFIGURATO."
-    echo "Il sistema non può procedere senza l'autenticazione a Google Drive."
-    echo "--> Azione richiesta: Esegui il comando 'rclone config' sul nodo di login e configura il remoto con il nome '$RCLONE_REMOTE'."
-    exit 1
-fi
-
-echo "Configurazione rclone OK. Il remoto '$RCLONE_REMOTE' è pronto."
-
-# 3. Download Condizionale del Container SIF
+# 2. Download Condizionale del Container SIF
 if [ ! -f "$SIF_PATH" ]; then
     echo "Container SIF non trovato. Tentativo di download da Google Drive..."
     
-    # Esegue il comando rclone copy (aggiunto -v per debug)
-    rclone -v copy "$RCLONE_REMOTE:$SOURCE_FOLDER/$SIF_NAME" "$CONTAINER_DIR"
+    # Esegue il comando rclone copy usando il percorso assoluto (con -v per debug)
+    "$RCLONE_ABS_PATH" -v copy "$RCLONE_REMOTE:$SOURCE_FOLDER/$SIF_NAME" "$CONTAINER_DIR"
     
     if [ $? -ne 0 ]; then
         echo "ERRORE CRITICO: Download del container SIF con rclone fallito. Controllare i log sopra."
@@ -127,3 +160,5 @@ else
 fi
 
 echo "--- FINE DOWNLOAD CONTAINER ---"
+
+echo "Setup dell'ambiente CLAP su Cineca completato con successo. Immagine pronta per l'uso."
