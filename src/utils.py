@@ -209,8 +209,8 @@ class HDF5EmbeddingDatasetsManager(Dataset):
         super().__init__()
         self.h5_path = h5_path
         self.partitions = set(partitions)
-            if not ((self.partitions == set('splits',)) or (self.partitions == set('classes', 'splits'))):
-                raise ValueError("ValueError: incorrect view type.")
+        if not ((self.partitions == set('splits',)) or (self.partitions == set('classes', 'splits'))):
+            raise ValueError("ValueError: incorrect view type.")
         self.mode = mode
         self.hf = h5py.File(self.h5_path, self.mode)
         if 'embedding_dataset' in self.hf:
