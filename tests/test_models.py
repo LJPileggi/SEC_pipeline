@@ -1,9 +1,11 @@
 import unittest
 import os
+import sys
 import torch
 import torch.nn as nn
 import numpy as np
 from unittest.mock import patch, MagicMock
+sys.path.append('.')
 
 # Importa i moduli necessari
 # Assumendo che models.py sia in src
