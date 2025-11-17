@@ -120,7 +120,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                         offset = offset_rng.integers(0, max_offset)
                 n_buckets = math.ceil((track.shape[0] - offset) / window_size)
                 for b in range(n_buckets):
-                if results >= target_counts_list[di]:
+                    if results >= target_counts_list[di]:
                         logging.info(f"Split '{division_names[di]}' completato con {results} elementi. Avvio flush...")
                         # Passa al prossimo split e reinizializza
                         di += 1
