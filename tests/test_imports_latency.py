@@ -36,6 +36,7 @@ def main():
     
     # Moduli audio e Torch
     time_torch = measure_import_latency('torch')
+    time_msclap = measure_import_latency('msclap')
     time_librosa = measure_import_latency('librosa')
     time_sf = measure_import_latency('soundfile')
     time_dist = measure_import_latency('torch.distributed')
@@ -67,6 +68,7 @@ def main():
         "glob": time_glob,
         "h5py": time_h5py,
         "torch": time_torch,
+        "msclap": time_msclap,
         "librosa": time_librosa,
         "soundfile": time_sf,
         "torch.distributed": time_dist,
