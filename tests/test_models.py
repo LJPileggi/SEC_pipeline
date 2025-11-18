@@ -230,9 +230,9 @@ class TestModels(unittest.TestCase):
     # 2.3 Test spectrogram_n_octaveband_generator (con mock di librosa)
     # --------------------------------------------------------------------------
     
-    @patch('src.models.librosa.stft', return_value=np.random.rand(513, 200) + 1j * np.random.rand(513, 200)) # Mock STFT
-    @patch('src.models.librosa.filters.cqm_to_note_filters', return_value=np.random.rand(5, 513)) # Mock CQT filters
-    def test_spectrogram_generator_output_shape(self, mock_filters, mock_stft):
+    @patch('src.models.scipy.signal.butter', autospec=True) 
+    @patch('src.models.scipy.signal.sosfilt', autospec=True)
+    def test_spectrogram_generator_output_shape(self, mock_butter, mock_sosfilt):
         """Testa la forma dell'output dello spettrogramma."""
         audio_data = np.random.rand(52100 * 3)
         n_octave = 5 
@@ -245,8 +245,8 @@ class TestModels(unittest.TestCase):
         )
         self.assertIsInstance(spectrogram_result, np.ndarray)
         self.assertEqual(spectrogram_result.shape, (5, 200))
-        mock_filters.assert_called_once()
-        mock_stft.assert_called_once()
+        mock_butter.assert_called()
+        mock_sosfilt.assert_called()
 
     def test_spectrogram_generator_n_octave_mismatch(self):
         """Testa l'errore se n_octave non corrisponde al numero di center_freqs."""
