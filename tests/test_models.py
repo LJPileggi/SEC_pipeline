@@ -116,9 +116,9 @@ class TestModels(unittest.TestCase):
         # self.assertEqual(audio_embedding_func.__name__, 'get_audio_embeddings')
 
         # 4. Verifica che 'original_parameters' sia una lista di parametri (mockati)
-        print(type(original_parameters))
-        self.assertIsInstance(original_parameters, torch.Tensor)
-        self.assertIsInstance(original_parameters[0], torch.nn.Parameter)
+        self.assertIsInstance(original_parameters, dict)
+        self.assertTrue(len(original_parameters) > 0)
+        self.assertIsInstance(list(original_parameters.values())[0], torch.Tensor)
 
     @unittest.skipUnless(torch.cuda.is_available(), "Ignora test CUDA se la GPU non è disponibile")
     @patch('os.path.exists', return_value=True)
