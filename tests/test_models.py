@@ -116,6 +116,7 @@ class TestModels(unittest.TestCase):
         # self.assertEqual(audio_embedding_func.__name__, 'get_audio_embeddings')
 
         # 4. Verifica che 'original_parameters' sia una lista di parametri (mockati)
+        print(type(original_parameters))
         self.assertIsInstance(original_parameters, torch.Tensor)
         self.assertIsInstance(original_parameters[0], torch.nn.Parameter)
 
