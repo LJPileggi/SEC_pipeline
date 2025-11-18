@@ -89,7 +89,7 @@ def mock_sosfilt_output(sos, x, **kwargs):
         return np.random.rand(len(x))
     return np.array([]) 
 
-def mock_butter_output(N, Wn, btype, analog, output, fs):
+def mock_butter_output(N, Wn, btype, analog, output):
     """
     Simula l'output di scipy.signal.butter(output='sos').
     Per un filtro di ordine N=4, l'output è sempre (2, 6).
