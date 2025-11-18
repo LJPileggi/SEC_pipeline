@@ -28,14 +28,18 @@ def CLAP_initializer(device='cpu', use_cuda=False):
         raise ValueError("Variabile d'ambiente LOCAL_CLAP_WEIGHTS_PATH non impostata.")
     if not os.path.exists(clap_weights_path):
          raise FileNotFoundError(f"Impossibile trovare i pesi CLAP al percorso: {clap_weights_path} (Errore: il file non è stato copiato correttamente su /tmp)")
-         
+
     if not text_encoder_path:
         raise ValueError("Variabile d'ambiente CLAP_TEXT_ENCODER_PATH non impostata. (Dovrebbe puntare all'interno del container)")
         
+    # AGGIUNTA NECESSARIA per allinearsi con il test:
+    if not os.path.exists(text_encoder_path):
+         # Il messaggio è allineato a quello atteso dal test
+         raise FileNotFoundError(f"Impossibile trovare l'encoder testuale CLAP a: {text_encoder_path}")
+
     # --- Inizializzazione CLAP (USA IL PERCORSO LOCALE) ---
-    clap_model = CLAP(version='2023', use_cuda=use_cuda, clap_weights_path=clap_weights_path,
-                                        model_id=text_encoder_path, download_if_missing=False)
-    
+    clap_model = CLAP(version='2023', use_cuda=use_cuda, am_path=clap_weights_path,
+                              lm_path=text_encoder_path, download_if_missing=False)    
     # ... (resto del codice CLAP, non modificato)
     original_parameters = clap_model.clap.audio_encoder.to('cpu').state_dict()
     clap_model.clap.audio_encoder = clap_model.clap.audio_encoder.to(device)
