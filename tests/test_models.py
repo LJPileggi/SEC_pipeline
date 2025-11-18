@@ -58,9 +58,10 @@ class MockCLAP:
         mock_audio_encoder.to.return_value = mock_audio_encoder
         # 3. Aggiungi il metodo state_dict() per simulare l'estrazione dei parametri
         mock_audio_encoder.state_dict.return_value = {'mock_param': torch.randn(10)} # Restituisce un dizionario fittizio
+        # Crea un mock per la funzione di embedding
+        mock_get_audio_embeddings = MagicMock(return_value=torch.randn(1, 1024))
         # AGGIUNGI QUI L'ATTRIBUTO __name__ al mock
         mock_get_audio_embeddings.__name__ = 'get_audio_embeddings' # Simula l'attributo mancante
-
         # Assegna il mock con l'attributo __name__ al modello
         self.get_audio_embeddings = mock_get_audio_embeddings
 
