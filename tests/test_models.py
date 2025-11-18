@@ -241,8 +241,11 @@ class TestModels(unittest.TestCase):
         n_fft = 1024
         
         spectrogram_result = spectrogram_n_octaveband_generator(
-            audio_data, n_octave, center_freqs, sampling_rate, n_fft
-        )
+                                        wav_data=audio_data,
+                                        sampling_rate=sampling_rate,
+                                        n_octave=n_octave,
+                                        center_freqs=center_freqs
+                                        )
         self.assertIsInstance(spectrogram_result, np.ndarray)
         self.assertEqual(spectrogram_result.shape, (5, 200))
         mock_butter.assert_called()
@@ -258,8 +261,11 @@ class TestModels(unittest.TestCase):
         
         with self.assertRaises(ValueError) as context:
             spectrogram_n_octaveband_generator(
-                audio_data, n_octave, center_freqs, sampling_rate, n_fft
-            )
+                        wav_data=audio_data,
+                        sampling_rate=sampling_rate,
+                        n_octave=n_octave,
+                        center_freqs=center_freqs
+                        )
             
         self.assertIn("Il numero di bande d'ottava (n_octave) deve corrispondere alla lunghezza di center_freqs", str(context.exception))
 
