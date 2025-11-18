@@ -42,13 +42,13 @@ def mock_getenv_clap_paths(key):
 # MOCK della classe CLAP esterna (msclap.CLAP)
 # Simula il suo comportamento essenziale per CLAP_initializer
 class MockCLAP:
-    def __init__(self, version, use_cuda, am_path, lm_path):
+    def __init__(self, version, use_cuda, am_path, lm_path, download_if_missing=True):
         # Questi assert verificano che CLAP_initializer passi gli argomenti corretti
         self.version = version
         self.use_cuda = use_cuda
         self.am_path = am_path
         self.lm_path = lm_path
-        self.model = MagicMock() # Mock del sottocomponente 'model' per 'parameters()'
+        self.model = MagicMock(spec=nn.Module) # Mock del sottocomponente 'model' per 'parameters()'
         self.model.parameters.return_value = [torch.nn.Parameter(torch.randn(10))] # Mock dei parametri
 
     def get_audio_embedding(self, audio_data, resample=False, use_tensor=False):
