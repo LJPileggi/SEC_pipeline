@@ -148,7 +148,7 @@ class TestModels(unittest.TestCase):
         with self.assertRaises(FileNotFoundError) as context:
             CLAP_initializer(device='cpu', use_cuda=False)
             
-        self.assertIn("Impossibile trovare i pesi CLAP a: /tmp/CLAP_weights_2023.pth", str(context.exception))
+        self.assertIn("Impossibile trovare i pesi CLAP al percorso: /tmp/CLAP_weights_2023.pth", str(context.exception))
 
     @patch('os.path.exists', side_effect=lambda path: path != "/tmp/roberta-base") # Solo l'encoder text non esiste
     @patch('os.getenv', side_effect=mock_getenv_clap_paths)
