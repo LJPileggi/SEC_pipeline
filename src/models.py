@@ -72,6 +72,34 @@ def spectrogram_n_octaveband_generator(
     returns:
      - np.array: 1/n-octave band spectrogram.
     """
+    # --- GESTIONE E CALCOLO DELLE FREQUENZE CENTRALI (se center_freqs è None) ---
+    if center_freqs is None:
+        # Frequenza centrale di riferimento (es. 1000 Hz)
+        f_ref = 1000.0
+        # Frequenza minima per audio processing standard
+        f_min = 20.0
+        # Limite superiore: frequenza di Nyquist (metà del sampling rate)
+        f_max = sampling_rate / 2.0
+        
+        # Calcoliamo gli indici 'n' necessari per coprire il range (secondo ISO 266: fc = 1000 * 2^(n/N))
+        
+        # Troviamo l'indice 'n' minimo e massimo
+        n_min = int(np.round(n_octave * np.log2(f_min / f_ref)))
+        n_max = int(np.round(n_octave * np.log2(f_max / f_ref)))
+        
+        # Generiamo gli indici e calcoliamo le frequenze centrali
+        n_indices = np.arange(n_min, n_max + 1)
+        center_freqs = f_ref * (2**(n_indices / n_octave))
+        
+        # Filtriamo le frequenze che superano il limite di Nyquist
+        center_freqs = center_freqs[center_freqs <= f_max]
+        
+        # Se non si genera nessuna frequenza (caso limite), usiamo solo la ref.
+        if len(center_freqs) == 0:
+            center_freqs = np.array([f_ref]) 
+
+    # --- FINE LOGICA center_freqs ---
+    
     # octave band factor
     factor = 2 ** (1 / (2 * n_octave))
     freq_d = center_freqs / factor
