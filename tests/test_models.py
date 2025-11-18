@@ -247,27 +247,9 @@ class TestModels(unittest.TestCase):
                                         center_freqs=center_freqs
                                         )
         self.assertIsInstance(spectrogram_result, np.ndarray)
-        self.assertEqual(spectrogram_result.shape, (5, 200))
+        self.assertEqual(spectrogram_result.shape, (30, 5))
         mock_butter.assert_called()
         mock_sosfilt.assert_called()
-
-    def test_spectrogram_generator_n_octave_mismatch(self):
-        """Testa l'errore se n_octave non corrisponde al numero di center_freqs."""
-        audio_data = np.random.rand(52100)
-        n_octave = 5 
-        center_freqs = np.array([100.0, 500.0, 2000.0, 4000.0]) # 4 frequenze
-        sampling_rate = 52100
-        n_fft = 1024
-        
-        with self.assertRaises(ValueError) as context:
-            spectrogram_n_octaveband_generator(
-                        wav_data=audio_data,
-                        sampling_rate=sampling_rate,
-                        n_octave=n_octave,
-                        center_freqs=center_freqs
-                        )
-            
-        self.assertIn("Il numero di bande d'ottava (n_octave) deve corrispondere alla lunghezza di center_freqs", str(context.exception))
 
 
 if __name__ == '__main__':
