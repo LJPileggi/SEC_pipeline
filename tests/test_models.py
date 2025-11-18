@@ -64,7 +64,7 @@ class MockCLAP:
         # 5. Collega l'encoder audio al mock 'clap'
         self.clap.audio_encoder = mock_audio_encoder
 
-    def get_audio_embedding(self, audio_data, resample=False, use_tensor=False):
+    def get_audio_embeddings(self, audio_data, resample=False, use_tensor=False):
         # Simula l'output dell'embedding audio [Batch_size, Embed_Dim]
         if isinstance(audio_data, list):
              batch_size = len(audio_data)
@@ -107,7 +107,7 @@ class TestModels(unittest.TestCase):
         
         # 3. Verifica che 'audio_embedding_func' sia un Callable e sia il metodo corretto del mock
         self.assertTrue(callable(audio_embedding_func))
-        self.assertEqual(audio_embedding_func.__name__, 'get_audio_embedding')
+        self.assertEqual(audio_embedding_func.__name__, 'get_audio_embeddings')
 
         # 4. Verifica che 'original_parameters' sia una lista di parametri (mockati)
         self.assertIsInstance(original_parameters, list)
