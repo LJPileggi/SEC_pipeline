@@ -172,7 +172,7 @@ class TestModels(unittest.TestCase):
         
     @patch('os.path.exists', return_value=True)
     @patch('os.getenv', side_effect=mock_getenv_clap_paths)
-    @patch('src.models.CLAP', side_effect=RuntimeError("Simulazione errore CLAP init"))
+    @patch('src.models.CLAP', side_effect=RuntimeError("Errore durante l'inizializzazione del modello CLAP"))
     def test_clap_initializer_runtime_error(self, mock_CLAP, mock_getenv, mock_exists):
         """Testa l'errore runtime durante l'inizializzazione di msclap.CLAP."""
         
