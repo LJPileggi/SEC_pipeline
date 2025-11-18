@@ -80,6 +80,25 @@ class MockCLAP:
              batch_size = 1
         return torch.randn(batch_size, 1024) # Embedding CLAP standard
 
+def mock_sosfilt_output(sos, x, **kwargs):
+    """
+    Simula l'output di scipy.signal.sosfilt. 
+    Restituisce un array 1D casuale della stessa lunghezza del segnale audio 'x'.
+    """
+    if isinstance(x, np.ndarray):
+        return np.random.rand(len(x))
+    return np.array([]) 
+
+def mock_butter_output(N, Wn, btype, analog, output, fs):
+    """
+    Simula l'output di scipy.signal.butter(output='sos').
+    Per un filtro di ordine N=4, l'output è sempre (2, 6).
+    """
+    # L'ordine N è il primo argomento posizionale
+    N_sections = int(np.ceil(N / 2)) 
+    # Usiamo 2 sezioni (per N=4) e 6 coefficienti
+    return np.random.rand(N_sections, 6)
+
 # ==============================================================================
 # 2. CLASSE DI TEST PRINCIPALE
 # ==============================================================================
@@ -233,35 +252,26 @@ class TestModels(unittest.TestCase):
     @patch('src.models.scipy.signal.butter', autospec=True) 
     @patch('src.models.scipy.signal.sosfilt', autospec=True)
     def test_spectrogram_generator_output_shape(self, mock_sosfilt, mock_butter):
-        """Testa la forma dell'output dello spettrogramma."""
-        audio_data = np.random.rand(52100 * 3) # Durata: 3 secondi
+        """Testa la forma dell'output dello spettrogramma in modo dinamico."""
+        audio_data = np.random.rand(52100 * 3) # N_samples = 156300
         n_octave = 5 
         center_freqs = np.array([100.0, 500.0, 2000.0, 4000.0, 8000.0]) # N_bands = 5
         sampling_rate = 52100
-        # n_fft (non usato nella funzione, rimosso dalla chiamata)
+        
+        # --- CONFIGURAZIONE DEI MOCK ---
+        # Colleghiamo gli oggetti mock iniettati al comportamento che abbiamo definito
+        mock_butter.side_effect = mock_butter_output
+        mock_sosfilt.side_effect = mock_sosfilt_output
         
         # --- CALCOLO DINAMICO DELLA FORMA ATTESA ---
-        
-        # 1. Dimensione Frequenza (N_bands)
-        expected_bands = len(center_freqs)
-        
-        # 2. Dimensione Temporale (N_frames)
-        # Il valore di default per integration_seconds in models.py è 0.1
-        integration_seconds = 0.1 
-        
+        expected_bands = len(center_freqs) # 5
+        integration_seconds = 0.1 # Valore di default in models.py
         window_size = sampling_rate * integration_seconds
-        
-        # Numero di campioni totali
         total_samples = len(audio_data)
-        
-        # Divisione intera per ottenere il numero di frame (troncamento)
-        expected_frames = int(total_samples // window_size)
-        
-        # Forma attesa (N_bands, N_frames), assumendo che .T sia stato rimosso in models.py
-        expected_shape = (expected_bands, expected_frames)
-        
-        # --- FINE CALCOLO ---
-        
+        expected_frames = int(total_samples // window_size) # Risultato: 30
+        expected_shape = (expected_bands, expected_frames) # Forma attesa: (5, 30)
+
+        # --- CHIAMATA ALLA FUNZIONE (con key-word args) ---
         spectrogram_result = spectrogram_n_octaveband_generator(
             wav_data=audio_data, 
             sampling_rate=sampling_rate, 
@@ -270,10 +280,10 @@ class TestModels(unittest.TestCase):
         )
         
         self.assertIsInstance(spectrogram_result, np.ndarray)
-        self.assertEqual(spectrogram_result.shape, expected_shape)
+        self.assertEqual(spectrogram_result.shape, expected_shape) # (5, 30)
         
-        mock_butter.assert_called()
-        mock_sosfilt.assert_called()
+        self.assertTrue(mock_butter.called)
+        self.assertTrue(mock_sosfilt.called)
 
 
 if __name__ == '__main__':

@@ -114,11 +114,9 @@ def spectrogram_n_octaveband_generator(
             output='sos'
         ) for (lower, upper) in zip(freq_d, freq_u)
     ]
-    print(bands[0].shape)
 
     window = int(sampling_rate * integration_seconds)
     filtered = np.array([scipy.signal.sosfilt(band, wav_data) for band in bands])
-    print(filtered.shape)
 
     # handling of signals shorter than integration window
     if filtered.shape[1] < window:
@@ -126,10 +124,8 @@ def spectrogram_n_octaveband_generator(
     else:
         filtered = filtered[:, :window * (filtered.shape[1] // window)]
         spectrogram = filtered.reshape(filtered.shape[0], -1, window)
-    print(filtered.shape)
 
     rms = np.sqrt(np.mean(spectrogram ** 2, axis=-1))
-    print(rms.shape)
     
     # handling of rms == 0 to avoid log(0)
     rms[rms == 0] = np.finfo(float).eps
