@@ -232,22 +232,46 @@ class TestModels(unittest.TestCase):
     
     @patch('src.models.scipy.signal.butter', autospec=True) 
     @patch('src.models.scipy.signal.sosfilt', autospec=True)
-    def test_spectrogram_generator_output_shape(self, mock_butter, mock_sosfilt):
+    def test_spectrogram_generator_output_shape(self, mock_sosfilt, mock_butter):
         """Testa la forma dell'output dello spettrogramma."""
-        audio_data = np.random.rand(52100 * 3)
+        audio_data = np.random.rand(52100 * 3) # Durata: 3 secondi
         n_octave = 5 
-        center_freqs = np.array([100.0, 500.0, 2000.0, 4000.0, 8000.0])
+        center_freqs = np.array([100.0, 500.0, 2000.0, 4000.0, 8000.0]) # N_bands = 5
         sampling_rate = 52100
-        n_fft = 1024
+        # n_fft (non usato nella funzione, rimosso dalla chiamata)
+        
+        # --- CALCOLO DINAMICO DELLA FORMA ATTESA ---
+        
+        # 1. Dimensione Frequenza (N_bands)
+        expected_bands = len(center_freqs)
+        
+        # 2. Dimensione Temporale (N_frames)
+        # Il valore di default per integration_seconds in models.py è 0.1
+        integration_seconds = 0.1 
+        
+        window_size = sampling_rate * integration_seconds
+        
+        # Numero di campioni totali
+        total_samples = len(audio_data)
+        
+        # Divisione intera per ottenere il numero di frame (troncamento)
+        expected_frames = int(total_samples // window_size)
+        
+        # Forma attesa (N_bands, N_frames), assumendo che .T sia stato rimosso in models.py
+        expected_shape = (expected_bands, expected_frames)
+        
+        # --- FINE CALCOLO ---
         
         spectrogram_result = spectrogram_n_octaveband_generator(
-                                        wav_data=audio_data,
-                                        sampling_rate=sampling_rate,
-                                        n_octave=n_octave,
-                                        center_freqs=center_freqs
-                                        )
+            wav_data=audio_data, 
+            sampling_rate=sampling_rate, 
+            n_octave=n_octave, 
+            center_freqs=center_freqs
+        )
+        
         self.assertIsInstance(spectrogram_result, np.ndarray)
-        self.assertEqual(spectrogram_result.shape, (30, 5))
+        self.assertEqual(spectrogram_result.shape, expected_shape)
+        
         mock_butter.assert_called()
         mock_sosfilt.assert_called()
 
