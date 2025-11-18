@@ -269,7 +269,7 @@ class TestModels(unittest.TestCase):
         window_size = sampling_rate * integration_seconds
         total_samples = len(audio_data)
         expected_frames = int(total_samples // window_size) # Risultato: 30
-        expected_shape = (expected_bands, expected_frames) # Forma attesa: (5, 30)
+        expected_shape = (expected_frames, expected_bands) # Forma attesa: (5, 30)
 
         # --- CHIAMATA ALLA FUNZIONE (con key-word args) ---
         spectrogram_result = spectrogram_n_octaveband_generator(
