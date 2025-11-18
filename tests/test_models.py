@@ -51,6 +51,19 @@ class MockCLAP:
         self.model = MagicMock(spec=nn.Module) # Mock del sottocomponente 'model' per 'parameters()'
         self.model.parameters.return_value = [torch.nn.Parameter(torch.randn(10))] # Mock dei parametri
 
+        # --- AGGIUNGI QUESTA STRUTTURA PER SIMULARE L'OGGETTO CLAP REALE ---
+        # 1. Crea un Mock per l'Audio Encoder
+        mock_audio_encoder = MagicMock(spec=nn.Module)
+        # 2. Aggiungi il metodo to() per simulare il passaggio al dispositivo
+        mock_audio_encoder.to.return_value = mock_audio_encoder
+        # 3. Aggiungi il metodo state_dict() per simulare l'estrazione dei parametri
+        mock_audio_encoder.state_dict.return_value = {'mock_param': torch.randn(10)} # Restituisce un dizionario fittizio
+        
+        # 4. Crea un oggetto Mock che conterrà l'encoder (il primo 'clap' nel codice)
+        self.clap = MagicMock()
+        # 5. Collega l'encoder audio al mock 'clap'
+        self.clap.audio_encoder = mock_audio_encoder
+
     def get_audio_embedding(self, audio_data, resample=False, use_tensor=False):
         # Simula l'output dell'embedding audio [Batch_size, Embed_Dim]
         if isinstance(audio_data, list):
