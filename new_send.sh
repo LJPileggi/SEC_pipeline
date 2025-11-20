@@ -40,7 +40,7 @@ embed_test="./tests/test_embeddings.py"
 singularity exec \
     --bind $TEMP_DIR:/tmp_data \
     "$SIF_FILE" \
-    python "$embed_test"
+    python3 "$embed_test"
 
 TEMP_LOG_MERGE_SCRIPT="/tmp/temp_log_merge_script_$$.py"
 cat << EOF > "$TEMP_PYTHON_SCRIPT"
@@ -64,7 +64,7 @@ TEST=True
 singularity exec \
     --bind $TEMP_DIR:/tmp_data \
     "$SIF_FILE" \
-    python "$TEMP_LOG_MERGE_SCRIPT" "$AUDIO_FORMAT" "$N_OCTAVE" "$TEST"
+    python3 "$TEMP_LOG_MERGE_SCRIPT" "$AUDIO_FORMAT" "$N_OCTAVE" "$TEST"
 
 # --- 4. PULIZIA ---
 echo "Pulizia dei file temporanei su /tmp..."

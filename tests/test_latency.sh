@@ -8,13 +8,12 @@
 #SBATCH -A IscrC_Pb-skite
 #SBATCH -p boost_usr_prod
 
-module load python/3.x
-
 # --- VARIABILI GLOBALI ---
-SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/clap_pipeline.sif"
-CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
+PROJECT_ROOT_DIR="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline"
+SIF_FILE="$PROJECT_ROOT_DIR/.containers/clap_pipeline.sif"
+CLAP_SCRATCH_WEIGHTS="$PROJECT_ROOT_DIR/.clap_weights/CLAP_weights_2023.pth"
 TEMP_DIR="/tmp/$SLURM_JOB_ID"
-PYTHON_SCRIPT="/tests/test_imports_latency.py" # Script Python da eseguire
+PYTHON_SCRIPT="/app/tests/test_imports_latency.py" # Script Python da eseguire
 
 # --------------------------------------------------------------------------------
 # MISURAZIONE GLOBALE: Inizio Esecuzione
@@ -58,6 +57,7 @@ TIME_START_singularity=$(date +%s.%N)
 
 singularity exec \
     --bind $TEMP_DIR:/tmp_data \
+    -bind $PROJECT_ROOT_DIR:/app \
     "$SIF_FILE" \
     python3 "$PYTHON_SCRIPT"
 
