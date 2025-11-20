@@ -59,7 +59,7 @@ TIME_START_singularity=$(date +%s.%N)
 singularity exec \
     --bind $TEMP_DIR:/tmp_data \
     "$SIF_FILE" \
-    python "$PYTHON_SCRIPT"
+    python3 "$PYTHON_SCRIPT"
 
 EXIT_CODE=$?
 
