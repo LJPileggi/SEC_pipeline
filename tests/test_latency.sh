@@ -9,7 +9,7 @@
 #SBATCH -p boost_usr_prod
 
 # --- VARIABILI GLOBALI ---
-SIF_FILE="/leonardo_scratch/large/$USER/SEC_pipeline/.containers/clap_pipeline.sif"
+SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/clap_pipeline.sif"
 CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
 TEMP_DIR="/tmp/$SLURM_JOB_ID"
 PYTHON_SCRIPT="/tests/test_imports_latency.py" # Script Python da eseguire
