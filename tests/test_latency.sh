@@ -57,11 +57,12 @@ TIME_START_singularity=$(date +%s.%N)
 
 singularity exec \
     --bind $TEMP_DIR:/tmp_data \
-    -bind $PROJECT_ROOT_DIR:/app \
+    --bind $PROJECT_ROOT_DIR:/app \
     "$SIF_FILE" \
     python3 "$PYTHON_SCRIPT"
 
 EXIT_CODE=$?
+echo "Codice di Uscita Singularity: $EXIT_CODE"
 
 TIME_END_singularity=$(date +%s.%N)
 echo "Tempo ESECUZIONE singularity TOTALE: $(python3 -c "print(f'{($TIME_END_singularity - $TIME_START_singularity):.6f}')") s"
