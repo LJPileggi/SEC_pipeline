@@ -56,7 +56,8 @@ MOCK_CONFIG_DATA = {
 # Assumendo che utils.py sia in una cartella 'src' (adatta il tuo path)
 sys.path.append('.')
 try:
-    from src.utils import get_config_from_yaml, HDF5DatasetManager
+    from src.utils import get_config_from_yaml, HDF5DatasetManager, write_log, 
+        HDF5EmbeddingDatasetsManager, combine_hdf5_files, setup_environ_vars
 except ImportError:
     # Fallback per l'esecuzione diretta
     print("Warning: Tentativo di importazione locale di utils.")
@@ -282,6 +283,7 @@ class TestUtils(unittest.TestCase):
         """Testa il corretto caricamento e parsing del file di configurazione."""
         config_data = get_config_from_yaml(config_file=TEST_CONFIG_FILENAME)
         self.assertIsInstance(config_data, tuple)
+        _yaml_content_keys = MOCK_CONFIG_DATA.keys()
         for i, k in enumerate(_yaml_content_keys):
             self.assertEqual(config_data[i], TEST_YAML_CONTENT[k])
 
@@ -442,13 +444,13 @@ class TestUtils(unittest.TestCase):
 
     def test_08_HDF5DatasetManager_close(self):
         """Testa la chiusura del file HDF5 handle."""
-        self.assertFalse(self.manager.h5_file_handle.closed)
+        self.assertFalse(self.manager.hf.closed)
         manager.close()
-        self.assertTrue(self.manager.h5_file_handle.closed)
+        self.assertTrue(self.manager.hf.closed)
 
     def test_09_HDF5DatasetManager_del(self):
         """Testa che il file HDF5 venga chiuso quando l'oggetto è distrutto."""
-        h5_handle = self.manager.h5_file_handle
+        h5_handle = self.manager.hf
         self.assertFalse(h5_handle.closed)
         
         # Elimina il riferimento al manager per forzare la chiamata a __del__
