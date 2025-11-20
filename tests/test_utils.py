@@ -56,7 +56,7 @@ MOCK_CONFIG_DATA = {
 # Assumendo che utils.py sia in una cartella 'src' (adatta il tuo path)
 sys.path.append('.')
 try:
-    from src.utils import get_config_from_yaml, HDF5DatasetManager, write_log, 
+    from src.utils import get_config_from_yaml, HDF5DatasetManager, write_log, \
         HDF5EmbeddingDatasetsManager, combine_hdf5_files, setup_environ_vars
 except ImportError:
     # Fallback per l'esecuzione diretta
