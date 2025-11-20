@@ -28,7 +28,7 @@ echo "---------------------------------------------------"
 TIME_START_MKDIR=$(date +%s.%N)
 mkdir -p "$TEMP_DIR"
 TIME_END_MKDIR=$(date +%s.%N)
-echo "Tempo MKDIR: $(echo \"$TIME_END_MKDIR - $TIME_START_MKDIR\" | bc) s"
+echo "Tempo MKDIR: $(python3 -c "print($TIME_END_MKDIR - $TIME_START_MKDIR)") s"
 
 # Copia dei pesi CLAP sull'area locale del nodo (/tmp)
 echo "Copia dei pesi CLAP su /tmp..."
@@ -36,7 +36,7 @@ CLAP_LOCAL_WEIGHTS="$TEMP_DIR/CLAP_weights_2023.pth"
 TIME_START_CP=$(date +%s.%N)
 cp "$CLAP_SCRATCH_WEIGHTS" "$CLAP_LOCAL_WEIGHTS"
 TIME_END_CP=$(date +%s.%N)
-echo "Tempo COPIA PESI CLAP: $(echo \"$TIME_END_CP - $TIME_START_CP\" | bc) s"
+echo "Tempo COPIA PESI CLAP: $(python3 -c "print($TIME_END_CP - $TIME_START_CP)") s"
 
 # --- 2. CONFIGURAZIONE ESECUTIVA (Variabili d'Ambiente) ---
 
@@ -54,8 +54,7 @@ echo "Avvio del test di import tramite singularity..."
 # Esegui lo script Python che misura il tempo di import
 TIME_START_singularity=$(date +%s.%N)
 
-# Usiamo /usr/bin/time per una misurazione dettagliata della chiamata singularity
-/usr/bin/time -v singularity exec \
+singularity exec \
     --bind $TEMP_DIR:/tmp_data \
     "$SIF_FILE" \
     python "$PYTHON_SCRIPT"
@@ -63,19 +62,19 @@ TIME_START_singularity=$(date +%s.%N)
 EXIT_CODE=$?
 
 TIME_END_singularity=$(date +%s.%N)
-echo "Tempo ESECUZIONE singularity TOTALE: $(echo \"$TIME_END_singularity - $TIME_START_singularity\" | bc) s"
+echo "Tempo ESECUZIONE singularity TOTALE: $(python3 -c "print($TIME_END_singularity - $TIME_START_singularity)") s"
 
 # --- 4. PULIZIA ---
 TIME_START_RM=$(date +%s.%N)
 rm -rf "$TEMP_DIR"
 TIME_END_RM=$(date +%s.%N)
-echo "Tempo PULIZIA: $(echo \"$TIME_END_RM - $TIME_START_RM\" | bc) s"
+echo "Tempo PULIZIA: $(python3 -c "print($TIME_END_RM - $TIME_START_RM)") s"
 
 # --------------------------------------------------------------------------------
 # MISURAZIONE GLOBALE: Fine Esecuzione
 # --------------------------------------------------------------------------------
 END_TIME=$(date +%s.%N)
 echo "---------------------------------------------------"
-echo "Tempo Totale Script: $(echo \"$END_TIME - $START_TIME\" | bc) s"
+echo "Tempo Totale Script: $(python3 -c "print($END_TIME - $START_TIME)") s"
 echo "---------------------------------------------------"
 exit $EXIT_CODE
