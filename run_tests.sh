@@ -10,11 +10,7 @@ WEIGHTS_DIR="$PROJECT_ROOT_DIR/.clap_weights"
 
 # Comando di Esecuzione (singularity exec)
 if [ "$1" == "test_latency.sh" ]; then
-    singularity exec \
-        --bind $DATA_ROOT:/app/data \
-        --bind $WEIGHTS_DIR:/app/weights \
-        $SIF_PATH \
-        "./tests/$1"
+    sbatch "./tests/$1"
 else
     singularity exec \
         --bind $DATA_ROOT:/app/data \
