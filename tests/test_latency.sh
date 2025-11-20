@@ -9,7 +9,7 @@
 #SBATCH -p boost_usr_prod
 
 # --- VARIABILI GLOBALI ---
-SIF_FILE="/leonardo_scratch/large/$USER/.containers/clap_pipeline.sif"
+SIF_FILE="/leonardo_scratch/large/$USER/SEC_pipeline/.containers/clap_pipeline.sif"
 CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
 TEMP_DIR="/tmp/$SLURM_JOB_ID"
 PYTHON_SCRIPT="/tests/test_imports_latency.py" # Script Python da eseguire
@@ -28,7 +28,7 @@ echo "---------------------------------------------------"
 TIME_START_MKDIR=$(date +%s.%N)
 mkdir -p "$TEMP_DIR"
 TIME_END_MKDIR=$(date +%s.%N)
-echo "Tempo MKDIR: $(python3 -c "print(f"{($TIME_END_MKDIR - $TIME_START_MKDIR):.6f}")") s"
+echo "Tempo MKDIR: $(python3 -c "print(f"{\($TIME_END_MKDIR - $TIME_START_MKDIR\):.6f}")") s"
 
 # Copia dei pesi CLAP sull'area locale del nodo (/tmp)
 echo "Copia dei pesi CLAP su /tmp..."
@@ -36,7 +36,7 @@ CLAP_LOCAL_WEIGHTS="$TEMP_DIR/CLAP_weights_2023.pth"
 TIME_START_CP=$(date +%s.%N)
 cp "$CLAP_SCRATCH_WEIGHTS" "$CLAP_LOCAL_WEIGHTS"
 TIME_END_CP=$(date +%s.%N)
-echo "Tempo COPIA PESI CLAP: $(python3 -c "print(f"{($TIME_END_CP - $TIME_START_CP):.6f}")") s"
+echo "Tempo COPIA PESI CLAP: $(python3 -c "print(f"{\($TIME_END_CP - $TIME_START_CP\):.6f}")") s"
 
 # --- 2. CONFIGURAZIONE ESECUTIVA (Variabili d'Ambiente) ---
 
@@ -62,19 +62,19 @@ singularity exec \
 EXIT_CODE=$?
 
 TIME_END_singularity=$(date +%s.%N)
-echo "Tempo ESECUZIONE singularity TOTALE: $(python3 -c "print(f"{($TIME_END_singularity - $TIME_START_singularity):.6f}")") s"
+echo "Tempo ESECUZIONE singularity TOTALE: $(python3 -c "print(f"{\($TIME_END_singularity - $TIME_START_singularity\):.6f}")") s"
 
 # --- 4. PULIZIA ---
 TIME_START_RM=$(date +%s.%N)
 rm -rf "$TEMP_DIR"
 TIME_END_RM=$(date +%s.%N)
-echo "Tempo PULIZIA: $(python3 -c "print(f"{($TIME_END_RM - $TIME_START_RM):.6f}")") s"
+echo "Tempo PULIZIA: $(python3 -c "print(f"{\($TIME_END_RM - $TIME_START_RM\):.6f}")") s"
 
 # --------------------------------------------------------------------------------
 # MISURAZIONE GLOBALE: Fine Esecuzione
 # --------------------------------------------------------------------------------
 END_TIME=$(date +%s.%N)
 echo "---------------------------------------------------"
-echo "Tempo Totale Script: $(python3 -c "print(f"{($END_TIME - $START_TIME):.6f}")") s"
+echo "Tempo Totale Script: $(python3 -c "print(f"{\($END_TIME - $START_TIME\):.6f}")") s"
 echo "---------------------------------------------------"
 exit $EXIT_CODE
