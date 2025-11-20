@@ -174,10 +174,31 @@ class TestUtils(unittest.TestCase):
         
         # Patch per simulare che il file di config si trovi in './configs/'
         # Nota: La patch di os.path.join deve essere usata con cautela e ripristinata.
+        # 1. Conserva l'originale
         cls.original_path_join = os.path.join
-        os.path.join = lambda a, b: cls.original_path_join(cls.temp_root_dir, a, b) if (a == 'configs' or a == os.path.join(cls.temp_root_dir, 'configs')) else cls.original_path_join(a, b)
-
-        # Creazione file HDF5 fittizio per i test dei Dataset Manager
+        
+        # 2. CALCOLA il percorso corretto UNA SOLA VOLTA per la condizione
+        CONFIGS_PATH = cls.original_path_join(cls.temp_root_dir, 'configs')
+        
+        # 3. Definisce la lambda con il numero corretto di argomenti (a, b, c) e SENZA RICORSIONE
+        # La funzione deve accettare *args per essere robusta, ma per chiarezza usiamo 3 argomenti
+        # Aggiustiamo il mock per re-indirizzare solo 'configs' al percorso temporaneo,
+        # mentre il resto usa la join standard.
+        def mocked_path_join(*args):
+            # Controlla se il primo argomento è 'configs' o se args[0] è il percorso configs completo
+            # Usiamo original_path_join per fare il confronto.
+            if args[0] == 'configs' or cls.original_path_join(*args) == CONFIGS_PATH:
+                 # Se l'intenzione era join('configs', ...) o join(temp_path, 'configs', ...)
+                 # Si assume che quando viene chiamato os.path.join per creare la cartella configs,
+                 # la base sia cls.temp_root_dir
+                 return cls.original_path_join(cls.temp_root_dir, *args)
+            
+            # Caso standard: usa l'originale
+            return cls.original_path_join(*args)
+        
+        os.path.join = mocked_path_join # Assegna la funzione definita, non una lambda complessa
+        
+        # Righe che generavano l'errore:
         cls.h5_filepath_data = os.path.join(cls.temp_root_dir, 'hdf5_data', TEST_H5_FILENAME)
         # La funzione mock deve restituire i dati per la verifica nei test
         cls.mock_audio_list, cls.mock_metadata_array = create_mock_hdf5_file(
