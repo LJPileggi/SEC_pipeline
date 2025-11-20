@@ -21,6 +21,37 @@ TEST_CONFIG_FILENAME = 'config0.yaml'
 TEST_H5_FILENAME = 'mock_audio_data.h5'
 NUM_SAMPLES_H5 = 10
 TEST_LOG_DIR = 'temp_logs'
+MOCK_CONFIG_DATA = {
+    'classes': [
+        'Bells', 'Birds', 'Cat_fights_and_moans', 'Chicken_coop', 'Cicadas_and_crickets',
+        'Crows_seagulls_and_magpies', 'Dog_barkings_and_howlings', 'Glass_breaking', 'Horn',
+        'Jet_aircrafts', 'Lawn_mower_brush_cutter_and_olive_shaker', 'Music',
+        'Propeller_aircrafts', 'Sirens_and_alarms', 'Thunder_fireworks_and_gunshot', 'Train',
+        'Vacuum_cleaner_fan_and_hair_dryer', 'Vehicle_idling', 'Vehicle_pass-by', 'Voices',
+        'Wind_turbine', 'Workshop'
+    ],
+    'patience': 10,
+    'epochs': 100,
+    'batch_size': 128,
+    'sampling_rate': 52100,
+    'ref': 2.0e-05,
+    'noise_perc': 0.3,
+    'seed': 1,
+    'center_freqs': [
+        6.30e+00, 8.00e+00, 1.00e+01, 1.25e+01, 1.60e+01, 2.00e+01, 2.50e+01, 3.15e+01,
+        4.00e+01, 5.00e+01, 6.30e+01, 8.00e+01, 1.00e+02, 1.25e+02, 1.60e+02, 2.00e+02,
+        2.50e+02, 3.15e+02, 4.00e+02, 5.00e+02, 6.30e+02, 8.00e+02, 1.00e+03, 1.25e+03,
+        1.60e+03, 2.00e+03, 2.50e+03, 3.15e+03, 4.00e+03, 5.00e+03, 6.30e+03, 8.00e+03,
+        1.00e+04, 1.25e+04, 1.60e+04, 2.00e+04
+    ],
+    'valid_cut_secs': [
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 30
+    ],
+    'train_size': 500,
+    'es_size': 100,
+    'valid_size': 100,
+    'test_size': 100
+}
 
 # Assumendo che utils.py sia in una cartella 'src' (adatta il tuo path)
 sys.path.append('.')
@@ -161,45 +192,47 @@ class TestUtils(unittest.TestCase):
     TEST_YAML_CONTENT = {}
     for k, v in zip(_yaml_content_keys, _yaml_content_values):
         TEST_YAML_CONTENT[k] = v
-    
+
     @classmethod
     def setUpClass(cls):
-        """Setup iniziale per la configurazione YAML e HDF5."""
-        
+        """Setup iniziale per la configurazione YAML e HDF5 (generazione dinamica)."""
+
         cls.temp_dir_obj = tempfile.TemporaryDirectory()
         cls.temp_root_dir = cls.temp_dir_obj.name
         
-        # Simula il contenuto del file config
-        cls.config_path = create_mock_yaml(cls.temp_root_dir, cls.TEST_YAML_CONTENT, filename=TEST_CONFIG_FILENAME)
+        # 1. Creazione delle directory temporanee necessarie per il codice
+        # La cartella 'configs' è quella che il codice cerca per default.
+        cls.configs_dir = os.path.join(cls.temp_root_dir, 'configs')
+        cls.hdf5_dir = os.path.join(cls.temp_root_dir, 'hdf5_data')
+        os.makedirs(cls.configs_dir, exist_ok=True)
+        os.makedirs(cls.hdf5_dir, exist_ok=True)
+
+        # 2. Definisce il percorso assoluto in cui verrà scritto il file di configurazione mock
+        cls.mock_config_filepath = os.path.join(cls.configs_dir, TEST_CONFIG_FILENAME)
+
+        # 3. SCRITTURA DINAMICA del file YAML completo (risolve la KeyError)
+        # Il file viene scritto nel percorso che il codice di mock cercherà.
+        with open(cls.mock_config_filepath, 'w') as f:
+            yaml.dump(MOCK_CONFIG_DATA, f)
         
-        # Patch per simulare che il file di config si trovi in './configs/'
-        # Nota: La patch di os.path.join deve essere usata con cautela e ripristinata.
-        # 1. Conserva l'originale
-        cls.original_path_join = os.path.join
+        # 4. Patch per os.path.join: reindirizza la ricerca del file config al percorso mock
+        # Si salva l'originale *prima* di patchare
+        cls.original_path_join = os.path.join 
         
-        # 2. CALCOLA il percorso corretto UNA SOLA VOLTA per la condizione
-        CONFIGS_PATH = cls.original_path_join(cls.temp_root_dir, 'configs')
-        
-        # 3. Definisce la lambda con il numero corretto di argomenti (a, b, c) e SENZA RICORSIONE
-        # La funzione deve accettare *args per essere robusta, ma per chiarezza usiamo 3 argomenti
-        # Aggiustiamo il mock per re-indirizzare solo 'configs' al percorso temporaneo,
-        # mentre il resto usa la join standard.
         def mocked_path_join(*args):
-            # Controlla se il primo argomento è 'configs' o se args[0] è il percorso configs completo
-            # Usiamo original_path_join per fare il confronto.
-            if args[0] == 'configs' or cls.original_path_join(*args) == CONFIGS_PATH:
-                 # Se l'intenzione era join('configs', ...) o join(temp_path, 'configs', ...)
-                 # Si assume che quando viene chiamato os.path.join per creare la cartella configs,
-                 # la base sia cls.temp_root_dir
-                 return cls.original_path_join(cls.temp_root_dir, *args)
+            # Intercetta solo la chiamata che cerca il nome file di configurazione
+            if len(args) > 0 and args[-1] == TEST_CONFIG_FILENAME:
+                # Restituisce il percorso assoluto e corretto del file mock
+                return cls.mock_config_filepath
             
-            # Caso standard: usa l'originale
+            # Altrimenti, usa la funzione originale per tutte le altre join
             return cls.original_path_join(*args)
+
+        os.path.join = mocked_path_join
         
-        os.path.join = mocked_path_join # Assegna la funzione definita, non una lambda complessa
+        # Righe che usano ora la funzione mockata:
+        cls.h5_filepath_data = os.path.join(cls.hdf5_dir, TEST_H5_FILENAME)
         
-        # Righe che generavano l'errore:
-        cls.h5_filepath_data = os.path.join(cls.temp_root_dir, 'hdf5_data', TEST_H5_FILENAME)
         # La funzione mock deve restituire i dati per la verifica nei test
         cls.mock_audio_list, cls.mock_metadata_array = create_mock_hdf5_file(
             cls.h5_filepath_data, num_samples=NUM_SAMPLES_H5, audio_format='wav'
@@ -209,24 +242,27 @@ class TestUtils(unittest.TestCase):
         # Inizializza l'HDF5DatasetManager e salvalo come variabile di classe
         # Patchiamo il logging per non inondare l'output durante l'inizializzazione
         with patch('logging.info'), patch('logging.error'):
-             try:
-                 cls.manager = HDF5DatasetManager(cls.h5_filepath_data, audio_format=cls.audio_format)
-             except Exception as e:
-                 cls.fail(f"Errore nell'inizializzazione di HDF5DatasetManager in setUpClass: {e}")
+            try:
+                cls.manager = HDF5DatasetManager(cls.h5_filepath_data, audio_format=cls.audio_format)
+            except Exception as e:
+                cls.fail(f"Errore nell'inizializzazione di HDF5DatasetManager in setUpClass: {e}")
 
         # Percorso per il file HDF5 di embeddings (creato e modificato da HDF5EmbeddingDatasetsManager)
         cls.h5_filepath_embeddings = os.path.join(cls.temp_root_dir, 'hdf5_embeddings', 'embeddings.h5')
 
-
     @classmethod
     def tearDownClass(cls):
         """Pulizia finale: chiude l'HDF5 Manager e rimuove la directory temporanea."""
-        # Chiude esplicitamente il file HDF5 del Manager
+        
+        # 1. Ripristina os.path.join PRIMA della pulizia del TemporaryDirectory (CRUCIALE)
+        os.path.join = cls.original_path_join
+        
+        # 2. Chiude esplicitamente il file HDF5 del Manager
         if hasattr(cls, 'manager') and cls.manager.hf and cls.manager.hf.id.valid:
             cls.manager.close()
             
+        # 3. Pulizia della directory temporanea.
         cls.temp_dir_obj.cleanup()
-        os.path.join = cls.original_path_join # Ripristina os.path.join
         
     def setUp(self):
         """Setup prima di ogni test."""
