@@ -199,23 +199,15 @@ class TestUtils(unittest.TestCase):
             return cls.original_path_join(*args)
 
         os.path.join = mocked_path_join
-        
+
         # Righe che usano ora la funzione mockata:
         cls.h5_filepath_data = os.path.join(cls.hdf5_dir, TEST_H5_FILENAME)
-        
+
         # La funzione mock deve restituire i dati per la verifica nei test
         cls.mock_audio_list, cls.mock_metadata_array = create_mock_hdf5_file(
             cls.h5_filepath_data, num_samples=NUM_SAMPLES_H5, audio_format='wav'
         )
         cls.audio_format = 'wav' # Formato usato nel mock file
-        
-        # Inizializza l'HDF5DatasetManager e salvalo come variabile di classe
-        # Patchiamo il logging per non inondare l'output durante l'inizializzazione
-        with patch('logging.info'), patch('logging.error'):
-            try:
-                cls.manager = HDF5DatasetManager(cls.h5_filepath_data, audio_format=cls.audio_format)
-            except Exception as e:
-                cls.fail(f"Errore nell'inizializzazione di HDF5DatasetManager in setUpClass: {e}")
 
         # Percorso per il file HDF5 di embeddings (creato e modificato da HDF5EmbeddingDatasetsManager)
         cls.h5_filepath_embeddings = os.path.join(cls.temp_root_dir, 'hdf5_embeddings', 'embeddings.h5')
@@ -226,12 +218,8 @@ class TestUtils(unittest.TestCase):
         
         # 1. Ripristina os.path.join PRIMA della pulizia del TemporaryDirectory (CRUCIALE)
         os.path.join = cls.original_path_join
-        
-        # 2. Chiude esplicitamente il file HDF5 del Manager
-        if hasattr(cls, 'manager') and cls.manager.hf and cls.manager.hf.id.valid:
-            cls.manager.close()
-            
-        # 3. Pulizia della directory temporanea.
+    
+        # 2. Pulizia della directory temporanea.
         cls.temp_dir_obj.cleanup()
         
     def setUp(self):
@@ -243,6 +231,17 @@ class TestUtils(unittest.TestCase):
         # Carica la config (necessaria per alcuni test)
         self.config = get_config_from_yaml(TEST_CONFIG_FILENAME)
         self.config_classes = self.config[0]
+
+        with patch('logging.info'), patch('logging.error'):
+            try:
+                # self.manager è ora un attributo d'istanza per ogni test
+                self.manager = HDF5DatasetManager(
+                    self.h5_filepath_data, 
+                    audio_format=self.audio_format
+                )
+            except Exception as e:
+                # Per chiarezza, uso self.fail per interrompere il test se l'inizializzazione fallisce
+                self.fail(f"Errore nell'inizializzazione di HDF5DatasetManager in setUp: {e}")
 
     # ==========================================================================
     # TEST config files e log
