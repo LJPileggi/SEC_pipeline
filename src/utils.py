@@ -212,7 +212,11 @@ class HDF5EmbeddingDatasetsManager(Dataset):
         if not ((self.partitions == set(('splits',))) or (self.partitions == set(('classes', 'splits')))):
             raise ValueError("ValueError: incorrect view type.")
         self.mode = mode
-        self.hf = h5py.File(self.h5_path, self.mode)
+        self.hf = None
+        try:
+            self.hf = h5py.File(self.h5_path, self.mode)
+        except Exception as e:
+            pass
         if 'embedding_dataset' in self.hf:
             self.dt = self._set_dataset_format(self.hf.attrs['embedding_dim'], self.hf.attrs['spec_shape'])
         else:
@@ -235,7 +239,7 @@ class HDF5EmbeddingDatasetsManager(Dataset):
         """
         if self.mode not in ['r', 'a']:
             raise Exception("Exception: can't use getitem method in mode different than read.")
-        return self.hf[hf['embedding_dataset']['ID'] == idx]
+        return self.hf[self.hf['embedding_dataset']['ID'] == idx]
         
 
     def _set_dataset_format(self, embedding_dim, spec_shape):
@@ -324,7 +328,7 @@ class HDF5EmbeddingDatasetsManager(Dataset):
             ))
         data_buffer = numpy.array(data_buffer, dtype=self.dt)
 
-        dataset = hf['embedding_dataset']
+        dataset = self.hf['embedding_dataset']
         current_size = dataset.shape[0]
         new_size = current_size + len(data_buffer)
         dataset.resize(new_size, axis=0)
