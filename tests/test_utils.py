@@ -253,7 +253,7 @@ class TestUtils(unittest.TestCase):
         self.assertIsInstance(config_data, tuple)
         _YAML_CONTENT_KEYS = TEST_YAML_CONTENT.keys()
         for i, k in enumerate(_YAML_CONTENT_KEYS):
-            if isinstance(config_data[i], np.array):
+            if isinstance(config_data[i], np.ndarray):
                 self.assertTrue(np.all(config_data[i] == TEST_YAML_CONTENT[k]))
             else:
                 self.assertEqual(config_data[i], TEST_YAML_CONTENT[k])
