@@ -233,10 +233,10 @@ class HDF5EmbeddingDatasetsManager(Dataset):
             self.hf = h5py.File(self.h5_path, self.mode)
         except Exception as e:
             pass
-        if 'embedding_dataset' in self.hf:
+        if self.hf is not None and 'embedding_dataset' in self.hf:
             self.dt = self._set_dataset_format(self.hf.attrs['embedding_dim'], self.hf.attrs['spec_shape'])
-        else:
-            self.dt = None
+        elif self.hf is None:
+            raise IOError(f"HDF5EmbeddingDatasetsManager non è riuscito ad aprire/creare il file: {h5_path}")
         if self.mode == 'a':
             self.embeddings_buffer = []
             self.spectrograms_buffer = []
