@@ -526,7 +526,7 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(manager.h5_path, self.h5_filepath_embeddings)
         self.assertEqual(manager.mode, 'a')
         self.assertEqual(manager.partitions, {'classes', 'splits'})
-        self.assertIsNotNone(manager.h5_file_handle)
+        self.assertIsNotNone(manager.hf)
         
         manager.close() # Chiudi l'handle per evitare problemi
 
@@ -749,7 +749,7 @@ class TestUtils(unittest.TestCase):
 
         # Assumendo che HDF5EmbeddingDatasetsManager sia importato
         manager = HDF5EmbeddingDatasetsManager(h5_path=self.h5_filepath_embeddings, mode='a')
-        h5_handle = manager.h5_file_handle
+        h5_handle = manager.hf
 
         # 1. Verifica che l'handle sia APERTO (id non è None)
         self.assertIsNotNone(h5_handle.id)
@@ -760,7 +760,7 @@ class TestUtils(unittest.TestCase):
         self.assertIsNone(h5_handle.id)
 
         # 3. Verifica che il riferimento interno al manager sia None (buona pratica)
-        self.assertIsNone(manager.h5_file_handle)
+        self.assertIsNone(manager.hf)
 
 
     def test_19_HDF5EmbeddingDatasetsManager_del(self):
@@ -770,7 +770,7 @@ class TestUtils(unittest.TestCase):
 
         # Assumendo che HDF5EmbeddingDatasetsManager sia importato
         manager = HDF5EmbeddingDatasetsManager(h5_path=self.h5_filepath_embeddings, mode='a')
-        h5_handle = manager.h5_file_handle
+        h5_handle = manager.hf
 
         # 1. Verifica che l'handle sia APERTO (id non è None)
         self.assertIsNotNone(h5_handle.id)
