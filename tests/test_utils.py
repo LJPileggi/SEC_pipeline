@@ -24,9 +24,9 @@ TEST_LOG_DIR = 'temp_logs'
 # Definisci il contenuto YAML come variabile di classe (come nel tuo setup)
 _YAML_CONTENT_KEYS = ["classes", "patience", "epochs", "batch_size", "sampling_rate",
                       "ref", "noise_perc", "seed", "center_freqs", "valid_cut_secs",
-                      "test_cut_secs"]
+                      "train_size", "es_size", "valid_size", "test_size"]
 _YAML_CONTENT_VALUES = [["ClassA", "ClassB"], 10, 50, 16, 52100, 2.0e-05, 0.3, 42,
-                        [100.0, 500.0], [1.0, 2.0], [3.0]]
+                        [100.0, 500.0], [1.0, 2.0], 5, 2, 2, 2]
 TEST_YAML_CONTENT = {}
 for k, v in zip(_YAML_CONTENT_KEYS, _YAML_CONTENT_VALUES):
     TEST_YAML_CONTENT[k] = v
