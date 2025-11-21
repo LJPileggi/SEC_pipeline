@@ -172,7 +172,6 @@ class TestUtils(unittest.TestCase):
         # 1. Creazione delle directory temporanee necessarie per il codice
         # La cartella 'configs' è quella che il codice cerca per default.
         cls.configs_dir = os.path.join(cls.temp_root_dir, 'configs')
-        cls.log_dir_path = os.path.join(cls.temp_root_dir, 'logs')
         cls.hdf5_dir = os.path.join(cls.temp_root_dir, 'hdf5_data')
         os.makedirs(cls.configs_dir, exist_ok=True)
         os.makedirs(cls.hdf5_dir, exist_ok=True)
@@ -266,7 +265,7 @@ class TestUtils(unittest.TestCase):
         Include test per creazione da zero, aggiornamento e config.
         """
         log_file_name = 'test_log_02_rank_0.json' # Nome del file di log per questo test specifico
-        log_file_path = os.path.join(self.log_dir_path, log_file_name)
+        log_file_path = os.path.join(self.temp_log_dir, log_file_name)
         
         # --- TEST 1: Creazione di un nuovo file di log da zero ---
         # Verifichiamo che write_log crei il file se non esiste.
@@ -278,7 +277,7 @@ class TestUtils(unittest.TestCase):
         initial_rank = 0
 
         write_log(
-            log_path=self.log_dir_path,
+            log_path=self.temp_log_dir,
             new_cut_secs_class=initial_new_cut_secs_class,
             process_time=initial_process_time,
             rank=initial_rank,
@@ -327,7 +326,7 @@ class TestUtils(unittest.TestCase):
         updated_config_kwargs = {"batch_size": 128, "epochs": 60} # 'epochs' dovrebbe rimanere 50 se già impostato
 
         write_log(
-            log_path=self.log_dir_path,
+            log_path=self.temp_log_dir,
             new_cut_secs_class=new_cut_secs_class_2,
             process_time=process_time_2,
             rank=rank_2,
