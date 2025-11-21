@@ -21,38 +21,15 @@ TEST_CONFIG_FILENAME = 'config0.yaml'
 TEST_H5_FILENAME = 'mock_audio_data.h5'
 NUM_SAMPLES_H5 = 10
 TEST_LOG_DIR = 'temp_logs'
-MOCK_CONFIG_DATA = {
-    'classes': [
-        'Bells', 'Birds', 'Cat_fights_and_moans', 'Chicken_coop', 'Cicadas_and_crickets',
-        'Crows_seagulls_and_magpies', 'Dog_barkings_and_howlings', 'Glass_breaking', 'Horn',
-        'Jet_aircrafts', 'Lawn_mower_brush_cutter_and_olive_shaker', 'Music',
-        'Propeller_aircrafts', 'Sirens_and_alarms', 'Thunder_fireworks_and_gunshot', 'Train',
-        'Vacuum_cleaner_fan_and_hair_dryer', 'Vehicle_idling', 'Vehicle_pass-by', 'Voices',
-        'Wind_turbine', 'Workshop'
-    ],
-    'patience': 10,
-    'epochs': 100,
-    'batch_size': 128,
-    'sampling_rate': 52100,
-    'ref': 2.0e-05,
-    'noise_perc': 0.3,
-    'seed': 1,
-    'center_freqs': [
-        6.30e+00, 8.00e+00, 1.00e+01, 1.25e+01, 1.60e+01, 2.00e+01, 2.50e+01, 3.15e+01,
-        4.00e+01, 5.00e+01, 6.30e+01, 8.00e+01, 1.00e+02, 1.25e+02, 1.60e+02, 2.00e+02,
-        2.50e+02, 3.15e+02, 4.00e+02, 5.00e+02, 6.30e+02, 8.00e+02, 1.00e+03, 1.25e+03,
-        1.60e+03, 2.00e+03, 2.50e+03, 3.15e+03, 4.00e+03, 5.00e+03, 6.30e+03, 8.00e+03,
-        1.00e+04, 1.25e+04, 1.60e+04, 2.00e+04
-    ],
-    'valid_cut_secs': [
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 30
-    ],
-    'train_size': 500,
-    'es_size': 100,
-    'valid_size': 100,
-    'test_size': 100
-}
-
+# Definisci il contenuto YAML come variabile di classe (come nel tuo setup)
+_YAML_CONTENT_KEYS = ["classes", "patience", "epochs", "batch_size", "sampling_rate",
+                      "ref", "noise_perc", "seed", "center_freqs", "valid_cut_secs",
+                      "test_cut_secs"]
+_YAML_CONTENT_VALUES = [["ClassA", "ClassB"], 10, 50, 16, 52100, 2.0e-05, 0.3, 42,
+                        [100.0, 500.0], [1.0, 2.0], [3.0]]
+TEST_YAML_CONTENT = {}
+for k, v in zip(_YAML_CONTENT_KEYS, _YAML_CONTENT_VALUES):
+    TEST_YAML_CONTENT[k] = v
 # Assumendo che utils.py sia in una cartella 'src' (adatta il tuo path)
 sys.path.append('.')
 try:
@@ -183,16 +160,7 @@ def create_mock_hdf5_file(file_path, num_samples, audio_format='wav', seed=42):
 # ==============================================================================
 
 class TestUtils(unittest.TestCase):
-    
-    # Definisci il contenuto YAML come variabile di classe (come nel tuo setup)
-    _yaml_content_keys = ["classes", "patience", "epochs", "batch_size", "sampling_rate",
-                          "ref", "noise_perc", "seed", "center_freqs", "valid_cut_secs",
-                          "test_cut_secs"]
-    _yaml_content_values = [["ClassA", "ClassB"], 10, 50, 16, 52100, 2.0e-05, 0.3, 42,
-                            [100.0, 500.0], [1.0, 2.0], [3.0]]
-    TEST_YAML_CONTENT = {}
-    for k, v in zip(_yaml_content_keys, _yaml_content_values):
-        TEST_YAML_CONTENT[k] = v
+
 
     @classmethod
     def setUpClass(cls):
@@ -214,7 +182,7 @@ class TestUtils(unittest.TestCase):
         # 3. SCRITTURA DINAMICA del file YAML completo (risolve la KeyError)
         # Il file viene scritto nel percorso che il codice di mock cercherà.
         with open(cls.mock_config_filepath, 'w') as f:
-            yaml.dump(MOCK_CONFIG_DATA, f)
+            yaml.dump(TEST_YAML_CONTENT, f)
         
         # 4. Patch per os.path.join: reindirizza la ricerca del file config al percorso mock
         # Si salva l'originale *prima* di patchare
@@ -283,8 +251,8 @@ class TestUtils(unittest.TestCase):
         """Testa il corretto caricamento e parsing del file di configurazione."""
         config_data = get_config_from_yaml(config_file=TEST_CONFIG_FILENAME)
         self.assertIsInstance(config_data, tuple)
-        _yaml_content_keys = MOCK_CONFIG_DATA.keys()
-        for i, k in enumerate(_yaml_content_keys):
+        _YAML_CONTENT_KEYS = TEST_YAML_CONTENT.keys()
+        for i, k in enumerate(_YAML_CONTENT_KEYS):
             self.assertEqual(config_data[i], TEST_YAML_CONTENT[k])
 
 
