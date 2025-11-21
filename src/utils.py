@@ -196,7 +196,7 @@ class HDF5DatasetManager:
         # Permuta gli indici (non i valori originali)
         # df.sample(frac=1, random_state=...) è il modo più pulito con Pandas
         to_permute = self.metadata_df.copy()
-        return to_permute.sample(frac=1, random_state=seed).reset_index(drop=False)
+        return to_permute.sample(frac=1, random_state=seed)
 
     def close(self):
         """Chiude il file HDF5."""
