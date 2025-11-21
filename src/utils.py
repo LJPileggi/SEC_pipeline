@@ -99,18 +99,6 @@ def write_log(log_path, new_cut_secs_class, process_time, rank, **kwargs):
     except Exception as e:
         raise # Rilancia l'errore se la scrittura finale fallisce.
 
-
-    logfile = os.path.join(log_path, f"log_rank_{rank}.json")
-    with open(logfile, 'r+') as f:
-        log = json.load(f)
-        if not log["config"]:
-            log["config"] = kwargs
-        log[new_cut_secs_class] = {
-                    "process_time" : process_time,
-                    "rank" : rank
-            }
-        json.dump(log, f, indent=4)
-
 def join_logs(log_dir):
     """
     Joins logs relative to different processes at the end of each execution.
