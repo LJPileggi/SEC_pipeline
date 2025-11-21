@@ -33,8 +33,8 @@ for k, v in zip(_YAML_CONTENT_KEYS, _YAML_CONTENT_VALUES):
 # Assumendo che utils.py sia in una cartella 'src' (adatta il tuo path)
 sys.path.append('.')
 try:
-    from src.utils import get_config_from_yaml, HDF5DatasetManager, write_log, \
-        HDF5EmbeddingDatasetsManager, combine_hdf5_files, setup_environ_vars
+    from src.utils import get_config_from_yaml, HDF5DatasetManager, write_log, join_logs, \
+                    HDF5EmbeddingDatasetsManager, combine_hdf5_files, setup_environ_vars
 except ImportError:
     # Fallback per l'esecuzione diretta
     print("Warning: Tentativo di importazione locale di utils.")
@@ -172,6 +172,7 @@ class TestUtils(unittest.TestCase):
         # 1. Creazione delle directory temporanee necessarie per il codice
         # La cartella 'configs' è quella che il codice cerca per default.
         cls.configs_dir = os.path.join(cls.temp_root_dir, 'configs')
+        cls.log_dir_path = os.path.join(cls.temp_root_dir, 'logs')
         cls.hdf5_dir = os.path.join(cls.temp_root_dir, 'hdf5_data')
         os.makedirs(cls.configs_dir, exist_ok=True)
         os.makedirs(cls.hdf5_dir, exist_ok=True)
