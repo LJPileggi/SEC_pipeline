@@ -77,6 +77,30 @@ def write_log(log_path, new_cut_secs_class, process_time, rank, **kwargs):
        runs.
     """
     logfile = os.path.join(log_path, f"log_rank_{rank}.json")
+    if os.path.exists(logfile):
+        try:
+            with open(logfile, 'r+') as f:
+                log = json.load(f)
+        except json.JSONDecodeError:
+            log = {"config": {}}
+        except Exception as e:
+            raise
+    else:
+        log = {"config": {}}
+    if log["config"] == {}: 
+        log["config"].update(kwargs)
+    log[new_cut_secs_class] = {
+        "process_time": process_time,
+        "rank": rank
+        }
+    try:
+        with open(logfile, 'w') as f:
+            json.dump(log, f, indent=4)
+    except Exception as e:
+        raise # Rilancia l'errore se la scrittura finale fallisce.
+
+
+    logfile = os.path.join(log_path, f"log_rank_{rank}.json")
     with open(logfile, 'r+') as f:
         log = json.load(f)
         if not log["config"]:

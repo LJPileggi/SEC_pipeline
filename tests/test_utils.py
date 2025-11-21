@@ -261,49 +261,102 @@ class TestUtils(unittest.TestCase):
 
     def test_02_write_log(self):
         """
-        Testa la scrittura di un singolo file di log, rispettando il formato 
-        {('cut_secs', 'class') : {'process_time', 'rank'}, 'config': {kwargs}}.
+        Testa la scrittura di un singolo file di log, rispettando il formato.
+        Include test per creazione da zero, aggiornamento e config.
         """
-        log_file_base = 'test_log.json'
+        log_file_name = 'test_log_02_rank_0.json' # Nome del file di log per questo test specifico
+        log_file_path = os.path.join(self.log_dir_path, log_file_name)
         
-        # Simuliamo un file di log già esistente per vedere l'aggiornamento
-        initial_log_data = {
-            '0.5_ClassZ': {"process_time": 5.0, "rank": 0},
-            'config': {"sampling_rate": 52100, "n_octave": 3}
-        }
-        initial_log_file = os.path.join(self.temp_log_dir, log_file_base)
-        with open(initial_log_file, 'w') as f:
-            json.dump(initial_log_data, f, indent=4)
-        
-        # Scriviamo un nuovo risultato per una task e aggiorniamo il config
-        new_cut_secs_class = '1.0_ClassA'
-        
-        # La funzione write_log deve usare i kwargs per aggiornare la chiave 'config'
+        # --- TEST 1: Creazione di un nuovo file di log da zero ---
+        # Verifichiamo che write_log crei il file se non esiste.
+        self.assertFalse(os.path.exists(log_file_path)) # Assicurati che non esista all'inizio
+
+        initial_config_kwargs = {"sampling_rate": 44100, "epochs": 50}
+        initial_new_cut_secs_class = '0.5_ClassX'
+        initial_process_time = 10.0
+        initial_rank = 0
+
         write_log(
-            log_path=self.temp_log_dir,
-            new_cut_secs_class=new_cut_secs_class, 
-            process_time=123.45, 
-            rank=0 
+            log_path=self.log_dir_path,
+            new_cut_secs_class=initial_new_cut_secs_class,
+            process_time=initial_process_time,
+            rank=initial_rank,
+            **initial_config_kwargs
         )
         
-        expected_log_file = os.path.join(self.temp_log_dir, log_file_base)
-        self.assertTrue(os.path.exists(expected_log_file))
+        self.assertTrue(os.path.exists(log_file_path)) # Il file dovrebbe essere stato creato
         
-        with open(expected_log_file, 'r') as f:
-            log_content = json.load(f)
+        with open(log_file_path, 'r') as f:
+            log_content_initial = json.load(f)
+        
+        # Verifica della struttura e dei contenuti iniziali
+        self.assertIn('config', log_content_initial)
+        self.assertEqual(log_content_initial['config'], initial_config_kwargs)
+        self.assertIn(initial_new_cut_secs_class, log_content_initial)
+        self.assertEqual(log_content_initial[initial_new_cut_secs_class]['process_time'], initial_process_time)
+        self.assertEqual(log_content_initial[initial_new_cut_secs_class]['rank'], initial_rank)
+
+        # --- TEST 2: Aggiornamento di un file esistente e config parziale ---
+        # Simula l'esistenza di un file di log con una config parziale
+        # (questo è simile alla tua logica originale)
+        
+        # NOTA: Per un testing più isolato, potresti ricreare log_file_path qui
+        # con un altro nome per evitare interazioni. Però per testare l'aggiornamento
+        # dello stesso file, va bene continuare.
+        
+        # Il tuo setup originale che crea un file con 'w'
+        # initial_log_data = {
+        #     '0.5_ClassZ': {"process_time": 5.0, "rank": 0},
+        #     'config': {"sampling_rate": 52100, "n_octave": 3}
+        # }
+        # with open(log_file_path, 'w') as f:
+        #     json.dump(initial_log_data, f, indent=4)
+        # ^^^ Questo è stato sostituito dalla prima parte del test, quindi non serve più replicarlo.
+        # Il log_file_path ora contiene log_content_initial.
+
+        new_cut_secs_class_2 = '1.0_ClassA'
+        process_time_2 = 123.45
+        rank_2 = 0
+        
+        # Aggiungiamo nuovi kwargs per il test di aggiornamento config
+        # Questi non dovrebbero sovrascrivere 'sampling_rate' e 'epochs'
+        # ma dovrebbero aggiungere "batch_size" se la config è stata inizialmente "vuota" in `write_log`
+        # Se la config esistente è stata inizialmente riempita (come nel tuo vecchio test),
+        # questi kwargs non aggiorneranno i valori esistenti ma aggiungeranno nuovi.
+        updated_config_kwargs = {"batch_size": 128, "epochs": 60} # 'epochs' dovrebbe rimanere 50 se già impostato
+
+        write_log(
+            log_path=self.log_dir_path,
+            new_cut_secs_class=new_cut_secs_class_2,
+            process_time=process_time_2,
+            rank=rank_2,
+            **updated_config_kwargs # Passa i nuovi kwargs
+        )
+        
+        with open(log_file_path, 'r') as f:
+            log_content_updated = json.load(f)
             
-            # 1. Verifica che i risultati della task precedente siano mantenuti
-            self.assertIn('0.5_ClassZ', log_content)
+            # Verifica che i risultati della task precedente siano mantenuti
+            self.assertIn(initial_new_cut_secs_class, log_content_updated)
+            self.assertEqual(log_content_updated[initial_new_cut_secs_class]['process_time'], initial_process_time)
             
-            # 2. Verifica che i nuovi risultati della task siano stati aggiunti
-            self.assertIn(new_cut_secs_class, log_content)
-            self.assertEqual(log_content[new_cut_secs_class]['process_time'], 123.45)
-            self.assertEqual(log_content[new_cut_secs_class]['rank'], 0)
+            # Verifica che i nuovi risultati della task siano stati aggiunti
+            self.assertIn(new_cut_secs_class_2, log_content_updated)
+            self.assertEqual(log_content_updated[new_cut_secs_class_2]['process_time'], process_time_2)
+            self.assertEqual(log_content_updated[new_cut_secs_class_2]['rank'], rank_2)
             
-            # 3. Verifica che la chiave 'config' esista e contenga i kwargs
-            self.assertIn('config', log_content)
-            self.assertEqual(log_content['config']['sampling_rate'], 52100)
-            self.assertEqual(log_content['config']['n_octave'], 3)
+            # Verifica che la chiave 'config' esista e contenga la configurazione correttamente aggiornata
+            self.assertIn('config', log_content_updated)
+            
+            # Il 'config' iniziale (sampling_rate, epochs) dovrebbe essere mantenuto,
+            # i nuovi kwargs dovrebbero aggiungersi o sovrascrivere solo se la logica interna lo permette.
+            # Dalla tua implementazione di write_log:
+            # `if not log["config"]: log["config"].update(kwargs)`
+            # -> Significa che i kwargs vengono aggiunti SOLO SE 'config' è VUTOA.
+            # Quindi, 'epochs' dovrebbe rimanere 50 dal primo test. 'batch_size' verrà aggiunto.
+            self.assertEqual(log_content_updated['config']['sampling_rate'], initial_config_kwargs['sampling_rate'])
+            self.assertEqual(log_content_updated['config']['epochs'], initial_config_kwargs['epochs']) # Dovrebbe rimanere 50
+            self.assertEqual(log_content_updated['config']['batch_size'], updated_config_kwargs['batch_size'])
 
 
     def test_03_join_logs(self):
