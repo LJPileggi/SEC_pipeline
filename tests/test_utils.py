@@ -210,7 +210,9 @@ class TestUtils(unittest.TestCase):
         cls.audio_format = 'wav' # Formato usato nel mock file
 
         # Percorso per il file HDF5 di embeddings (creato e modificato da HDF5EmbeddingDatasetsManager)
-        cls.h5_filepath_embeddings = os.path.join(cls.temp_root_dir, 'hdf5_embeddings', 'embeddings.h5')
+        cls.hdf5_embeddings_dir = os.path.join(cls.temp_root_dir, 'hdf5_embeddings')
+        os.makedirs(cls.hdf5_embeddings_dir, exist_ok=True)
+        cls.h5_filepath_embeddings = os.path.join(cls.hdf5_embeddings_dir, 'embeddings.h5')
 
     @classmethod
     def tearDownClass(cls):
