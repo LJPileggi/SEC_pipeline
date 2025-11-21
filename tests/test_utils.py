@@ -31,6 +31,7 @@ _YAML_CONTENT_VALUES = [["ClassA", "ClassB"], 10, 50, 16, 52100, 2.0e-05, 0.3, 4
 TEST_YAML_CONTENT = {}
 for k, v in zip(_YAML_CONTENT_KEYS, _YAML_CONTENT_VALUES):
     TEST_YAML_CONTENT[k] = v
+TEST_EMBED_DIM = 32
 # Assumendo che utils.py sia in una cartella 'src' (adatta il tuo path)
 sys.path.append('.')
 try:
