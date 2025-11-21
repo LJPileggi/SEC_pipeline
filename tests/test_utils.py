@@ -280,7 +280,7 @@ class TestUtils(unittest.TestCase):
         
         # La funzione write_log deve usare i kwargs per aggiornare la chiave 'config'
         write_log(
-            log_path=os.path.join(self.temp_log_dir, log_file_base), # Nota: passo il nome file specifico per l'aggiornamento
+            log_path=self.temp_log_dir,
             new_cut_secs_class=new_cut_secs_class, 
             process_time=123.45, 
             rank=0 
@@ -311,7 +311,7 @@ class TestUtils(unittest.TestCase):
         
         # Scriviamo il primo log (completato)
         write_log(
-            log_path=os.path.join(self.temp_log_dir, 'log_rank_0.json'),
+            log_path=self.temp_log_dir,
             new_cut_secs_class='1.0_Bells',
             process_time=10.0,
             rank=0,
@@ -321,7 +321,7 @@ class TestUtils(unittest.TestCase):
         
         # Scriviamo il secondo log (completato)
         write_log(
-            log_path=os.path.join(self.temp_log_dir, 'log_rank_1.json'),
+            log_path=self.temp_log_dir,
             new_cut_secs_class='2.0_Birds',
             process_time=20.0,
             rank=1,
