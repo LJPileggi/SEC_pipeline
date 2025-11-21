@@ -1,6 +1,7 @@
 import unittest
 import os
 import sys
+import gc
 import shutil
 import tempfile
 import json
@@ -467,31 +468,39 @@ class TestUtils(unittest.TestCase):
             pd.testing.assert_frame_equal(permuted_df_1.reset_index(drop=True), permuted_df_3.reset_index(drop=True))
 
     def test_08_HDF5DatasetManager_close(self):
-        """Testa la chiusura del file HDF5 handle."""
-        self.assertFalse(self.manager.hf.closed)
-        manager.close()
-        self.assertTrue(self.manager.hf.closed)
+        """Testa la chiusura esplicita del file HDF5 handle."""
+
+        # 1. Catturiamo il riferimento all'handle prima di chiamare close()
+        # E verifichiamo che l'handle sia APERTO (id non è None)
+        h5_handle_ref = self.manager.hf 
+        self.assertIsNotNone(h5_handle_ref.id) 
+
+        # 2. Chiudiamo l'handle
+        self.manager.close()
+
+        # 3. Verifichiamo che l'handle HDF5 sia chiuso (id è None)
+        self.assertIsNone(h5_handle_ref.id)
+
+        # 4. Verifichiamo che il riferimento interno al manager sia None (buona pratica)
+        self.assertIsNone(self.manager.hf) 
+
 
     def test_09_HDF5DatasetManager_del(self):
-        """Testa che il file HDF5 venga chiuso quando l'oggetto è distrutto."""
+        """Testa che il file HDF5 venga chiuso quando l'oggetto manager è distrutto (via __del__)."""
+
+        # 1. Catturiamo il riferimento all'handle e verifichiamo che sia APERTO
         h5_handle = self.manager.hf
-        self.assertFalse(h5_handle.closed)
-        
-        # Elimina il riferimento al manager per forzare la chiamata a __del__
+        self.assertIsNotNone(h5_handle.id)
+
+        # 2. Elimina il riferimento al manager per forzare la chiamata a __del__
         del self.manager
-        # Python potrebbe non chiamare __del__ immediatamente, forziamo il GC o
-        # attendiamo un momento. Per test unitari, il modo più robusto è controllare
-        # il mock se avessimo patchato l'handle. Senza patch, possiamo solo sperare
-        # o usare gc.collect() se strettamente necessario (ma sconsigliato nei test).
-        
-        # Per un test più deterministico, patchiamo h5_file_handle.close
-        with patch.object(h5_handle, 'close') as mock_close:
-            manager_del_test = HDF5DatasetManager(h5_file_path=self.h5_filepath_data, audio_format='wav')
-            manager_del_test.h5_file_handle = h5_handle # Sostituiamo l'handle con quello mockato
-            del manager_del_test
-            # Se mock_close non viene chiamato, il test fallirà.
-            # Questo verifica che __del__ tenti di chiudere l'handle.
-            mock_close.assert_called_once()
+
+        # 3. Forziamo la Garbage Collection per rendere deterministica la chiamata a __del__
+        # (Necessario solo se il test fallisce in modo intermittente, altrimenti può essere omesso)
+        gc.collect()
+
+        # 4. Verifichiamo che l'handle HDF5 sia chiuso (id è None)
+        self.assertIsNone(h5_handle.id)
 
     # ==========================================================================
     # Test Classe HDF5EmbeddingDatasetsManager
@@ -735,25 +744,43 @@ class TestUtils(unittest.TestCase):
         """Testa la chiusura del file HDF5 handle del manager."""
         if os.path.exists(self.h5_filepath_embeddings):
             os.remove(self.h5_filepath_embeddings)
+
+        # Assumendo che HDF5EmbeddingDatasetsManager sia importato
         manager = HDF5EmbeddingDatasetsManager(h5_path=self.h5_filepath_embeddings, mode='a')
-        self.assertFalse(manager.h5_file_handle.closed)
+        h5_handle = manager.h5_file_handle
+
+        # 1. Verifica che l'handle sia APERTO (id non è None)
+        self.assertIsNotNone(h5_handle.id)
+
         manager.close()
-        self.assertTrue(manager.h5_file_handle.closed)
+
+        # 2. Verifica che l'handle HDF5 sia chiuso (id è None)
+        self.assertIsNone(h5_handle.id)
+
+        # 3. Verifica che il riferimento interno al manager sia None (buona pratica)
+        self.assertIsNone(manager.h5_file_handle)
 
 
     def test_19_HDF5EmbeddingDatasetsManager_del(self):
         """Testa che il file HDF5 sia chiuso quando l'oggetto manager viene distrutto."""
         if os.path.exists(self.h5_filepath_embeddings):
             os.remove(self.h5_filepath_embeddings)
+
+        # Assumendo che HDF5EmbeddingDatasetsManager sia importato
         manager = HDF5EmbeddingDatasetsManager(h5_path=self.h5_filepath_embeddings, mode='a')
         h5_handle = manager.h5_file_handle
-        self.assertFalse(h5_handle.closed)
-        
-        with patch.object(h5_handle, 'close') as mock_close:
-            manager_del_test = HDF5EmbeddingDatasetsManager(h5_path=self.h5_filepath_embeddings, mode='a')
-            manager_del_test.h5_file_handle = h5_handle # Associa il mock handle
-            del manager_del_test
-            mock_close.assert_called_once()
+
+        # 1. Verifica che l'handle sia APERTO (id non è None)
+        self.assertIsNotNone(h5_handle.id)
+
+        # Elimina il riferimento al manager per forzare la chiamata a __del__
+        del manager
+
+        # Forziamo la Garbage Collection
+        gc.collect()
+
+        # 2. Verifichiamo che l'handle HDF5 sia chiuso (id è None)
+        self.assertIsNone(h5_handle.id)
 
     # ==========================================================================
     # Test Funzione combine_hdf5_files
@@ -880,7 +907,7 @@ class TestUtils(unittest.TestCase):
     @patch('src.utils.get_track_reproducibility_parameters')
     @patch('src.utils.HDF5DatasetManager')
     @patch('src.utils.HDF5EmbeddingDatasetsManager')
-    def test_reconstruct_tracks_from_embeddings_full_logic(self, MockEmbManager, MockTrackManager, mock_get_params):
+    def test_21_reconstruct_tracks_from_embeddings_full_logic(self, MockEmbManager, MockTrackManager, mock_get_params):
         """Testa la ricostruzione completa della traccia, inclusa la logica di offset e rumore riproducibili."""
         
         # -------------------------------------------------------------------------

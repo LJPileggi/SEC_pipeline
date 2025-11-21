@@ -201,8 +201,12 @@ class HDF5DatasetManager:
     def close(self):
         """Chiude il file HDF5."""
         if self.hf:
-            self.hf.close()
-            print(f"HDF5 Dataset Manager chiuso.")
+            try:
+                self.hf.close()
+                print(f"HDF5 Dataset Manager chiuso.")
+            except ValueError:
+                pass
+            self.hf = None
             
     def __del__(self):
         self.close()
@@ -362,9 +366,13 @@ class HDF5EmbeddingDatasetsManager(Dataset):
 
     def close(self):
         if self.hf:
-            self.hf.close()
-            print(f"HDF5 Dataset Manager chiuso.")
-            
+            try:
+                self.hf.close()
+                print(f"HDF5 Dataset Manager chiuso.")
+            except ValueError:
+                pass
+            self.hf = None
+
     def __del__(self):
         self.close()
 
