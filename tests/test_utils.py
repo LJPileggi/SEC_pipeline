@@ -583,7 +583,6 @@ class TestUtils(unittest.TestCase):
         
         elem = manager[0]
         
-        self.assertIsInstance(embedding, torch.Tensor)
         self.assertEqual(elem['embeddings'].shape, (TEST_EMBED_DIM,))
         self.assertTrue(np.array_equal(elem['embeddings'].numpy(), expected_embedding)) # Confronta i numpy array sottostanti
 
@@ -740,7 +739,7 @@ class TestUtils(unittest.TestCase):
         # Verifica la nuova dimensione
         with h5py.File(self.h5_filepath_embeddings, 'r') as f:
             self.assertEqual(f['embedding_dataset']['embeddings'].shape, (4, TEST_EMBED_DIM)) # 2 iniziali + 2 nuovi
-            self.assertEqual(f['embedding_dataset']['track_name'].shape, (4,))
+            self.assertEqual(f['embedding_dataset']['track_names'].shape, (4,))
             
         manager.close()
 
