@@ -559,7 +559,7 @@ class TestUtils(unittest.TestCase):
             spectrogram = np.random.rand(*spec_shape).astype('float32')
             hash_keys = f'hash_{i}'
             track_name = f'track_{i}'
-            manager.add_to_data_buffer(embedding, spectrogram, hash_keys, track_name, class_=class_name)
+            manager.add_to_data_buffer(embedding, spectrogram, hash_keys, track_name)
         manager.flush_buffers() # Scrive i 5 elementi
         
         self.assertEqual(len(manager), 5) # Dovrebbe contare i 5 elementi appena aggiunti
@@ -578,7 +578,7 @@ class TestUtils(unittest.TestCase):
         expected_spectrogram = np.random.rand(128,1024).astype('float32')
         expected_track_name = 'test_track_0'
         
-        manager.add_to_data_buffer(expected_embedding, expected_spectrogram, 'hash_0', expected_track_name, class_='ClassA')
+        manager.add_to_data_buffer(expected_embedding, expected_spectrogram, 'hash_0', expected_track_name)
         manager.flush_buffers()
         
         embedding, metadata = manager[0]
@@ -709,8 +709,9 @@ class TestUtils(unittest.TestCase):
         # Aggiungi 2 dati iniziali e scrivi
         for i in range(2):
             manager.add_to_data_buffer(
-                np.random.rand(TEST_EMBED_DIM).astype('f4'), np.random.rand(128, 1024).astype('f4'),
-                f'hash_initial_{i}', f'track_initial_{i}', class_='ClassA'
+                np.random.rand(TEST_EMBED_DIM).astype('f4'),
+                np.random.rand(128, 1024).astype('f4'),
+                f'hash_initial_{i}', f'track_initial_{i}'
             )
         manager.flush_buffers()
         
@@ -719,7 +720,7 @@ class TestUtils(unittest.TestCase):
         new_spectrograms = np.array([np.random.rand(128, 1024) for _ in range(2)], dtype='f4')
         new_hash_keys = np.array(['hash_new_0', 'hash_new_1'], dtype=h5py.string_dtype(encoding='utf-8'))
         new_track_names = np.array(['track_new_0', 'track_new_1'], dtype=h5py.string_dtype(encoding='utf-8'))
-        new_class_names = np.array(['classA', 'classB'], dtype=h5py.string_dtype(encoding='utf-8'))
+        # new_class_names = np.array(['classA', 'classB'], dtype=h5py.string_dtype(encoding='utf-8'))
         new_subclass_names = np.array(['subclassA', 'subclassB'], dtype=h5py.string_dtype(encoding='utf-8'))
         
         new_data = {
@@ -727,7 +728,7 @@ class TestUtils(unittest.TestCase):
             'spectrograms': new_spectrograms,
             'ID': new_hash_keys,
             'track_names': new_track_names,
-            'classes': new_class_names,
+            # 'classes': new_class_names,
             'subclasses': new_subclass_names
         }
         
