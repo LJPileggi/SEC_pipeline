@@ -581,15 +581,14 @@ class TestUtils(unittest.TestCase):
         manager.add_to_data_buffer(expected_embedding, expected_spectrogram, 'hash_0', expected_track_name)
         manager.flush_buffers()
         
-        embedding, metadata = manager[0]
+        elem = manager[0]
         
         self.assertIsInstance(embedding, torch.Tensor)
-        self.assertEqual(embedding.shape, (TEST_EMBED_DIM,))
-        self.assertTrue(np.array_equal(embedding.numpy(), expected_embedding)) # Confronta i numpy array sottostanti
-        
-        self.assertIsInstance(metadata, pd.Series)
-        self.assertEqual(metadata['track_names'], expected_track_name)
-        self.assertEqual(metadata['classes'], 'ClassA')
+        self.assertEqual(elem['embeddings'].shape, (TEST_EMBED_DIM,))
+        self.assertTrue(np.array_equal(elem['embeddings'].numpy(), expected_embedding)) # Confronta i numpy array sottostanti
+
+        self.assertEqual(elem['track_names'], expected_track_name)
+        self.assertEqual(elem['classes'], 'ClassA')
         
         manager.close()
 
@@ -600,14 +599,18 @@ class TestUtils(unittest.TestCase):
             os.remove(self.h5_filepath_embeddings)
         
         manager = HDF5EmbeddingDatasetsManager(h5_path=self.h5_filepath_embeddings, mode='a')
-        manager._set_dataset_format(embedding_dim=TEST_EMBED_DIM, spec_shape=(128, 1024))
-        
-        # Verifica che gli attributi siano stati impostati correttamente
-        self.assertEqual(manager.attrs['embedding_dim'], TEST_EMBED_DIM)
-        self.assertEqual(manager.attrs['spec_shape'], (128, 1024))
-        self.assertEqual(manager.dt['embeddings'], 'f4')
-        self.assertEqual(manager.dt['spectrograms'], 'f4')
-        
+
+        # FIX: Chiama initialize_hdf5 per impostare self.dt e gli attributi HDF5
+        embedding_dim = TEST_EMBED_DIM
+        spec_shape = (128, 1024)
+        manager.initialize_hdf5(embedding_dim, spec_shape, 'wav', 1.0, 3, 52100, 42, 0.3, 'train', 'ClassA')
+
+        self.assertEqual(manager.hf.attrs['embedding_dim'], TEST_EMBED_DIM)
+        self.assertTrue(np.array_equal(manager.hf.attrs['spec_shape'], spec_shape))
+
+        self.assertTrue(np.issubdtype(manager.dt['embeddings'].subdtype[0], np.float64))
+        self.assertEqual(manager.dt['embeddings'].subdtype[1][0], TEST_EMBED_DIM)
+
         manager.close()
 
 

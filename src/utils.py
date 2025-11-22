@@ -247,7 +247,9 @@ class HDF5EmbeddingDatasetsManager(Dataset):
             self.subclasses_buffer = []
 
     def __len__(self):
-        return self.hf.shape[0]
+        if 'embedding_dataset' in self.hf:
+            return self.hf['embedding_dataset'].shape[0]
+        return 0
 
     def __getitem__(self, idx):
         """
@@ -255,7 +257,7 @@ class HDF5EmbeddingDatasetsManager(Dataset):
         """
         if self.mode not in ['r', 'a']:
             raise Exception("Exception: can't use getitem method in mode different than read.")
-        return self.hf[self.hf['embedding_dataset']['ID'] == idx]
+        return self.hf['embedding_dataset'][idx]
         
 
     def _set_dataset_format(self, embedding_dim, spec_shape):
@@ -362,6 +364,20 @@ class HDF5EmbeddingDatasetsManager(Dataset):
         Extends dataset content directly without going through the buffers.
         Data has to be compatible with the native dtype of the dataset.
         """
+        if isinstance(new_data, dict):
+            if 'ID' not in new_data:
+                 raise ValueError("ValueError: Missing 'ID' key in dictionary data.")
+            num_new_elements = len(new_data['ID'])
+
+            new_data_array = np.empty(num_new_elements, dtype=self.dt)
+
+            for name in self.dt.names:
+                if name in new_data:
+                    new_data_array[name] = new_data[name]
+                else:
+                    raise TypeError(f"TypeError: missing {name} in to-be-added data.")
+            new_data = new_data_array
+
         if new_data.dtype != self.dt:
             raise TypeError(f"TypeError: new data dtype {new_data.dtype} is "
                             f"incompatible with native dataset dtype {self.dt}")
