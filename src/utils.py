@@ -321,7 +321,7 @@ class HDF5EmbeddingDatasetsManager(Dataset):
         self.spectrograms_buffer.append(spectrogram)
         self.hash_keys_buffer.append(hash_keys)
         self.track_names_buffer.append(track_name)
-        if 'classes' in self.partitions:
+        if 'classes' not in self.partitions:
             self.classes_buffer.append(class_ if class_ else [None] * len(embedding))
         self.subclasses_buffer.append(subclass if subclass else [None] * len(embedding))
 
