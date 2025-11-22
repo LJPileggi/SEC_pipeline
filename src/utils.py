@@ -349,7 +349,7 @@ class HDF5EmbeddingDatasetsManager(Dataset):
                     [s.encode('utf-8') for s in self.classes_buffer],
                     [s.encode('utf-8') if isinstance(s, str) else None for s in self.subclasses_buffer]
             ))
-        data_buffer = numpy.array(data_buffer, dtype=self.dt)
+        data_buffer = np.array(data_buffer, dtype=self.dt)
 
         dataset = self.hf['embedding_dataset']
         current_size = dataset.shape[0]

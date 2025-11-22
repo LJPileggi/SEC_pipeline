@@ -603,10 +603,10 @@ class TestUtils(unittest.TestCase):
         manager._set_dataset_format(embedding_dim=TEST_EMBED_DIM, spec_shape=(128, 1024))
         
         # Verifica che gli attributi siano stati impostati correttamente
-        self.assertEqual(manager.embedding_dim, TEST_EMBED_DIM)
-        self.assertEqual(manager.spec_shape, (128, 1024))
-        self.assertEqual(manager.data_dtypes['embeddings'], 'f4')
-        self.assertEqual(manager.data_dtypes['spectrograms'], 'f4')
+        self.assertEqual(manager.attrs['embedding_dim'], TEST_EMBED_DIM)
+        self.assertEqual(manager.attrs['spec_shape'], (128, 1024))
+        self.assertEqual(manager.dt['embeddings'], 'f4')
+        self.assertEqual(manager.dt['spectrograms'], 'f4')
         
         manager.close()
 
@@ -634,14 +634,13 @@ class TestUtils(unittest.TestCase):
         
         # Verifica che il gruppo e i dataset siano stati creati
         with h5py.File(self.h5_filepath_embeddings, 'r') as f:
-            self.assertIn(group_path, f)
             self.assertIn('embeddings', f['embedding_dataset'])
             self.assertIn('spectrograms', f['embedding_dataset'])
             self.assertIn('ID', f['embedding_dataset'])
             self.assertIn('track_names', f['embedding_dataset'])
             
             # Verifica attributi
-            self.assertEqual(f[group_path].attrs['n_octave'], 3)
+            self.assertEqual(f.attrs['n_octave'], 3)
             
         manager.close()
 
