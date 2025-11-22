@@ -322,8 +322,14 @@ class HDF5EmbeddingDatasetsManager(Dataset):
         self.hash_keys_buffer.append(hash_keys)
         self.track_names_buffer.append(track_name)
         if 'classes' not in self.partitions:
-            self.classes_buffer.append(class_ if class_ else [None] * len(embedding))
-        self.subclasses_buffer.append(subclass if subclass else [None] * len(embedding))
+            if class_:
+                self.classes_buffer.append(class_)
+            else:
+                self.classes_buffer = self.classes_buffer + [None] * len(embedding)
+        if subclass:
+            self.subclasses_buffer.append(subclass)
+        else:
+            self.subclasses_buffer = self.subclasses_buffer + [None] * len(embedding)
 
     def flush_buffers(self):
         """
