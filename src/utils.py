@@ -340,14 +340,14 @@ class HDF5EmbeddingDatasetsManager(Dataset):
                     self.embeddings_buffer,
                     self.spectrograms_buffer,
                     [s.encode('utf-8') for s in self.track_names_buffer],
-                    [s.encode('utf-8') for s in self.subclasses_buffer]
+                    [s.encode('utf-8') if isinstance(s, str) else None for s in self.subclasses_buffer]
             )) if 'classes' in self.partitions else list(zip(
                     self.hash_keys_buffer,
                     self.embeddings_buffer,
                     self.spectrograms_buffer,
                     [s.encode('utf-8') for s in self.track_names_buffer],
                     [s.encode('utf-8') for s in self.classes_buffer],
-                    [s.encode('utf-8') for s in self.subclasses_buffer]
+                    [s.encode('utf-8') if isinstance(s, str) else None for s in self.subclasses_buffer]
             ))
         data_buffer = numpy.array(data_buffer, dtype=self.dt)
 
