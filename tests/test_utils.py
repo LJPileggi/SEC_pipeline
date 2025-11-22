@@ -584,7 +584,7 @@ class TestUtils(unittest.TestCase):
         elem = manager[0]
         
         self.assertEqual(elem['embeddings'].shape, (TEST_EMBED_DIM,))
-        self.assertTrue(np.array_equal(elem['embeddings'].numpy(), expected_embedding)) # Confronta i numpy array sottostanti
+        self.assertTrue(np.array_equal(elem['embeddings'], expected_embedding)) # Confronta i numpy array sottostanti
 
         self.assertEqual(elem['track_names'], expected_track_name)
         self.assertEqual(elem['classes'], 'ClassA')
