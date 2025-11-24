@@ -492,7 +492,7 @@ class TestUtils(unittest.TestCase):
         """Testa che il file HDF5 venga chiuso quando l'oggetto manager è distrutto (via __del__)."""
         import weakref
 
-        manager = HDF5DatasetManager(self.h5_file_path)
+        manager = HDF5DatasetManager(self.h5_filepath_data)
         h5_file_object = manager.hf
         
         self.assertIsNotNone(h5_file_object.id)
