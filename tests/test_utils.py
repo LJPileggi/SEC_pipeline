@@ -258,6 +258,13 @@ class TestUtils(unittest.TestCase):
         for i, k in enumerate(_YAML_CONTENT_KEYS):
             if isinstance(config_data[i], np.ndarray):
                 self.assertTrue(np.all(config_data[i] == TEST_YAML_CONTENT[k]))
+            elif k == 'train_size':
+                self.assertEqual(config_data[i], [
+                        ('train', TEST_YAML_CONTENT['train_size']),
+                        ('es', TEST_YAML_CONTENT['es_size']),
+                        ('valid', TEST_YAML_CONTENT['valid_size']),
+                        ('test', TEST_YAML_CONTENT['test_size'])
+                    ])
             else:
                 self.assertEqual(config_data[i], TEST_YAML_CONTENT[k])
 
@@ -267,17 +274,18 @@ class TestUtils(unittest.TestCase):
         Testa la scrittura di un singolo file di log, rispettando il formato.
         Include test per creazione da zero, aggiornamento e config.
         """
-        log_file_name = 'test_log_02_rank_0.json' # Nome del file di log per questo test specifico
-        log_file_path = os.path.join(self.temp_log_dir, log_file_name)
-        
         # --- TEST 1: Creazione di un nuovo file di log da zero ---
         # Verifichiamo che write_log crei il file se non esiste.
         self.assertFalse(os.path.exists(log_file_path)) # Assicurati che non esista all'inizio
 
         initial_config_kwargs = {"sampling_rate": 44100, "epochs": 50}
-        initial_new_cut_secs_class = '0.5_ClassX'
+        initial_new_cut_secs_class = '1_ClassX'
         initial_process_time = 10.0
         initial_rank = 0
+
+        log_file_name = 'log_rank_{rank}.json' # Nome del file di log per questo test specifico
+        log_file_path = os.path.join(self.temp_log_dir, log_file_name)
+
 
         write_log(
             log_path=self.temp_log_dir,
@@ -317,7 +325,7 @@ class TestUtils(unittest.TestCase):
         # ^^^ Questo è stato sostituito dalla prima parte del test, quindi non serve più replicarlo.
         # Il log_file_path ora contiene log_content_initial.
 
-        new_cut_secs_class_2 = '1.0_ClassA'
+        new_cut_secs_class_2 = '1_ClassA'
         process_time_2 = 123.45
         rank_2 = 0
         
@@ -1077,8 +1085,8 @@ class TestUtils(unittest.TestCase):
     @patch('src.utils.torch.device', MagicMock(side_effect=lambda x: MagicMock(type='cuda',
                                 index=int(x) if isinstance(x, str) and 'cuda' in x else x)))
     @patch('src.utils.logging.info', MagicMock())
-    def test_23_setup_distributed_environment(self, mock_log_info, mock_torch_device,
-                                mock_set_device, mock_is_available, mock_init_pg):
+    def test_23_setup_distributed_environment(self, mock_init_pg, mock_is_available,
+                                mock_set_device, mock_torch_device, mock_log_info):
         """Testa l'inizializzazione dell'ambiente distribuito (DDP)."""
         
         # Test SLURM con GPU
@@ -1102,7 +1110,7 @@ class TestUtils(unittest.TestCase):
     @patch('src.utils.dist.destroy_process_group', MagicMock())
     @patch('src.utils.logging.info', MagicMock())
     @patch('src.utils.os.environ.get', return_value='0') # Mock del rank globale per il logging
-    def test_24_cleanup_distributed_environment(self, mock_os_get_environ, mock_log_info, mock_destroy, mock_barrier):
+    def test_24_cleanup_distributed_environment(self, mock_barrier, mock_destroy, mock_log_info, mock_os_get_environ):
         """Testa la corretta pulizia dell'ambiente distribuito."""
         cleanup_distributed_environment()
         mock_barrier.assert_called_once()
