@@ -294,7 +294,7 @@ class TestUtils(unittest.TestCase):
             rank=initial_rank,
             **initial_config_kwargs
         )
-        
+        print(log_file_path)
         self.assertTrue(os.path.exists(log_file_path)) # Il file dovrebbe essere stato creato
         
         with open(log_file_path, 'r') as f:

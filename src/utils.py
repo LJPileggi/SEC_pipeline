@@ -77,6 +77,7 @@ def write_log(log_path, new_cut_secs_class, process_time, rank, **kwargs):
        runs.
     """
     logfile = os.path.join(log_path, f"log_rank_{rank}.json")
+    print(logfile)
     if os.path.exists(logfile):
         try:
             with open(logfile, 'r+') as f:
