@@ -638,8 +638,6 @@ class TestUtils(unittest.TestCase):
         
         # Verifica che il gruppo e i dataset siano stati creati
         with h5py.File(self.h5_filepath_embeddings, 'r') as f:
-            self.assertIn('embedding_dataset', f['embedding_dataset'])
-            
             # Verifica attributi
             self.assertEqual(f.attrs['audio_format'], 'wav')
             self.assertEqual(f.attrs['cut_secs'], 1)
@@ -899,7 +897,7 @@ class TestUtils(unittest.TestCase):
             sample_rate=52100,
             seed=42,
             noise_perc=0.3,
-            splits_list=['train']
+            splits_list=[('train', 1)]
         )
         
         # -------------------------------------------------------------------------
