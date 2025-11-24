@@ -490,20 +490,31 @@ class TestUtils(unittest.TestCase):
 
     def test_09_HDF5DatasetManager_del(self):
         """Testa che il file HDF5 venga chiuso quando l'oggetto manager è distrutto (via __del__)."""
+        import weakref
 
-        # 1. Catturiamo il riferimento all'handle e verifichiamo che sia APERTO
-        h5_handle = self.manager.hf
-        self.assertIsNotNone(h5_handle.id)
-
-        # 2. Elimina il riferimento al manager per forzare la chiamata a __del__
-        del self.manager
-
-        # 3. Forziamo la Garbage Collection per rendere deterministica la chiamata a __del__
-        # (Necessario solo se il test fallisce in modo intermittente, altrimenti può essere omesso)
-        gc.collect()
-
-        # 4. Verifichiamo che l'handle HDF5 sia chiuso (id è None)
-        self.assertIsNone(h5_handle.id)
+        manager = HDF5DatasetManager(self.h5_file_path)
+        h5_file_object = manager.hf
+        
+        self.assertIsNotNone(h5_file_object.id)
+        
+        # 1. Crea un RIFERIMENTO DEBOLE all'handle del file. 
+        # Questo riferimento ci permette di accedere all'oggetto, ma non lo tiene in vita.
+        weak_h5_ref = weakref.ref(h5_file_object)
+        
+        # 2. Elimina il manager. Il suo __del__ è pronto per essere chiamato.
+        # h5_file_object è ancora in vita grazie a qualche riferimento implicito.
+        del manager
+        
+        # 3. Forziamo l'esecuzione di __del__
+        gc.collect() 
+        
+        # 4. Verifica che il file ID sia None sull'oggetto originale (ora orfano)
+        self.assertIsNone(h5_file_object.id) 
+        
+        # 5. Verifica aggiuntiva: il riferimento debole dovrebbe essere MORTO dopo la distruzione
+        # Questo è il check definitivo che il manager è stato distrutto completamente.
+        # weak_h5_ref() dovrebbe tornare None se l'oggetto è stato distrutto.
+        self.assertIsNone(weak_h5_ref())
 
     # ==========================================================================
     # Test Classe HDF5EmbeddingDatasetsManager
