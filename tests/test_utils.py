@@ -647,7 +647,7 @@ class TestUtils(unittest.TestCase):
             self.assertEqual(f.attrs['noise_perc'], 0.3)
             self.assertEqual(f.attrs['class'], 'ClassA')
             self.assertEqual(f.attrs['embedding_dim'], TEST_EMBED_DIM)
-            self.assertEqual(np.all(f.attrs['spec_shape'] == (128, 1024)))
+            self.assertTrue(np.all(f.attrs['spec_shape'] == (128, 1024)))
             
         manager.close()
 
@@ -914,8 +914,8 @@ class TestUtils(unittest.TestCase):
             52100, # (sample_rate)
             42, # (seed)
             0.3, # (noise_perc)
-            'train', 
-            class_name=None # Il file combinato non è specifico per una classe
+            'train'#, 
+            # class_name=None # Il file combinato non è specifico per una classe
         )
         
         # Due file di input (ClassA_1.0, ClassB_1.0), due chiamate a extend_dataset.
