@@ -646,8 +646,8 @@ class TestUtils(unittest.TestCase):
             self.assertEqual(f.attrs['seed'], 42)
             self.assertEqual(f.attrs['noise_perc'], 0.3)
             self.assertEqual(f.attrs['class'], 'ClassA')
-            self.assertEqual(f.dt['embeddings'].shape, TEST_EMBED_DIM)
-            self.assertEqual(f.dt['spectrograms'].shape, (128, 1024))
+            self.assertEqual(f.attrs['embedding_dim'], TEST_EMBED_DIM)
+            self.assertEqual(f.attrs['spec_shape'], (128, 1024))
             
         manager.close()
 
@@ -897,7 +897,8 @@ class TestUtils(unittest.TestCase):
             sample_rate=52100,
             seed=42,
             noise_perc=0.3,
-            splits_list=[('train', 1)]
+            splits_list=[('train', 1)],
+            class_name=None
         )
         
         # -------------------------------------------------------------------------
@@ -914,7 +915,7 @@ class TestUtils(unittest.TestCase):
             52100, # (sample_rate)
             42, # (seed)
             0.3, # (noise_perc)
-            'train', 
+            [('train', 1)], 
             class_name=None # Il file combinato non è specifico per una classe
         )
         
