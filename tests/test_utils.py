@@ -495,7 +495,7 @@ class TestUtils(unittest.TestCase):
         # Questo garantisce che l'unico riferimento (manager) venga eliminato.
         def create_and_destroy_manager():
             # 1. Crea il manager
-            manager = HDF5DatasetManager(self.h5_file_path)
+            manager = HDF5DatasetManager(self.h5_filepath_data)
             
             # 2. Salva il riferimento al file object H5PY prima che il manager sparisca.
             # Questo è l'oggetto su cui eseguiremo il check.
