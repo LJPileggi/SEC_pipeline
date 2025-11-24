@@ -409,7 +409,7 @@ class HDF5EmbeddingDatasetsManager(Dataset):
         self.close()
 
 def combine_hdf5_files(root_dir, cut_secs_list, embedding_dim, spec_shape, audio_format, cut_secs, n_octave, \
-                                                                sample_rate, seed, noise_perc, splits_list)):
+                                                                sample_rate, seed, noise_perc, splits_list):
     """
     Combines individual HDF5 files for each class and split into unified HDF5 files
     for each split.
