@@ -481,7 +481,7 @@ class TestUtils(unittest.TestCase):
         self.manager.close()
 
         # 3. Verifichiamo che l'handle HDF5 sia chiuso (id è None)
-        time.sleep(0.001)
+        time.sleep(0.1)
         self.assertIsNone(h5_handle_ref.id)
 
         # 4. Verifichiamo che il riferimento interno al manager sia None (buona pratica)
@@ -490,20 +490,32 @@ class TestUtils(unittest.TestCase):
 
     def test_09_HDF5DatasetManager_del(self):
         """Testa che il file HDF5 venga chiuso quando l'oggetto manager è distrutto (via __del__)."""
-
-        # 1. Catturiamo il riferimento all'handle e verifichiamo che sia APERTO
-        h5_handle = self.manager.hf
-        self.assertIsNotNone(h5_handle.id)
-
-        # 2. Elimina il riferimento al manager per forzare la chiamata a __del__
-        del self.manager
-
-        # 3. Forziamo la Garbage Collection per rendere deterministica la chiamata a __del__
-        # (Necessario solo se il test fallisce in modo intermittente, altrimenti può essere omesso)
-        gc.collect()
-
-        # 4. Verifichiamo che l'handle HDF5 sia chiuso (id è None)
-        self.assertIsNone(h5_handle.id)
+        
+        # Usiamo una funzione locale per creare il manager e lasciarlo andare fuori scope.
+        # Questo garantisce che l'unico riferimento (manager) venga eliminato.
+        def create_and_destroy_manager():
+            # 1. Crea il manager
+            manager = HDF5DatasetManager(self.h5_file_path)
+            
+            # 2. Salva il riferimento al file object H5PY prima che il manager sparisca.
+            # Questo è l'oggetto su cui eseguiremo il check.
+            h5_file_object = manager.hf
+            
+            self.assertIsNotNone(h5_file_object.id)
+            
+            # Non facciamo 'del manager' esplicito; lo lasciamo andare fuori scope
+            # per garantire che Python gestisca la sua distruzione.
+            return h5_file_object
+        
+        # manager_to_check è ora l'oggetto h5py.File, ma non c'è più un riferimento 
+        # al HDF5DatasetManager che lo conteneva.
+        h5_file_object_to_check = create_and_destroy_manager()
+        
+        # 3. Forza la raccolta per eseguire __del__ sul manager oramai fuori scope.
+        gc.collect() 
+        
+        # 4. Verifica la chiusura
+        self.assertIsNone(h5_file_object_to_check.id)
 
     # ==========================================================================
     # Test Classe HDF5EmbeddingDatasetsManager
@@ -760,7 +772,7 @@ class TestUtils(unittest.TestCase):
         manager.close()
 
         # 2. Verifica che l'handle HDF5 sia chiuso (id è None)
-        time.sleep(0.001)
+        time.sleep(0.1)
         self.assertIsNone(h5_handle.id)
 
         # 3. Verifica che il riferimento interno al manager sia None (buona pratica)
