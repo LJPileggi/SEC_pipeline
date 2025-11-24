@@ -9,6 +9,7 @@ import pandas as pd
 import torch
 import torch.distributed as dist
 from torch.utils.data import Dataset, DataLoader
+import traceback
 
 __all__ = [
            "get_config_from_yaml",
@@ -413,23 +414,22 @@ def combine_hdf5_files(root_dir, cut_secs_list, embedding_dim, spec_shape, audio
     """
     Combines individual HDF5 files for each class and split into unified HDF5 files
     for each split.
+    # ... (omissione documentazione)
     """
     classes_list = sorted([d for d in os.listdir(os.path.join(root_dir, f'{cut_secs_list[0]}_secs')) 
                             if os.path.isdir(os.path.join(root_dir, f'{cut_secs_list[0]}_secs', d))])
     
     for current_cut_secs in cut_secs_list:
-        logging.info(f"Processing cut_secs: {current_cut_secs}...")
+        print(f"--- [DEBUG] Processing cut_secs: {current_cut_secs}... ---")
         
         for split_tuple in splits_list:
-            split_name = split_tuple[0] # Estrae la stringa split: 'train', 'valid', ecc.
+            split_name = split_tuple[0]
             output_h5_path = os.path.join(root_dir, f'{current_cut_secs}_secs', f'combined_{split_name}.h5')
             
-            # Setup Manager di Output
+            # Setup Manager di Output (out_h5)
+            print(f"[DEBUG] Creazione out_h5 (output) per split '{split_name}' in {output_h5_path}")
             out_h5 = HDF5EmbeddingDatasetsManager(output_h5_path, mode='a', partitions=set(('splits',)))
             
-            # Utilizzo split_name (e non il tuple) per il parametro split. Se il test fallisce ancora qui, 
-            # bisogna correggere il test (test_20) per usare split_name invece di 'train'
-            # nel suo assert: initialize_hdf5(..., split_name='train').
             out_h5.initialize_hdf5(embedding_dim, spec_shape, audio_format, current_cut_secs, n_octave,
                                              sample_rate, seed, noise_perc, split_name)
 
@@ -437,46 +437,56 @@ def combine_hdf5_files(root_dir, cut_secs_list, embedding_dim, spec_shape, audio
                 class_h5_path = os.path.join(root_dir, f'{current_cut_secs}_secs', class_name, f'{class_name}_{split_name}.h5')
                         
                 if not os.path.exists(class_h5_path):
-                    # Ho modificato l'uso di split_name per coerenza
-                    logging.warning(f"File non trovato per la classe '{class_name}' e split '{split_name}': {class_h5_path}. Salto.")
+                    print(f"[WARNING] File non trovato per la classe '{class_name}' e split '{split_name}': {class_h5_path}. Salto.")
                     continue
                         
-                logging.info(f"Adding data from class: {class_name}...")
+                print(f"[INFO] Aggiunta dati dalla classe: {class_name}...")
                         
                 try:
-                    # Uso HDF5EmbeddingDatasetsManager per la lettura
+                    print(f"[DEBUG] Tentativo di aprire in_h5 per {class_h5_path}")
+                    # Uso HDF5EmbeddingDatasetsManager per la lettura (in_h5)
                     in_h5 = HDF5EmbeddingDatasetsManager(class_h5_path, 'r', set(('splits', 'classes')))
+                    print(f"[DEBUG] in_h5 aperto. Tentativo di leggere 'embedding_dataset'.")
                     
-                    # Lettura dei dati (in_h5 deve avere l'interfaccia di un dict)
+                    # Lettura dei dati. Se fallisce qui, avremo un traceback.
                     class_data = in_h5['embedding_dataset'][:]
+                    print(f"[DEBUG] Dati letti da in_h5. class_data.shape: {class_data.shape}, dtype: {class_data.dtype}")
                     
-                    # Prepara l'array esteso con il dtype del manager di output
+                    print(f"[DEBUG] out_h5.dt: {out_h5.dt}")
                     class_data_extended = np.empty(class_data.shape, dtype=out_h5.dt)
+                    print(f"[DEBUG] class_data_extended creato. Tentativo di copiare i campi.")
                     
-                    # FIX CRUCIALE: Usiamo .dtype.names e gestiamo solo i campi che esistono
+                    # FIX: Copia dei campi usando .dtype.names (corretto nell'ultima iterazione)
                     for name in class_data_extended.dtype.names:
                         if name in class_data.dtype.names: 
                             class_data_extended[name] = class_data[name]
+                    print(f"[DEBUG] Campi standard copiati.")
 
-                    # Aggiunta del metadato 'classes' (codificato correttamente)
-                    # Verifica che il campo 'classes' esista prima di provare ad assegnarlo
+                    # Aggiunta del metadato 'classes'
                     if 'classes' in class_data_extended.dtype.names:
                         class_data_extended['classes'] = np.array([class_name.encode('utf-8')] * len(class_data),
                                                                     dtype=class_data_extended.dtype['classes'])
+                        print(f"[DEBUG] Campo 'classes' aggiunto.")
                         
-                    # Chiamata che DEVE avvenire 2 volte per il test_20
+                    # CHIAMATA CRUCIALE: Se non viene raggiunta, c'è un errore prima.
                     out_h5.extend_dataset(class_data_extended)
+                    print(f"[DEBUG] extend_dataset CHIAMATO CON SUCCESSO per {class_name}.")
                     
                     # Chiusura del manager di input
                     in_h5.close()
+                    print(f"[DEBUG] in_h5 chiuso per {class_name}.")
                     
                 except Exception as e:
-                    # Ho modificato l'uso di split_name per coerenza
-                    logging.error(f"Errore durante l'unione dei file di classe '{class_name}' (Split {split_name}): {e}. Continuo.")
-
+                    print("\n" + "="*80)
+                    print(f"FATAL ERROR - Eccezione catturata durante l'unione dei file di classe '{class_name}' (Split {split_name}): {e}")
+                    # Stampa l'eccezione completa per il debug
+                    traceback.print_exc() 
+                    print("="*80 + "\n")
+                    # Continua l'esecuzione
+                    
             # Chiusura del manager di output
             out_h5.close() 
-            logging.info(f"Combinazione completata per '{split_name}'. File salvato in: {output_h5_path}")
+            print(f"[INFO] Combinazione completata per '{split_name}'. File salvato in: {output_h5_path}")
 
 def get_track_reproducibility_parameters(idx):
     """
