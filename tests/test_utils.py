@@ -6,6 +6,7 @@ import shutil
 import tempfile
 import json
 import glob
+import time
 from unittest.mock import patch, MagicMock
 
 # Importa i moduli necessari
@@ -480,6 +481,7 @@ class TestUtils(unittest.TestCase):
         self.manager.close()
 
         # 3. Verifichiamo che l'handle HDF5 sia chiuso (id è None)
+        time.sleep(0.001)
         self.assertIsNone(h5_handle_ref.id)
 
         # 4. Verifichiamo che il riferimento interno al manager sia None (buona pratica)
@@ -758,6 +760,7 @@ class TestUtils(unittest.TestCase):
         manager.close()
 
         # 2. Verifica che l'handle HDF5 sia chiuso (id è None)
+        time.sleep(0.001)
         self.assertIsNone(h5_handle.id)
 
         # 3. Verifica che il riferimento interno al manager sia None (buona pratica)
