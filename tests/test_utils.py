@@ -589,7 +589,7 @@ class TestUtils(unittest.TestCase):
         self.assertTrue(np.array_equal(elem['embeddings'], expected_embedding)) # Confronta i numpy array sottostanti
 
         self.assertEqual(elem['track_names'].decode('utf-8'), expected_track_name)
-        self.assertEqual(elem['classes'].decode('utf-8'), 'ClassA')
+        self.assertEqual(manager.hf.attrs['class'].decode('utf-8'), 'ClassA')
         
         manager.close()
 
@@ -873,6 +873,13 @@ class TestUtils(unittest.TestCase):
                 f.attrs['class'] = class_name
                 f.attrs['cut_secs'] = FIXED_CUT_SECS 
                 f.attrs['split'] = 'train' 
+                f.attrs['audio_format'] = 'wav'
+                f.attrs['n_octave'] = 3
+                f.attrs['sample_rate'] = 52100
+                f.attrs['noise_perc'] = 0.3
+                f.attrs['seed'] = 42
+                f.attrs['embedding_dim'] = TEST_EMBED_DIM
+                f.attrs['spec_shape'] = SPEC_SHAPE
                 
         # -------------------------------------------------------------------------
         # 3. Configura il mock di HDF5EmbeddingDatasetsManager per tracciare le chiamate
@@ -884,11 +891,18 @@ class TestUtils(unittest.TestCase):
         combine_hdf5_files(
             root_dir=self.temp_root_dir, 
             cut_secs_list=CUT_SECS_LIST,
-            audio_format='wav', 
-            splits_list=['train'],
             embedding_dim=TEST_EMBED_DIM,
-            spec_shape=SPEC_SHAPE
+            spec_shape=SPEC_SHAPE,
+            audio_format='wav',
+            cut_secs=FIXED_CUT_SECS,
+            n_octave=3,
+            sample_rate=52100,
+            seed=42,
+            noise_perc=0.3,
+            splits_list=['train']
         )
+        combine_hdf5_files(root_dir, cut_secs_list, embedding_dim, spec_shape, audio_format, cut_secs, n_octave, \
+                                                                sample_rate, seed, noise_perc, splits_list)
         
         # -------------------------------------------------------------------------
         # 5. Verifica le chiamate al manager e al suo metodo extend_dataset
