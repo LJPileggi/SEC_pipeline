@@ -1079,7 +1079,7 @@ class TestUtils(unittest.TestCase):
         mock_set_device = MagicMock()
         # Mock complesso per torch.device (usato da setup_distributed_environment)
         mock_torch_device = MagicMock(side_effect=lambda x: MagicMock(type='cuda', 
-                                                                    index=int(x) if isinstance(x, str) and 'cuda' in x else x))
+                                      index=int(x.split(':')[-1]) if isinstance(x, str) and 'cuda' in x else x))
         mock_log_info = MagicMock()
         
         # Applica i mock usando un gestore di contesto annidato
@@ -1116,13 +1116,15 @@ class TestUtils(unittest.TestCase):
         mock_log_info = MagicMock()
         mock_os_get_environ = MagicMock(return_value='0')
 
+        rank = 0
+
         # Applica i mock usando un gestore di contesto
         with patch('src.utils.dist.barrier', mock_barrier), \
              patch('src.utils.dist.destroy_process_group', mock_destroy), \
              patch('src.utils.logging.info', mock_log_info), \
              patch('src.utils.os.environ.get', mock_os_get_environ):
 
-            cleanup_distributed_environment()
+            cleanup_distributed_environment(rank)
             mock_barrier.assert_called_once()
             mock_destroy.assert_called_once()
             mock_log_info.assert_called()
