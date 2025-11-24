@@ -491,32 +491,33 @@ class TestUtils(unittest.TestCase):
     def test_09_HDF5DatasetManager_del(self):
         """Testa che il file HDF5 venga chiuso quando l'oggetto manager è distrutto (via __del__)."""
         
-        # Usiamo una funzione locale per creare il manager e lasciarlo andare fuori scope.
-        # Questo garantisce che l'unico riferimento (manager) venga eliminato.
-        def create_and_destroy_manager():
-            # 1. Crea il manager
+        # Dizionario per contenere il riferimento all'handle del file.
+        ref_container = {} 
+
+        # Funzione helper per isolare l'oggetto HDF5DatasetManager
+        def create_and_destroy():
             manager = HDF5DatasetManager(self.h5_filepath_data)
             
-            # 2. Salva il riferimento al file object H5PY prima che il manager sparisca.
-            # Questo è l'oggetto su cui eseguiremo il check.
-            h5_file_object = manager.hf
+            # Salva il riferimento all'oggetto h5py.File (non il manager) nel contenitore.
+            ref_container['h5_handle'] = manager.hf 
             
-            self.assertIsNotNone(h5_file_object.id)
+            self.assertIsNotNone(ref_container['h5_handle'].id)
             
-            # Non facciamo 'del manager' esplicito; lo lasciamo andare fuori scope
-            # per garantire che Python gestisca la sua distruzione.
-            return h5_file_object
+            # Quando questa funzione termina, 'manager' va fuori scope e il suo 
+            # reference count scende a 1 (tenuto solo da h5_handle in ref_container).
+            return
         
-        # manager_to_check è ora l'oggetto h5py.File, ma non c'è più un riferimento 
-        # al HDF5DatasetManager che lo conteneva.
-        h5_file_object_to_check = create_and_destroy_manager()
+        # Esegui la creazione/distruzione nell'ambito isolato
+        create_and_destroy() 
         
-        # 3. Forza la raccolta per eseguire __del__ sul manager oramai fuori scope.
+        # Il manager è fuori scope. Il suo __del__ è pronto per essere chiamato.
+        
+        # Forza la raccolta per eseguire __del__ del manager oramai orfano.
         gc.collect() 
         
-        # 4. Verifica la chiusura
-        self.assertIsNone(h5_file_object_to_check.id)
-
+        # Verifica la chiusura sull'handle che era l'unico riferimento rimasto
+        # L'esecuzione di __del__ deve aver impostato h5_handle.id a None.
+        self.assertIsNone(ref_container['h5_handle'].id)
     # ==========================================================================
     # Test Classe HDF5EmbeddingDatasetsManager
     # ==========================================================================
