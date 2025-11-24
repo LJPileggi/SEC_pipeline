@@ -1069,43 +1069,62 @@ class TestUtils(unittest.TestCase):
             self.assertEqual(os.environ.get('MASTER_ADDR'), 'localhost')
             self.assertEqual(os.environ.get('MASTER_PORT'), '29500')
 
-    @patch('src.utils.dist.init_process_group', MagicMock())
-    @patch('src.utils.torch.cuda.is_available', return_value=True)
-    @patch('src.utils.torch.cuda.set_device', MagicMock())
-    @patch('src.utils.torch.device', MagicMock(side_effect=lambda x: MagicMock(type='cuda',
-                                index=int(x) if isinstance(x, str) and 'cuda' in x else x)))
-    @patch('src.utils.logging.info', MagicMock())
-    def test_23_setup_distributed_environment(self, mock_init_pg, mock_is_available,
-                                mock_set_device, mock_torch_device, mock_log_info):
+    def test_23_setup_distributed_environment(self):
         """Testa l'inizializzazione dell'ambiente distribuito (DDP)."""
         
-        # Test SLURM con GPU
-        device = setup_distributed_environment(rank=1, world_size=4, slurm=True)
-        mock_init_pg.assert_called_once_with("nccl", rank=1, world_size=4)
-        mock_set_device.assert_called_once_with(1)
-        self.assertEqual(device.type, 'cuda')
-        self.assertEqual(device.index, 1)
-        mock_init_pg.reset_mock() # Reset per il prossimo test
+        # Definisci i mock come variabili locali
+        mock_init_pg = MagicMock()
+        mock_is_available = MagicMock(return_value=True)
+        mock_set_device = MagicMock()
+        # Mock complesso per torch.device (usato da setup_distributed_environment)
+        mock_torch_device = MagicMock(side_effect=lambda x: MagicMock(type='cuda', 
+                                                                    index=int(x) if isinstance(x, str) and 'cuda' in x else x))
+        mock_log_info = MagicMock()
+        
+        # Applica i mock usando un gestore di contesto annidato
+        with patch('src.utils.dist.init_process_group', mock_init_pg), \
+             patch('src.utils.torch.cuda.is_available', mock_is_available), \
+             patch('src.utils.torch.cuda.set_device', mock_set_device), \
+             patch('src.utils.torch.device', mock_torch_device), \
+             patch('src.utils.logging.info', mock_log_info):
+            
+            # Test SLURM con GPU
+            device = setup_distributed_environment(rank=1, world_size=4, slurm=True)
+            mock_init_pg.assert_called_once_with("nccl", rank=1, world_size=4)
+            mock_set_device.assert_called_once_with(1)
+            self.assertEqual(device.type, 'cuda')
+            self.assertEqual(device.index, 1)
+            
+            # NOTA: Qui devi usare mock_init_pg.reset_mock() e non la versione passata come argomento
+            mock_init_pg.reset_mock() 
 
-        # Test Locale con CPU (forzando is_available=False)
-        mock_is_available.return_value = False
-        device_cpu = setup_distributed_environment(rank=0, world_size=1, slurm=False)
-        mock_init_pg.assert_called_once_with("gloo", rank=0, world_size=1)
-        self.assertEqual(device_cpu.type, 'cpu')
-        self.assertFalse(mock_set_device.called) # set_device non dovrebbe essere chiamato per CPU
-        mock_is_available.return_value = True # Ripristina per altri test se necessario
+            # Test Locale con CPU (forzando is_available=False)
+            mock_is_available.return_value = False
+            device_cpu = setup_distributed_environment(rank=0, world_size=1, slurm=False)
+            mock_init_pg.assert_called_once_with("gloo", rank=0, world_size=1)
+            self.assertEqual(device_cpu.type, 'cpu')
+            self.assertFalse(mock_set_device.called) # set_device non dovrebbe essere chiamato per CPU
+            mock_is_available.return_value = True # Ripristina per altri test se necessario
 
 
-    @patch('src.utils.dist.barrier', MagicMock())
-    @patch('src.utils.dist.destroy_process_group', MagicMock())
-    @patch('src.utils.logging.info', MagicMock())
-    @patch('src.utils.os.environ.get', return_value='0') # Mock del rank globale per il logging
-    def test_24_cleanup_distributed_environment(self, mock_barrier, mock_destroy, mock_log_info, mock_os_get_environ):
+    def test_24_cleanup_distributed_environment(self):
         """Testa la corretta pulizia dell'ambiente distribuito."""
-        cleanup_distributed_environment()
-        mock_barrier.assert_called_once()
-        mock_destroy.assert_called_once()
-        mock_log_info.assert_called()
+        
+        mock_barrier = MagicMock()
+        mock_destroy = MagicMock()
+        mock_log_info = MagicMock()
+        mock_os_get_environ = MagicMock(return_value='0')
+
+        # Applica i mock usando un gestore di contesto
+        with patch('src.utils.dist.barrier', mock_barrier), \
+             patch('src.utils.dist.destroy_process_group', mock_destroy), \
+             patch('src.utils.logging.info', mock_log_info), \
+             patch('src.utils.os.environ.get', mock_os_get_environ):
+
+            cleanup_distributed_environment()
+            mock_barrier.assert_called_once()
+            mock_destroy.assert_called_once()
+            mock_log_info.assert_called()
 
 
 if __name__ == '__main__':
