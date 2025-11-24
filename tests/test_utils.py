@@ -36,7 +36,8 @@ TEST_EMBED_DIM = 32
 sys.path.append('.')
 try:
     from src.utils import get_config_from_yaml, HDF5DatasetManager, write_log, join_logs, \
-                    HDF5EmbeddingDatasetsManager, combine_hdf5_files, setup_environ_vars
+                    HDF5EmbeddingDatasetsManager, combine_hdf5_files, setup_environ_vars, \
+                    setup_distributed_environment, cleanup_distributed_environment
 except ImportError:
     # Fallback per l'esecuzione diretta
     print("Warning: Tentativo di importazione locale di utils.")
