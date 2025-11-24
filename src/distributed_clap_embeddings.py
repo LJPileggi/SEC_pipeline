@@ -241,7 +241,7 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
 
     finally:
         # Sincronizza i processi prima di distruggere il gruppo
-        cleanup_distributed_environment()
+        cleanup_distributed_environment(rank)
 
 
 # Funzione Worker per l'ambiente locale (richiamata da mp.Process)
@@ -280,7 +280,7 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
 
     finally:
         # Sincronizza i processi prima di distruggere il gruppo
-        cleanup_distributed_environment()
+        cleanup_distributed_environment(rank)
 
 
 ### Executions ###

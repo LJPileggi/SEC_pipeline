@@ -280,4 +280,4 @@ def select_optim_distributed(rank, world_size, validation_filepath, dataloaders,
     df.to_csv(os.path.join(validation_filepath, 'validation_ms_results_{classifier_model}_{rank}.csv'))
 
     # 6. Cleanup
-    cleanup_distributed_environment()
+    cleanup_distributed_environment(rank)

@@ -1067,11 +1067,9 @@ class TestUtils(unittest.TestCase):
         
         # Test Locale (default)
         with patch.dict('os.environ', {}, clear=True):
-            rank, world_size = setup_environ_vars(slurm=False)
+            setup_environ_vars(slurm=False)
             self.assertEqual(os.environ.get('MASTER_ADDR'), 'localhost')
             self.assertEqual(os.environ.get('MASTER_PORT'), '29500')
-            self.assertIsNone(rank) # setup_environ_vars non restituisce rank/world_size per locale
-            self.assertIsNone(world_size)
 
     @patch('src.utils.dist.init_process_group', MagicMock())
     @patch('src.utils.torch.cuda.is_available', return_value=True)

@@ -578,7 +578,7 @@ def setup_distributed_environment(rank, world_size, slurm=True):
         logging.info(f"Processo locale {rank} avviato su {device}.")
     return device
 
-def cleanup_distributed_environment():
+def cleanup_distributed_environment(rank):
     """Cleanup the distributed environment."""
     dist.barrier()
     dist.destroy_process_group()
