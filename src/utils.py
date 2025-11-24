@@ -420,14 +420,12 @@ def combine_hdf5_files(root_dir, cut_secs_list, embedding_dim, spec_shape, audio
                             if os.path.isdir(os.path.join(root_dir, f'{cut_secs_list[0]}_secs', d))])
     
     for current_cut_secs in cut_secs_list:
-        print(f"--- [DEBUG] Processing cut_secs: {current_cut_secs}... ---")
         
         for split_tuple in splits_list:
             split_name = split_tuple[0]
             output_h5_path = os.path.join(root_dir, f'{current_cut_secs}_secs', f'combined_{split_name}.h5')
             
             # Setup Manager di Output (out_h5)
-            print(f"[DEBUG] Creazione out_h5 (output) per split '{split_name}' in {output_h5_path}")
             out_h5 = HDF5EmbeddingDatasetsManager(output_h5_path, mode='a', partitions=set(('splits',)))
             
             out_h5.initialize_hdf5(embedding_dim, spec_shape, audio_format, current_cut_secs, n_octave,
@@ -443,38 +441,29 @@ def combine_hdf5_files(root_dir, cut_secs_list, embedding_dim, spec_shape, audio
                 print(f"[INFO] Aggiunta dati dalla classe: {class_name}...")
                         
                 try:
-                    print(f"[DEBUG] Tentativo di aprire in_h5 per {class_h5_path}")
                     # Uso HDF5EmbeddingDatasetsManager per la lettura (in_h5)
                     in_h5 = HDF5EmbeddingDatasetsManager(class_h5_path, 'r', set(('splits', 'classes')))
-                    print(f"[DEBUG] in_h5 aperto. Tentativo di leggere 'embedding_dataset'.")
                     
                     # Lettura dei dati. Se fallisce qui, avremo un traceback.
                     class_data = in_h5['embedding_dataset'][:]
-                    print(f"[DEBUG] Dati letti da in_h5. class_data.shape: {class_data.shape}, dtype: {class_data.dtype}")
                     
-                    print(f"[DEBUG] out_h5.dt: {out_h5.dt}")
                     class_data_extended = np.empty(class_data.shape, dtype=out_h5.dt)
-                    print(f"[DEBUG] class_data_extended creato. Tentativo di copiare i campi.")
                     
                     # FIX: Copia dei campi usando .dtype.names (corretto nell'ultima iterazione)
                     for name in class_data_extended.dtype.names:
                         if name in class_data.dtype.names: 
                             class_data_extended[name] = class_data[name]
-                    print(f"[DEBUG] Campi standard copiati.")
 
                     # Aggiunta del metadato 'classes'
                     if 'classes' in class_data_extended.dtype.names:
                         class_data_extended['classes'] = np.array([class_name.encode('utf-8')] * len(class_data),
                                                                     dtype=class_data_extended.dtype['classes'])
-                        print(f"[DEBUG] Campo 'classes' aggiunto.")
                         
                     # CHIAMATA CRUCIALE: Se non viene raggiunta, c'è un errore prima.
                     out_h5.extend_dataset(class_data_extended)
-                    print(f"[DEBUG] extend_dataset CHIAMATO CON SUCCESSO per {class_name}.")
                     
                     # Chiusura del manager di input
                     in_h5.close()
-                    print(f"[DEBUG] in_h5 chiuso per {class_name}.")
                     
                 except Exception as e:
                     print("\n" + "="*80)
@@ -486,7 +475,6 @@ def combine_hdf5_files(root_dir, cut_secs_list, embedding_dim, spec_shape, audio
                     
             # Chiusura del manager di output
             out_h5.close() 
-            print(f"[INFO] Combinazione completata per '{split_name}'. File salvato in: {output_h5_path}")
 
 def get_track_reproducibility_parameters(idx):
     """
@@ -583,6 +571,7 @@ def reconstruct_tracks_from_embeddings(base_tracks_dir, hdf5_emb_path, idx_list)
         reconstr_track = (1 - noise_perc) * cut_track + noise_perc * noise
         reconstr_tracks[track_idx] = reconstr_track
 
+    hdf5_emb.close()
     hdf5_class_tracks.close()
     return reconstr_tracks
 
