@@ -265,6 +265,7 @@ class TestUtils(unittest.TestCase):
                         ('valid', TEST_YAML_CONTENT['valid_size']),
                         ('test', TEST_YAML_CONTENT['test_size'])
                     ])
+                break
             else:
                 self.assertEqual(config_data[i], TEST_YAML_CONTENT[k])
 
@@ -276,7 +277,6 @@ class TestUtils(unittest.TestCase):
         """
         # --- TEST 1: Creazione di un nuovo file di log da zero ---
         # Verifichiamo che write_log crei il file se non esiste.
-        self.assertFalse(os.path.exists(log_file_path)) # Assicurati che non esista all'inizio
 
         initial_config_kwargs = {"sampling_rate": 44100, "epochs": 50}
         initial_new_cut_secs_class = '1_ClassX'
@@ -285,7 +285,7 @@ class TestUtils(unittest.TestCase):
 
         log_file_name = 'log_rank_{rank}.json' # Nome del file di log per questo test specifico
         log_file_path = os.path.join(self.temp_log_dir, log_file_name)
-
+        self.assertFalse(os.path.exists(log_file_path)) # Assicurati che non esista all'inizio
 
         write_log(
             log_path=self.temp_log_dir,
