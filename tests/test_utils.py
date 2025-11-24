@@ -1117,9 +1117,15 @@ class TestUtils(unittest.TestCase):
         mock_init_pg = MagicMock()
         mock_is_available = MagicMock(return_value=True)
         mock_set_device = MagicMock()
-        # Mock complesso per torch.device (usato da setup_distributed_environment)
-        mock_torch_device = MagicMock(side_effect=lambda x: MagicMock(type='cuda', 
-                                      index=int(x.split(':')[-1]) if isinstance(x, str) and 'cuda' in x else x))
+        
+        # FIX: Mock complesso per torch.device, ora imposta il 'type' in base all'input 'x'.
+        mock_torch_device = MagicMock(side_effect=lambda x: MagicMock(
+            # Se l'argomento è 'cpu', imposta type='cpu', altrimenti usa 'cuda'
+            type='cpu' if x == 'cpu' else 'cuda', 
+            # Mantieni la logica per l'indice (sebbene migliorata per il fallback)
+            index=int(x.split(':')[-1]) if isinstance(x, str) and 'cuda' in x else None
+        ))
+        
         mock_log_info = MagicMock()
         
         # Applica i mock usando un gestore di contesto annidato
@@ -1129,23 +1135,25 @@ class TestUtils(unittest.TestCase):
              patch('src.utils.torch.device', mock_torch_device), \
              patch('src.utils.logging.info', mock_log_info):
             
-            # Test SLURM con GPU
+            # Test SLURM con GPU (Invariato)
             device = setup_distributed_environment(rank=1, world_size=4, slurm=True)
             mock_init_pg.assert_called_once_with("nccl", rank=1, world_size=4)
             mock_set_device.assert_called_once_with(1)
             self.assertEqual(device.type, 'cuda')
             self.assertEqual(device.index, 1)
             
-            # NOTA: Qui devi usare mock_init_pg.reset_mock() e non la versione passata come argomento
             mock_init_pg.reset_mock() 
 
             # Test Locale con CPU (forzando is_available=False)
             mock_is_available.return_value = False
+            
+            # Qui la funzione chiama torch.device('cpu'). Il mock ora restituirà type='cpu'.
             device_cpu = setup_distributed_environment(rank=0, world_size=1, slurm=False)
+            
             mock_init_pg.assert_called_once_with("gloo", rank=0, world_size=1)
-            self.assertEqual(device_cpu.type, 'cpu')
-            self.assertFalse(mock_set_device.called) # set_device non dovrebbe essere chiamato per CPU
-            mock_is_available.return_value = True # Ripristina per altri test se necessario
+            self.assertEqual(device_cpu.type, 'cpu') # Ora passa
+            self.assertFalse(mock_set_device.called) 
+            mock_is_available.return_value = True
 
 
     def test_24_cleanup_distributed_environment(self):

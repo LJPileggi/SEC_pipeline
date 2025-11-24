@@ -438,7 +438,7 @@ def combine_hdf5_files(root_dir, cut_secs_list, embedding_dim, spec_shape, audio
                     print(f"[WARNING] File non trovato per la classe '{class_name}' e split '{split_name}': {class_h5_path}. Salto.")
                     continue
                         
-                print(f"[INFO] Aggiunta dati dalla classe: {class_name}...")
+                print(f"Aggiunta dati dalla classe: {class_name}...")
                         
                 try:
                     # Uso HDF5EmbeddingDatasetsManager per la lettura (in_h5)
