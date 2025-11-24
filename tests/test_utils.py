@@ -808,13 +808,15 @@ class TestUtils(unittest.TestCase):
         NUM_RECORDS = 5
         
         # CUT_SECS FISSO: Tutti i file di input e l'output devono usare questo valore
-        FIXED_CUT_SECS = 1.0 
+        FIXED_CUT_SECS = 1
         CUT_SECS_LIST = [FIXED_CUT_SECS] # La lista passata alla funzione deve contenere solo cut_secs omogenei.
 
         # La lista di file che glob deve trovare (rimosso ClassA_2.0 per coerenza di cut_secs)
+        CUT_SEC_DIR = os.path.join(self.temp_root_dir, f"{FIXED_CUT_SECS}_secs")
+        os.makedirs(CUT_SEC_DIR, exist_ok=True)
         MOCK_FILE_PATHS = [
-            os.path.join(self.temp_root_dir, 'ClassA_1.0_wav.h5'),
-            os.path.join(self.temp_root_dir, 'ClassB_1.0_wav.h5'),
+            os.path.join(CUT_SEC_DIR, 'ClassA_1_wav.h5'),
+            os.path.join(CUT_SEC_DIR, 'ClassB_1_wav.h5'),
         ]
         
         # Definisce la struttura (dtype) del dataset HDF5 di INPUT 
@@ -872,7 +874,7 @@ class TestUtils(unittest.TestCase):
         # 4. Esegui la funzione
         combine_hdf5_files(
             root_dir=self.temp_root_dir, 
-            cut_secs_list=CUT_SECS_LIST, # Passiamo solo 1.0
+            cut_secs_list=CUT_SECS_LIST,
             audio_format='wav', 
             splits_list=['train'],
             embedding_dim=TEST_EMBED_DIM,
@@ -888,7 +890,7 @@ class TestUtils(unittest.TestCase):
             TEST_EMBED_DIM, 
             SPEC_SHAPE, 
             'wav', 
-            FIXED_CUT_SECS, # cut_secs fisso (1.0)
+            FIXED_CUT_SECS,
             3, # Assumiamo questi valori provengano dalla config (n_octave)
             52100, # (sample_rate)
             42, # (seed)
@@ -907,6 +909,7 @@ class TestUtils(unittest.TestCase):
         for f_path in MOCK_FILE_PATHS:
             if os.path.exists(f_path):
                 os.remove(f_path)
+        os.remove(CUT_SEC_DIR)
 
     @patch('src.utils.get_track_reproducibility_parameters')
     @patch('src.utils.HDF5DatasetManager')
