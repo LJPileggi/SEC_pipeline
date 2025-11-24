@@ -359,6 +359,15 @@ class HDF5EmbeddingDatasetsManager(Dataset):
         dataset.resize(new_size, axis=0)
         dataset[current_size:] = data_buffer
 
+        # Empty buffers
+        self.embeddings_buffer = []
+        self.spectrograms_buffer = []
+        self.hash_keys_buffer = []
+        self.track_names_buffer = []
+        if self.partitions == set(('splits',)):
+            self.classes_buffer = []
+        self.subclasses_buffer = []
+
     def extend_dataset(self, new_data):
         """
         Extends dataset content directly without going through the buffers.
@@ -399,8 +408,8 @@ class HDF5EmbeddingDatasetsManager(Dataset):
     def __del__(self):
         self.close()
 
-def combine_hdf5_files(root_dir, cut_secs_list, audio_format, splits_list=['train', 'es', 'valid', 'test'], \
-                                                                embedding_dim=1024, spec_shape=(128, 1024)):
+def combine_hdf5_files(root_dir, cut_secs_list, embedding_dim, spec_shape, audio_format, cut_secs, n_octave, \
+                                                                sample_rate, seed, noise_perc, splits_list)):
     """
     Combines individual HDF5 files for each class and split into unified HDF5 files
     for each split.
@@ -418,10 +427,12 @@ def combine_hdf5_files(root_dir, cut_secs_list, audio_format, splits_list=['trai
     for cut_secs in cut_secs_list:
         logging.info(f"Processing cut_secs: {cut_secs}...")
         
-        for split_name in splits_list:
+        for split in splits_list:
+            split_name = split[0]
             output_h5_path = os.path.join(root_dir, f'{cut_secs}_secs', f'combined_{split_name}.h5')
             out_h5 = HDF5EmbeddingDatasetsManager(output_h5_path, mode='a', partitions=set(('splits',)))
-            out_h5.initialize_hdf5(embedding_dim, spec_shape, audio_format, split_name)
+            out_h5.initialize_hdf5(embedding_dim, spec_shape, audio_format, cut_secs, n_octave,
+                                                    sample_rate, seed, noise_perc, split_name)
 
             for class_name in classes_list:
                 class_h5_path = os.path.join(root_dir, f'{cut_secs}_secs', class_name, f'{class_name}_{split_name}.h5')

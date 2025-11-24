@@ -13,21 +13,18 @@ def parsing():
             help='octaveband split for the spectrograms.')
     parser.add_argument('--audio_format', metavar='audio_format', dest='audio_format',
             help='audio format to embed; choose between \'wav\', \'mp3\', \'flac\'.')
-    parser.add_argument('--test_mode', metavar='test_mode', dest='test_mode',
-            help='whether we operate on standard or test files(\'y\' or \'n\'); default to \'n\'.')
     parser.set_defaults(config_file='config0.yaml')
     parser.set_defaults(audio_format='wav')
-    parser.set_defaults(model_type='linear')
-    parser.set_defaults(test_mode='n')
     args = parser.parse_args()
     return args
 
 def main():
     args = parsing()
-    _, _, _, _, _, _, valid_cut_secs, _, _, _, _ = get_config_from_yaml(config_file)
+    _, _, _, _, sample_rate, _, noise_perc, seed, _, valid_cut_secs, splits_list = get_config_from_yaml(config_file)
     octaveband_dir = os.path.join(basedir_preprocessed if args.test_mode=='n' else basedir_preprocessed_test,
                                                                   f'{args.audio_format}', f'{args.n_octave}')
-    combine_hdf5_files(octaveband_dir, valid_cut_secs)
+    combine_hdf5_files(octaveband_dir, valid_cut_secs, 1024, (128,), args.audio_format,
+                          valid_cut_secs, args.n_octave, sample_rate, seed, noise_perc, splits_list))
 
 if __name__ == "__main__":
     main()

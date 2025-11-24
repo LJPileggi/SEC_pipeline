@@ -588,8 +588,8 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(elem['embeddings'].shape, (TEST_EMBED_DIM,))
         self.assertTrue(np.array_equal(elem['embeddings'], expected_embedding)) # Confronta i numpy array sottostanti
 
-        self.assertEqual(elem['track_names'], expected_track_name)
-        self.assertEqual(elem['classes'], 'ClassA')
+        self.assertEqual(elem['track_names'].decode('utf-8'), expected_track_name)
+        self.assertEqual(elem['classes'].decode('utf-8'), 'ClassA')
         
         manager.close()
 
@@ -627,7 +627,7 @@ class TestUtils(unittest.TestCase):
             embedding_dim=TEST_EMBED_DIM, 
             spec_shape=(128, 1024), 
             audio_format='wav', 
-            cut_secs=1.0, 
+            cut_secs=1, 
             n_octave=3, 
             sample_rate=52100, 
             seed=42, 
@@ -638,13 +638,18 @@ class TestUtils(unittest.TestCase):
         
         # Verifica che il gruppo e i dataset siano stati creati
         with h5py.File(self.h5_filepath_embeddings, 'r') as f:
-            self.assertIn('embeddings', f['embedding_dataset'])
-            self.assertIn('spectrograms', f['embedding_dataset'])
-            self.assertIn('ID', f['embedding_dataset'])
-            self.assertIn('track_names', f['embedding_dataset'])
+            self.assertIn('embedding_dataset', f['embedding_dataset'])
             
             # Verifica attributi
+            self.assertEqual(f.attrs['audio_format'], 'wav')
+            self.assertEqual(f.attrs['cut_secs'], 1)
             self.assertEqual(f.attrs['n_octave'], 3)
+            self.assertEqual(f.attrs['sample_rate'], 52100)
+            self.assertEqual(f.attrs['seed'], 42)
+            self.assertEqual(f.attrs['noise_perc'], 0.3)
+            self.assertEqual(f.attrs['class'], 'ClassA')
+            self.assertEqual(f.dt['embeddings'].shape, TEST_EMBED_DIM)
+            self.assertEqual(f.dt['spectrograms'].shape, (128, 1024))
             
         manager.close()
 
