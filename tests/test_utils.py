@@ -283,7 +283,7 @@ class TestUtils(unittest.TestCase):
         initial_process_time = 10.0
         initial_rank = 0
 
-        log_file_name = 'log_rank_{rank}.json' # Nome del file di log per questo test specifico
+        log_file_name = 'log_rank_{initial_rank}.json' # Nome del file di log per questo test specifico
         log_file_path = os.path.join(self.temp_log_dir, log_file_name)
         self.assertFalse(os.path.exists(log_file_path)) # Assicurati che non esista all'inizio
 
