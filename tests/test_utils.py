@@ -798,51 +798,58 @@ class TestUtils(unittest.TestCase):
     # ==========================================================================
 
     @patch('src.utils.HDF5EmbeddingDatasetsManager')
-    @patch('src.utils.glob.glob')
-    def test_20_combine_hdf5_files(self, mock_glob, mock_HDF5EmbeddingDatasetsManager): # rimosso mock_h5py_file
+    @patch('src.utils.glob.glob') # Mantenuto per non toccare troppe righe del setup originale
+    def test_20_combine_hdf5_files(self, mock_glob, mock_HDF5EmbeddingDatasetsManager):
         """Testa la funzione che combina file HDF5 in un unico file di embeddings,
-           usando un dataset strutturato per i file di input e un cut_secs omogeneo."""
+           garantendo la corretta struttura delle directory e l'estensione del dataset."""
         
-        # ... (VARIABILI DI CONFIGURAZIONE FISSE PER IL TEST, invariate) ...
-
-        TEST_EMBED_DIM = 1024
+        # -------------------------------------------------------------------------
+        # VARIABILI DI CONFIGURAZIONE
+        # -------------------------------------------------------------------------
+        TEST_EMBED_DIM = 1024  
         SPEC_SHAPE = (128, 1024)
         NUM_RECORDS = 5
-        FIXED_CUT_SECS = 1
-        CUT_SECS_LIST = [FIXED_CUT_SECS]
+        CLASS_NAMES = ['ClassA', 'ClassB'] # Le due classi che la funzione deve processare
         
+        FIXED_CUT_SECS = 1
+        CUT_SECS_LIST = [FIXED_CUT_SECS] 
+        
+        # La directory di base per i cut_secs
         CUT_SEC_DIR = os.path.join(self.temp_root_dir, f"{FIXED_CUT_SECS}_secs")
         os.makedirs(CUT_SEC_DIR, exist_ok=True)
-        MOCK_FILE_PATHS = [
-            os.path.join(CUT_SEC_DIR, 'ClassA_1_wav.h5'),
-            os.path.join(CUT_SEC_DIR, 'ClassB_1_wav.h5'),
-        ]
         
-        # Definisce la struttura (dtype) del dataset HDF5 di INPUT 
-        # Importante: usa np.float32 per coerenza con i manager di embedding.
+        # Definisce la struttura (dtype) del dataset HDF5 di INPUT (e output)
         input_dtype = np.dtype([
             ('ID', 'S100'), 
-            ('embeddings', (np.float32, (TEST_EMBED_DIM,))), # <--- FIX: np.float32
-            ('spectrograms', (np.float32, SPEC_SHAPE)), # <--- FIX: np.float32
+            # Utilizziamo float32 per maggiore coerenza con i tipi usati per l'embedding
+            ('embeddings', (np.float32, (TEST_EMBED_DIM,))), 
+            ('spectrograms', (np.float32, SPEC_SHAPE)), 
             ('track_names', 'S100'),
             ('subclasses', 'S100'), 
         ])
         
         # -------------------------------------------------------------------------
-        # 1. Configura il mock per glob.glob
+        # 1. Configura il mock per glob.glob (se la funzione lo usasse)
         # -------------------------------------------------------------------------
-        mock_glob.return_value = MOCK_FILE_PATHS
-        
+        # Lasciato vuoto o con un valore di default se non usato
+
         # -------------------------------------------------------------------------
-        # 2. Crea file HDF5 fittizi con un dataset strutturato (CUT_SECS OMOGENEO)
+        # 2. Crea file HDF5 fittizi con la STRUTTURA DI CARTELLE CORRETTA (IL FIX)
         # -------------------------------------------------------------------------
-        # Questa parte è ora corretta in quanto usa il VERO h5py.File per creare i file.
-        for f_path in MOCK_FILE_PATHS:
-            filename = os.path.basename(f_path)
-            class_name = filename.split('_')[0]
+        MOCK_INPUT_FILES = []
+
+        for class_name in CLASS_NAMES:
+            # 1. Crea la sottodirectory della classe (ORA LA FUNZIONE TROVERÀ LE CLASSI)
+            CLASS_DIR = os.path.join(CUT_SEC_DIR, class_name)
+            os.makedirs(CLASS_DIR, exist_ok=True)
             
-            embeddings_data = np.random.rand(NUM_RECORDS, TEST_EMBED_DIM).astype(np.float32) # <--- FIX: .astype(np.float32)
-            spectrograms_data = np.random.rand(NUM_RECORDS, SPEC_SHAPE[0], SPEC_SHAPE[1]).astype(np.float32) # <--- FIX: .astype(np.float32)
+            # 2. Definisci il percorso del file HDF5: [CLASSE]/[CLASSE]_[SPLIT].h5
+            f_path = os.path.join(CLASS_DIR, f'{class_name}_train.h5')
+            MOCK_INPUT_FILES.append(f_path)
+            
+            # 3. Prepara i dati con il dtype corretto (float32)
+            embeddings_data = np.random.rand(NUM_RECORDS, TEST_EMBED_DIM).astype(np.float32)
+            spectrograms_data = np.random.rand(NUM_RECORDS, SPEC_SHAPE[0], SPEC_SHAPE[1]).astype(np.float32)
             hash_keys = np.array([f'h{j+1}_{class_name}'.encode('utf-8') for j in range(NUM_RECORDS)], dtype='S100')
             track_names = np.array([f't{j+1}_{class_name}'.encode('utf-8') for j in range(NUM_RECORDS)], dtype='S100')
             subclasses = np.array([f's{j+1}'.encode('utf-8') for j in range(NUM_RECORDS)], dtype='S100')
@@ -854,6 +861,7 @@ class TestUtils(unittest.TestCase):
             mock_data['track_names'] = track_names
             mock_data['subclasses'] = subclasses
             
+            # 4. Scrivi nel file HDF5 reale
             with h5py.File(f_path, 'w') as f:
                 f.create_dataset('embedding_dataset', data=mock_data, compression='gzip')
                 f.attrs['class'] = class_name
@@ -866,39 +874,33 @@ class TestUtils(unittest.TestCase):
                 f.attrs['seed'] = 42
                 f.attrs['embedding_dim'] = TEST_EMBED_DIM
                 f.attrs['spec_shape'] = SPEC_SHAPE
-                
+        
         # -------------------------------------------------------------------------
-        # 3. Configura il mock di HDF5EmbeddingDatasetsManager per tracciare le chiamate
+        # 3. Configura il mock di HDF5EmbeddingDatasetsManager per input e output
         # -------------------------------------------------------------------------
         mock_manager_instance = MagicMock()
-        mock_HDF5EmbeddingDatasetsManager.return_value = mock_manager_instance
+        mock_manager_instance.dt = input_dtype # Imposta il dtype per il manager di output
         
-        # IMPORTANTE: dobbiamo mockare il comportamento di HDF5EmbeddingDatasetsManager 
-        # anche quando viene usato per la *lettura* (in_h5 = HDF5EmbeddingDatasetsManager(..., 'r', ...))
-        # Vogliamo che restituisca i dati reali che abbiamo scritto nei file temporanei.
-        
-        # Configura il comportamento di 'in_h5' quando viene istanziato per la lettura
-        def side_effect_for_in_h5_creation(file_path, mode, partitions):
+        def side_effect_for_HDF5EmbeddingDatasetsManager(file_path, mode, partitions):
             if mode == 'r':
-                # Questo mock deve comportarsi come un manager che legge i dati da un file reale.
-                # Per farlo, dobbiamo creare un'istanza MagicMock che abbia l'interfaccia di lettura.
+                # Questo mock gestirà la lettura dei file di input (in_h5)
                 mock_in_h5_instance = MagicMock()
-                
-                # Apre il file HDF5 reale per leggere i dati che abbiamo appena scritto
+                # Apre il file HDF5 reale che abbiamo appena creato
                 real_h5_file = h5py.File(file_path, 'r')
+                
+                # Configura il mock per restituire i dati reali quando il manager è interrogato come un dict
                 mock_in_h5_instance.__getitem__.side_effect = lambda key: real_h5_file[key]
-                mock_in_h5_instance.close.side_effect = real_h5_file.close # Chiude il file h5py reale
+                mock_in_h5_instance.close.side_effect = real_h5_file.close
+                # Imposta il .dt per coerenza con il manager di output (utile per np.empty)
+                mock_in_h5_instance.dt = real_h5_file['embedding_dataset'].dtype
+                
                 return mock_in_h5_instance
-            else: # Per il manager di output 'a' (append)
-                return mock_manager_instance # Restituisce il mock predefinito per l'output
+            else: # mode == 'a' per il manager di output (out_h5)
+                return mock_manager_instance
         
-        # Applica il side effect alla classe HDF5EmbeddingDatasetsManager
-        mock_HDF5EmbeddingDatasetsManager.side_effect = side_effect_for_in_h5_creation
+        mock_HDF5EmbeddingDatasetsManager.side_effect = side_effect_for_HDF5EmbeddingDatasetsManager
 
-        # Imposta il dtype del manager di output per la compatibilità con i dati di input
-        mock_manager_instance.dt = input_dtype # <--- FIX: Assicurati che il dtype sia compatibile
-
-        # 4. Esegui la funzione
+        # 4. Esegui la funzione (DEVI importarla correttamente nel tuo file di test)
         combine_hdf5_files(
             root_dir=self.temp_root_dir, 
             cut_secs_list=CUT_SECS_LIST,
@@ -914,7 +916,7 @@ class TestUtils(unittest.TestCase):
         )
         
         # -------------------------------------------------------------------------
-        # 5. Verifica le chiamate al manager e al suo metodo extend_dataset
+        # 5. Verifica le chiamate (ORA LA LOGICA DOVREBBE ESSERE RAGGIUNTA)
         # -------------------------------------------------------------------------
         
         # Inizializzazione (una volta per l'HDF5 di output)
@@ -923,25 +925,30 @@ class TestUtils(unittest.TestCase):
             SPEC_SHAPE, 
             'wav', 
             FIXED_CUT_SECS,
-            3, # n_octave
-            52100, # sample_rate
-            42, # seed
-            0.3, # noise_perc
-            'train'#, # split_name, se initialize_hdf5 si aspetta la stringa intera
-            # class_name=None # Il file combinato non è specifico per una classe, non un argomento
+            3, 
+            52100, 
+            42, 
+            0.3, 
+            'train'
         )
         
-        # Due file di input (ClassA_1.0, ClassB_1.0), due chiamate a extend_dataset.
+        # Due file di input (ClassA, ClassB), due chiamate a extend_dataset.
         self.assertEqual(mock_manager_instance.extend_dataset.call_count, 2) 
         
-        # Verifica che il metodo close sia chiamato
+        # Verifica che il metodo close sia chiamato (sul manager di output)
         mock_manager_instance.close.assert_called_once()
         
-        # Pulisci i file fittizi creati per questo test
-        for f_path in MOCK_FILE_PATHS:
-            if os.path.exists(f_path):
-                os.remove(f_path)
-        os.remove(CUT_SEC_DIR)
+        # Pulisci i file fittizi e le directory create per questo test
+        # Non è necessario pulire i MOCK_INPUT_FILES uno per uno se rimuoviamo la root_dir
+        
+        # Pulisci le directory delle classi
+        for class_name in CLASS_NAMES: 
+            shutil.rmtree(os.path.join(CUT_SEC_DIR, class_name), ignore_errors=True)
+            
+        # Pulisci la directory cut_secs e l'output combinato
+        # L'output combinato dovrebbe essere gestito da self.temp_root_dir se usi un tearDown
+        if os.path.exists(CUT_SEC_DIR):
+            shutil.rmtree(CUT_SEC_DIR, ignore_errors=True)
 
     @patch('src.utils.get_track_reproducibility_parameters')
     @patch('src.utils.HDF5DatasetManager')
