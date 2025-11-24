@@ -449,11 +449,14 @@ def combine_hdf5_files(root_dir, cut_secs_list, embedding_dim, spec_shape, audio
                     class_data_extended = np.empty(class_data.shape, dtype=out_h5.dt)
                     for name in class_data_extended.names:
                         class_data_extended[name] = class_data[name]
-                    class_data_extended['classes'] = [class_name] * len(class_data)
+                    class_data_extended['classes'] = np.array([class_name.encode('utf-8')] * len(class_data),
+                                                                  dtype=class_data_extended.dtype['classes'])
                     out_h5.extend_dataset(class_data_extended)
+                    in_h5.close()
                 except Exception as e:
                     logging.error(f"Errore durante l'unione dei file di classe '{class_name}': {e}. Continuo.")
 
+            out_h5.close()
             logging.info(f"Combinazione completata per '{split_name}'. File salvato in: {output_h5_path}")
 
 def get_track_reproducibility_parameters(idx):
