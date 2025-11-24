@@ -589,7 +589,7 @@ class TestUtils(unittest.TestCase):
         self.assertTrue(np.array_equal(elem['embeddings'], expected_embedding)) # Confronta i numpy array sottostanti
 
         self.assertEqual(elem['track_names'].decode('utf-8'), expected_track_name)
-        self.assertEqual(manager.hf.attrs['class'].decode('utf-8'), 'ClassA')
+        self.assertEqual(manager.hf.attrs['class'], 'ClassA')
         
         manager.close()
 
@@ -901,8 +901,6 @@ class TestUtils(unittest.TestCase):
             noise_perc=0.3,
             splits_list=['train']
         )
-        combine_hdf5_files(root_dir, cut_secs_list, embedding_dim, spec_shape, audio_format, cut_secs, n_octave, \
-                                                                sample_rate, seed, noise_perc, splits_list)
         
         # -------------------------------------------------------------------------
         # 5. Verifica le chiamate al manager e al suo metodo extend_dataset
