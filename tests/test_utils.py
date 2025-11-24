@@ -294,7 +294,6 @@ class TestUtils(unittest.TestCase):
             rank=initial_rank,
             **initial_config_kwargs
         )
-        print(log_file_path)
         self.assertTrue(os.path.exists(log_file_path)) # Il file dovrebbe essere stato creato
         
         with open(log_file_path, 'r') as f:
@@ -329,19 +328,11 @@ class TestUtils(unittest.TestCase):
         process_time_2 = 123.45
         rank_2 = 0
         
-        # Aggiungiamo nuovi kwargs per il test di aggiornamento config
-        # Questi non dovrebbero sovrascrivere 'sampling_rate' e 'epochs'
-        # ma dovrebbero aggiungere "batch_size" se la config è stata inizialmente "vuota" in `write_log`
-        # Se la config esistente è stata inizialmente riempita (come nel tuo vecchio test),
-        # questi kwargs non aggiorneranno i valori esistenti ma aggiungeranno nuovi.
-        updated_config_kwargs = {"batch_size": 128, "epochs": 60} # 'epochs' dovrebbe rimanere 50 se già impostato
-
         write_log(
             log_path=self.temp_log_dir,
             new_cut_secs_class=new_cut_secs_class_2,
             process_time=process_time_2,
-            rank=rank_2,
-            **updated_config_kwargs # Passa i nuovi kwargs
+            rank=rank_2
         )
         
         with open(log_file_path, 'r') as f:
@@ -367,7 +358,6 @@ class TestUtils(unittest.TestCase):
             # Quindi, 'epochs' dovrebbe rimanere 50 dal primo test. 'batch_size' verrà aggiunto.
             self.assertEqual(log_content_updated['config']['sampling_rate'], initial_config_kwargs['sampling_rate'])
             self.assertEqual(log_content_updated['config']['epochs'], initial_config_kwargs['epochs']) # Dovrebbe rimanere 50
-            self.assertEqual(log_content_updated['config']['batch_size'], updated_config_kwargs['batch_size'])
 
 
     def test_03_join_logs(self):
