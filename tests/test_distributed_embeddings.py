@@ -15,15 +15,6 @@ from unittest.mock import patch, MagicMock
 # Assumendo che il file di test sia nella root o in una cartella 'tests'
 sys.path.append('.')
 
-# Crea directory di test
-BASEDIR_TEST = os.path.join('..', 'tests')
-BASEDIR_RAW_TEST = os.path.join(BASEDIR_TEST, 'RAW_DATASET')
-BASEDIR_PREPROCESSED_TEST = os.path.join(BASEDIR_TEST, 'PREPROCESSED_DATASET')
-
-os.makedirs(BASEDIR_TEST, exist_ok=True)
-os.makedirs(BASEDIR_RAW_TEST, exist_ok=True)
-os.makedirs(BASEDIR_PREPROCESSED_TEST, exist_ok=True)
-
 # --- Configurazione Test ---
 TEST_CLASSES = ['Music', 'Voices', 'Birds']
 TEST_TRACKS_PER_CLASS = 15 # Abbastanza per uno split teorico
@@ -140,15 +131,28 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
         from src import dirs_config, utils
         importlib.reload(dirs_config)
         
-        # 2. Imposta i percorsi per il test
+        # 2. Imposta i percorsi per il test (ORA SONO DEFINITI NEL PERCORSO TEMPORANEO)
+        # NOTA: Usiamo la directory temporanea come root per il test
+        # Definiamo le variabili globali (se usate al di fuori della classe)
+        global BASEDIR_RAW_TEST
+        global BASEDIR_PREPROCESSED_TEST
+        
+        BASEDIR_RAW_TEST = os.path.join(cls.test_root_dir, 'RAW_DATASET')
+        BASEDIR_PREPROCESSED_TEST = os.path.join(cls.test_root_dir, 'PREPROCESSED_DATASET')
+
+        # 2b. Crea le directory (ORA FUNZIONA PERCHÉ SONO IN cls.test_root_dir)
+        os.makedirs(BASEDIR_RAW_TEST, exist_ok=True)
+        os.makedirs(BASEDIR_PREPROCESSED_TEST, exist_ok=True)
+        
+        # 3. Imposta i percorsi come attributi di classe per l'uso nei test
         cls.raw_dir = BASEDIR_RAW_TEST
         cls.preprocessed_dir = BASEDIR_PREPROCESSED_TEST
         
-        # 3. Crea il dataset HDF5 'RAW' fittizio
+        # 4. Crea il dataset HDF5 'RAW' fittizio
         global MOCKED_ALL_FILES_DF
         MOCKED_ALL_FILES_DF = create_temp_raw_hdf5_dataset(cls.raw_dir, TEST_CLASSES, TEST_TRACKS_PER_CLASS, TEST_AUDIO_FORMAT)
         
-        # 4. Patcha get_config_from_yaml e extract_all_files_from_dir
+        # 5. Patcha get_config_from_yaml e extract_all_files_from_dir
         utils.get_config_from_yaml = mock_get_config_from_yaml_data
         utils.extract_all_files_from_dir = mock_extract_all_files_from_dir
 
