@@ -79,10 +79,10 @@ def mock_get_config_from_yaml_data(config_file):
         "valid_cut_secs": [1]
     }
     # L'output di get_config_from_yaml in utils è una tupla:
-    return (configs['patience'], configs['epochs'], configs['batch_size'],
+    return (configs['classes'], configs['patience'], configs['epochs'], configs['batch_size'],
             configs['sampling_rate'], configs['ref'], configs['noise_perc'], configs['seed'],
-            np.array(configs['center_freqs']), configs['valid_cut_secs'], configs['test_cut_secs'],
-            configs['classes'])
+            np.array(configs['center_freqs']), configs['valid_cut_secs']
+            )
 
 # Mock per le funzioni distribuite (previene l'uso di risorse reali)
 def mock_setup_distributed_environment(rank, world_size, slurm=True):
