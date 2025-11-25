@@ -218,45 +218,45 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
                                audio_format=TEST_AUDIO_FORMAT, 
                                n_octave=TEST_N_OCTAVE)
     
-    mock_worker_process.side_effect = mock_worker_process_side_effect
-    
-    # Simula il processo mp.Process in modo che chiami il worker mockato
-    mock_process = MagicMock()
-    
-    # AGGIUNGIAMO TUTTI i MOCK IN UN UNICO CONTESTO 'WITH PATCH'
-    with patch('src.models.CLAP_initializer', MagicMock()) as mock_clap_init, \
-         patch('src.distributed_clap_embeddings.local_worker_process', mock_worker_process), \
-         patch('src.utils.combine_hdf5_files', mock_combine_files), \
-         patch('src.distributed_clap_embeddings.mp.Manager', return_value=mock_mp_manager), \
-         patch.object(mock_mp_manager, 'Queue', return_value=mock_mp_queue), \
-         patch('src.distributed_clap_embeddings.mp.Process', return_value=mock_process), \
-         patch('src.utils.join_logs', mock_join_logs), \
-         patch('src.utils.write_log', mock_write_log), \
-         patch('src.distributed_clap_embeddings.logging.info', MagicMock()), \
-         patch('src.distributed_clap_embeddings.logging.error', MagicMock()), \
-         patch('src.utils.get_config_from_yaml', mock_get_config_from_yaml_data):
+        mock_worker_process.side_effect = mock_worker_process_side_effect
+
+        # Simula il processo mp.Process in modo che chiami il worker mockato
+        mock_process = MagicMock()
+
+        # AGGIUNGIAMO TUTTI i MOCK IN UN UNICO CONTESTO 'WITH PATCH'
+        with patch('src.models.CLAP_initializer', MagicMock()) as mock_clap_init, \
+             patch('src.distributed_clap_embeddings.local_worker_process', mock_worker_process), \
+             patch('src.utils.combine_hdf5_files', mock_combine_files), \
+             patch('src.distributed_clap_embeddings.mp.Manager', return_value=mock_mp_manager), \
+             patch.object(mock_mp_manager, 'Queue', return_value=mock_mp_queue), \
+             patch('src.distributed_clap_embeddings.mp.Process', return_value=mock_process), \
+             patch('src.utils.join_logs', mock_join_logs), \
+             patch('src.utils.write_log', mock_write_log), \
+             patch('src.distributed_clap_embeddings.logging.info', MagicMock()), \
+             patch('src.distributed_clap_embeddings.logging.error', MagicMock()), \
+             patch('src.utils.get_config_from_yaml', mock_get_config_from_yaml_data):
         
-        # ESECUZIONE DEL TEST
-        run_distributed_embeddings(
-            config_file=TEST_CONFIG_FILENAME,
-            raw_dir=self.raw_dir,
-            preprocessed_dir=self.preprocessed_dir,
-            n_octave=TEST_N_OCTAVE,
-            slurm=False # Modalità locale
-        )
+            # ESECUZIONE DEL TEST
+            run_distributed_embeddings(
+                config_file=TEST_CONFIG_FILENAME,
+                raw_dir=self.raw_dir,
+                preprocessed_dir=self.preprocessed_dir,
+                n_octave=TEST_N_OCTAVE,
+                slurm=False # Modalità locale
+            )
         
-        # ASSERTIONS
-        self.assertEqual(mock_clap_init.call_count, 1, "CLAP_initializer deve essere chiamato una sola volta nel processo principale.")
-        self.assertEqual(mock_process.call_count, 4, "Devono essere avviati 4 processi worker (world_size=4).")
-        self.assertEqual(mock_worker_process.call_count, 4, "Il worker mockato deve essere chiamato una volta per ogni processo.")
-        self.assertEqual(mock_write_log.call_count, 6, "write_log deve essere chiamato 6 volte (una per ogni task completato).")
-        self.assertEqual(mock_combine_files.call_count, 1, "La combinazione deve avvenire una sola volta.")
+            # ASSERTIONS
+            self.assertEqual(mock_clap_init.call_count, 1, "CLAP_initializer deve essere chiamato una sola volta nel processo principale.")
+            self.assertEqual(mock_process.call_count, 4, "Devono essere avviati 4 processi worker (world_size=4).")
+            self.assertEqual(mock_worker_process.call_count, 4, "Il worker mockato deve essere chiamato una volta per ogni processo.")
+            self.assertEqual(mock_write_log.call_count, 6, "write_log deve essere chiamato 6 volte (una per ogni task completato).")
+            self.assertEqual(mock_combine_files.call_count, 1, "La combinazione deve avvenire una sola volta.")
         
-        # Verifica l'esistenza di tutti i 6 file di output
-        total_tasks = [(1.0, c) for c in TEST_CLASSES] + [(3.0, c) for c in TEST_CLASSES]
-        for cut_secs, class_name in total_tasks:
-            h5_path = os.path.join(self.preprocessed_dir, TEST_AUDIO_FORMAT, f'{TEST_N_OCTAVE}_octave', f'cut_{cut_secs}', f'{class_name}_emb.h5')
-            self.assertTrue(os.path.exists(h5_path), f"File HDF5 mancante per task: {class_name}, cut={cut_secs}")
+            # Verifica l'esistenza di tutti i 6 file di output
+            total_tasks = [(1.0, c) for c in TEST_CLASSES] + [(3.0, c) for c in TEST_CLASSES]
+            for cut_secs, class_name in total_tasks:
+                h5_path = os.path.join(self.preprocessed_dir, TEST_AUDIO_FORMAT, f'{TEST_N_OCTAVE}_octave', f'cut_{cut_secs}', f'{class_name}_emb.h5')
+                self.assertTrue(os.path.exists(h5_path), f"File HDF5 mancante per task: {class_name}, cut={cut_secs}")
 
     def test_run_distributed_slurm_gpu_mode_rank0(self):
         """Testa il loop principale in modalità SLURM (GPU distribuita) sul Rank 0."""
