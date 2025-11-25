@@ -251,7 +251,7 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
             run_local_multiprocess(
                 config_file=TEST_CONFIG_FILENAME,
                 # raw_dir=self.raw_dir,
-                preprocessed_dir=self.preprocessed_dir,
+                audio_format=TEST_AUDIO_FORMAT,
                 n_octave=TEST_N_OCTAVE,
                 world_size=4
             )
@@ -320,7 +320,7 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
             run_distributed_slurm(
                 config_file=TEST_CONFIG_FILENAME,
                 # raw_dir=self.raw_dir,
-                preprocessed_dir=self.preprocessed_dir,
+                audio_format=TEST_AUDIO_FORMAT,
                 n_octave=TEST_N_OCTAVE
             )
             
