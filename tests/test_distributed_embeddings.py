@@ -76,12 +76,14 @@ def mock_get_config_from_yaml_data(config_file):
         "patience": 10, "epochs": 10, "batch_size": 2,
         "sampling_rate": 52100, "ref": 2.e-05, "noise_perc": 0.3, "seed": 1, 
         "center_freqs": [100.0, 500.0],
-        "valid_cut_secs": [1]
+        "valid_cut_secs": [1],
+        "splits_xc_sizes_names": [('train', 5), ('valid', 2)]
     }
     # L'output di get_config_from_yaml in utils è una tupla:
     return (configs['classes'], configs['patience'], configs['epochs'], configs['batch_size'],
             configs['sampling_rate'], configs['ref'], configs['noise_perc'], configs['seed'],
-            np.array(configs['center_freqs']), configs['valid_cut_secs']
+            np.array(configs['center_freqs']), configs['valid_cut_secs'],
+            config['splits_xc_sizes_names']
             )
 
 # Mock per le funzioni distribuite (previene l'uso di risorse reali)
