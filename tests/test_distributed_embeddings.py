@@ -265,8 +265,8 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
             
             # IMPOSTAZIONE DEI VALORI DI RITORNO E SIDE EFFECT
             mock_clap_init.return_value = (MagicMock(), MagicMock(), MagicMock())
-            mock_get_config.side_effect = self.mock_get_config_from_yaml_data
-            mock_join_logs.side_effect = self.mock_join_logs_all_incomplete
+            mock_get_config.side_effect = mock_get_config_from_yaml_data
+            mock_join_logs.side_effect = mock_join_logs_all_incomplete
             
             # Associa i side effect
             mock_worker_process.side_effect = mock_worker_process_side_effect
@@ -315,7 +315,6 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
              patch('src.distributed_clap_embeddings.write_log') as mock_write_log, \
              patch('src.distributed_clap_embeddings.worker_process_slurm') as mock_process_class, \
              patch('src.distributed_clap_embeddings.MultiProcessTqdm', MagicMock()) as mock_pbar, \
-             patch('src.distributed_clap_embeddings.delete_log') as mock_delete_log, \
              patch('src.distributed_clap_embeddings.join_logs') as mock_join_logs, \
              patch('src.distributed_clap_embeddings.get_config_from_yaml') as mock_get_config, \
              patch('src.distributed_clap_embeddings.basedir_preprocessed', self.preprocessed_dir), \
@@ -323,10 +322,10 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
             
             # IMPOSTAZIONE DEI VALORI DI RITORNO E SIDE EFFECT
             mock_clap_init.return_value = (MagicMock(), MagicMock(), MagicMock())
-            mock_get_config.side_effect = self.mock_get_config_from_yaml_data
+            mock_get_config.side_effect = mock_get_config_from_yaml_data
             mock_setup_env.return_value = (0, 2) # rank 0, world_size 2
             mock_process_class.side_effect = mock_process_class_side_effect
-            mock_join_logs.side_effect = self.mock_join_logs_all_incomplete
+            mock_join_logs.side_effect = mock_join_logs_all_incomplete
 
             # ESECUZIONE DEL TEST
             run_distributed_slurm(
