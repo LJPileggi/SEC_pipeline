@@ -245,7 +245,7 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
              patch('src.distributed_clap_embeddings.write_log', mock_write_log), \
              patch('src.distributed_clap_embeddings.logging.info', MagicMock()), \
              patch('src.distributed_clap_embeddings.logging.error', MagicMock()), \
-             patch('src.distributed_clap_embeddings.dirs.config.basedir_preprocessed', BASEDIR_PREPROCESSED_TEST), \
+             patch('src.distributed_clap_embeddings.dirs_config.basedir_preprocessed', BASEDIR_PREPROCESSED_TEST), \
              patch('src.distributed_clap_embeddings.get_config_from_yaml', mock_get_config_from_yaml_data):
         
             # ESECUZIONE DEL TEST
@@ -315,7 +315,7 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
              patch('src.distributed_clap_embeddings.write_log', mock_write_log), \
              patch('src.distributed_clap_embeddings.logging.info', MagicMock()), \
              patch('src.distributed_clap_embeddings.logging.error', MagicMock()), \
-             patch('src.distributed_clap_embeddings.dirs.config.basedir_preprocessed', BASEDIR_PREPROCESSED_TEST), \
+             patch('src.distributed_clap_embeddings.dirs_config.basedir_preprocessed', BASEDIR_PREPROCESSED_TEST), \
              patch('src.distributed_clap_embeddings.get_config_from_yaml', mock_get_config_from_yaml_data):
             
             # ESECUZIONE DEL TEST
