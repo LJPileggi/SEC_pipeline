@@ -15,6 +15,17 @@ from unittest.mock import patch, MagicMock
 # Assumendo che il file di test sia nella root o in una cartella 'tests'
 sys.path.append('.')
 
+try:
+    from src.distributed_clap_embeddings import run_distributed_slurm, run_local_multiprocess
+except ImportError as e:
+    # Fallback per l'esecuzione diretta o debug, ma avvisa
+    print(f"Warning: Attempting local import of models. Error: {e}")
+    # Se fallisce l'import da src, prova l'import diretto (se i files sono nella stessa dir)
+    try:
+        from distributed_clap_embeddings import run_distributed_slurm, run_local_multiprocess
+    except ImportError as e_local:
+        raise ImportError(f"Impossibile importare 'models' o dipendenze essenziali: {e_local}")
+
 # --- Configurazione Test ---
 TEST_CLASSES = ['Music', 'Voices', 'Birds']
 TEST_TRACKS_PER_CLASS = 15 # Abbastanza per uno split teorico
