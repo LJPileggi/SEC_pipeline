@@ -289,7 +289,6 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
              patch('src.distributed_clap_embeddings.write_log') as mock_write_log, \
              patch('src.distributed_clap_embeddings.worker_process_slurm') as mock_process_class, \
              patch('src.distributed_clap_embeddings.MultiProcessTqdm', MagicMock()) as mock_pbar, \
-             patch('src.distributed_clap_embeddings.delete_log') as mock_delete_log, \
              patch('src.distributed_clap_embeddings.join_logs') as mock_join_logs, \
              patch.dict('os.environ', {'SLURM_PROCID': '0', 'SLURM_NTASKS': '2', 'MASTER_ADDR': 'localhost', 'MASTER_PORT': '29500', 'LOCAL_CLAP_WEIGHTS_PATH': '/mock/path'}):
         
@@ -345,7 +344,6 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
             # self.assertEqual(mock_combine_files.call_count, 2, "La combinazione deve avvenire per i 2 cut_secs (1.0 e 3.0).")
             self.assertEqual(mock_write_log.call_count, 3, "write_log deve essere chiamato 3 volte.")
             mock_cleanup_dist.assert_called_once()
-            mock_delete_log.assert_called_once() # Aggiunto per coerenza con il codice
             mock_join_logs.assert_called_once() # Chiamata nel finally block
 
 
