@@ -395,11 +395,6 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
     # Assicurati che il rank 0 chiuda la pbar dopo che tutti hanno finito
     if rank == 0 and pbar:
         pbar.close()
-
-    # delete_log (se vuoi una singola pulizia finale) dovrebbe essere chiamato solo dal rank 0
-    if rank == 0:
-        delete_log(log_path)
-
     logging.info(f"Rank {rank}: tutti i processi hanno terminato il loro lavoro.")
 
 
