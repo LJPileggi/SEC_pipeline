@@ -355,10 +355,15 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
     all_tasks = []
     for cut_secs in cut_secs_list:
         for class_name in classes_list:
-        # DEBUGGING: Stampa la chiave che si sta cercando per la lookup
+            # DEBUGGING: Stampa la chiave che si sta cercando per la lookup
             task_key = (cut_secs, class_name)
             print(f"DEBUGGING: Rank {rank} - Lookup key: {task_key}. cut_secs type: {type(cut_secs)} (from config)", file=sys.stderr) # DEBUGGING
-            if not log_data[(cut_secs, class_name)]:
+            
+            # FIX: Conversione della chiave in stringa per la lookup nel log JSON e check di esistenza.
+            log_key_str = str((cut_secs, class_name))
+            
+            # L'accesso al log è ora robusto: controlla se il task non è stato eseguito
+            if log_key_str not in log_data or not log_data[log_key_str]:
                 all_tasks.append((cut_secs, class_name))
             else:
                 # Salta i task già eseguiti
@@ -448,10 +453,16 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
 
     all_tasks = []
     for cut_secs in cut_secs_list:
-        for class_name in classes_list:# DEBUGGING: Stampa la chiave che si sta cercando per la lookup
+        for class_name in classes_list:
+            # DEBUGGING: Stampa la chiave che si sta cercando per la lookup
             task_key = (cut_secs, class_name)
             print(f"DEBUGGING: Main Process - Lookup key: {task_key}. cut_secs type: {type(cut_secs)} (from config)", file=sys.stderr) # DEBUGGING
-            if not log_data[(cut_secs, class_name)]:
+
+            # FIX: Conversione della chiave in stringa per la lookup nel log JSON e check di esistenza.
+            log_key_str = str((cut_secs, class_name))
+            
+            # L'accesso al log è ora robusto: controlla se il task non è stato eseguito
+            if log_key_str not in log_data or not log_data[log_key_str]:
                 all_tasks.append((cut_secs, class_name))
             else:
                 # Salta i task già eseguiti
