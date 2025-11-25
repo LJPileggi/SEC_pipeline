@@ -13,7 +13,7 @@ from unittest.mock import patch, MagicMock
 
 # Aggiungi il percorso 'src' al path di sistema per le importazioni relative
 # Assumendo che il file di test sia nella root o in una cartella 'tests'
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append('.')
 
 # Crea directory di test
 BASEDIR_TEST = os.path.join('..', 'tests')
