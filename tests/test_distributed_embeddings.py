@@ -97,7 +97,7 @@ def mock_join_logs_all_incomplete(*args, **kwargs):
     """
     status = {}
     classes_list = TEST_CLASSES # ['Music', 'Voices', 'Birds']
-    cut_secs_list = [1.0, 3.0]
+    cut_secs_list = [1, 3]
     for cut in cut_secs_list:
         for cls in classes_list:
             status[(cut, cls)] = False # False = Incompleto
@@ -267,7 +267,7 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
             self.assertEqual(mock_combine_files.call_count, 1, "La combinazione deve avvenire una sola volta.")
         
             # Verifica l'esistenza di tutti i 6 file di output
-            total_tasks = [(1.0, c) for c in TEST_CLASSES] + [(3.0, c) for c in TEST_CLASSES]
+            total_tasks = [(1, c) for c in TEST_CLASSES] + [(3, c) for c in TEST_CLASSES]
             for cut_secs, class_name in total_tasks:
                 h5_path = os.path.join(self.preprocessed_dir, TEST_AUDIO_FORMAT, f'{TEST_N_OCTAVE}_octave', f'cut_{cut_secs}', f'{class_name}_emb.h5')
                 self.assertTrue(os.path.exists(h5_path), f"File HDF5 mancante per task: {class_name}, cut={cut_secs}")
@@ -331,12 +331,12 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
             # ASSERTIONS
             self.assertEqual(mock_clap_init.call_count, 1, "CLAP_initializer deve essere chiamato una sola volta.")
             self.assertEqual(mock_process_class.call_count, 3, "Il Rank 0 deve eseguire 3 task.")
-            self.assertEqual(mock_combine_files.call_count, 2, "La combinazione deve avvenire per i 2 cut_secs (1.0 e 3.0).")
+            self.assertEqual(mock_combine_files.call_count, 2, "La combinazione deve avvenire per i 2 cut_secs (1 e 3).")
             self.assertEqual(mock_write_log.call_count, 3, "write_log deve essere chiamato 3 volte.")
             mock_cleanup_dist.assert_called_once()
             
             # Verifica l'esistenza dei file di output per i task del rank 0
-            rank0_tasks = [(1.0, 'Music'), (1.0, 'Birds'), (3.0, 'Voices')]
+            rank0_tasks = [(1, 'Music'), (1, 'Birds'), (3, 'Voices')]
             for cut_secs, class_name in rank0_tasks:
                 h5_path = os.path.join(self.preprocessed_dir, TEST_AUDIO_FORMAT,f'{TEST_N_OCTAVE}_octave',
                                                                 f'cut_{cut_secs}', f'{class_name}_emb.h5')
