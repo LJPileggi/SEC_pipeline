@@ -83,7 +83,7 @@ def mock_get_config_from_yaml_data(config_file):
     return (configs['classes'], configs['patience'], configs['epochs'], configs['batch_size'],
             configs['sampling_rate'], configs['ref'], configs['noise_perc'], configs['seed'],
             np.array(configs['center_freqs']), configs['valid_cut_secs'],
-            config['splits_xc_sizes_names']
+            configs['splits_xc_sizes_names']
             )
 
 # Mock per le funzioni distribuite (previene l'uso di risorse reali)
