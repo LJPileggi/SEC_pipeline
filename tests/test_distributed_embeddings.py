@@ -1,4 +1,5 @@
 import unittest
+import logging
 import os
 import shutil
 import tempfile
