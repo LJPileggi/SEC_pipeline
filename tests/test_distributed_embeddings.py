@@ -159,8 +159,8 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
         global BASEDIR_RAW_TEST
         global BASEDIR_PREPROCESSED_TEST
         
-        BASEDIR_RAW_TEST = os.path.join(cls.test_root_dir, 'RAW_DATASET')
-        BASEDIR_PREPROCESSED_TEST = os.path.join(cls.test_root_dir, 'PREPROCESSED_DATASET')
+        BASEDIR_RAW_TEST = os.path.join(cls.test_root_dir, 'testing', 'RAW_DATASET')
+        BASEDIR_PREPROCESSED_TEST = os.path.join(cls.test_root_dir, 'testing', 'PREPROCESSED_DATASET')
 
         # 2b. Crea le directory (ORA FUNZIONA PERCHÉ SONO IN cls.test_root_dir)
         os.makedirs(BASEDIR_RAW_TEST, exist_ok=True)
