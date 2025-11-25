@@ -250,10 +250,10 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
             # ESECUZIONE DEL TEST
             run_local_multiprocess(
                 config_file=TEST_CONFIG_FILENAME,
-                raw_dir=self.raw_dir,
+                # raw_dir=self.raw_dir,
                 preprocessed_dir=self.preprocessed_dir,
                 n_octave=TEST_N_OCTAVE,
-                slurm=False # Modalità locale
+                world_size=4
             )
         
             # ASSERTIONS
@@ -319,10 +319,9 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
             # ESECUZIONE DEL TEST
             run_distributed_slurm(
                 config_file=TEST_CONFIG_FILENAME,
-                raw_dir=self.raw_dir,
+                # raw_dir=self.raw_dir,
                 preprocessed_dir=self.preprocessed_dir,
-                n_octave=TEST_N_OCTAVE,
-                slurm=True
+                n_octave=TEST_N_OCTAVE
             )
             
             # ASSERTIONS
