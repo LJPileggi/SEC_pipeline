@@ -181,12 +181,19 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
         utils.extract_all_files_from_dir = mock_extract_all_files_from_dir
 
     @classmethod
-    def tearDownClass(cls):
-        """Pulisce l'ambiente di test."""
-        # Rimuove la directory temporanea e tutto il suo contenuto
-        cls.temp_dir_obj.cleanup()
-        # Ripristina la variabile d'ambiente
-        del os.environ['NODE_TEMP_BASE_DIR']
+    def tearDown(self):
+        """Pulisce dopo ogni test, rimuovendo le directory temporanee e i gestori di logging."""
+        
+        # Codice per pulire le directory temporanee (assumo sia già presente)
+        if hasattr(self, 'test_root_dir') and os.path.exists(self.test_root_dir):
+            shutil.rmtree(self.test_root_dir)
+            
+        # Correzione ResourceWarning: Rimuove esplicitamente i gestori di logging
+        root_logger = logging.getLogger()
+        for handler in root_logger.handlers[:]:
+            if isinstance(handler, logging.FileHandler):
+                handler.close()
+                root_logger.removeHandler(handler)
     
     def setUp(self):
         # Assicurati che le cartelle di output siano pulite prima di ogni test
