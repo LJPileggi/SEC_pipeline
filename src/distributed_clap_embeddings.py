@@ -310,6 +310,7 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
 
     # Inizializza il logging una volta per processo
     embed_folder = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave')
+    os.makedirs(embed_folder, exist_ok=True)
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s',
                                              handlers=[logging.StreamHandler(),
            logging.FileHandler(filename=os.path.join(embed_folder, 'log.txt'))])
@@ -391,6 +392,7 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
     setup_environ_vars(False)
 
     embed_folder = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave')
+    os.makedirs(embed_folder, exist_ok=True)
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s',
                                              handlers=[logging.StreamHandler(),
                    logging.FileHandler(filename=os.path.join(embed_folder, f'log.txt'))])
