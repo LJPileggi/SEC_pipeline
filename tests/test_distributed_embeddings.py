@@ -62,14 +62,13 @@ def mock_get_config_from_yaml_data(config_file):
     """Restituisce i dati di configurazione mockati basati su test_config.yaml."""
     configs = {
         "classes": TEST_CLASSES,
-        "patience": 10, "epochs": 10, "batch_size": 2, "save_log_every": 1,
+        "patience": 10, "epochs": 10, "batch_size": 2,
         "sampling_rate": 52100, "ref": 2.e-05, "noise_perc": 0.3, "seed": 1, 
         "center_freqs": [100.0, 500.0],
-        "valid_cut_secs": [1.0], # Un solo cut_secs per test più rapidi
-        "test_cut_secs": [3.0], # Un altro cut_secs per i test
+        "valid_cut_secs": [1]
     }
     # L'output di get_config_from_yaml in utils è una tupla:
-    return (configs['patience'], configs['epochs'], configs['batch_size'], configs['save_log_every'],
+    return (configs['patience'], configs['epochs'], configs['batch_size'],
             configs['sampling_rate'], configs['ref'], configs['noise_perc'], configs['seed'],
             np.array(configs['center_freqs']), configs['valid_cut_secs'], configs['test_cut_secs'],
             configs['classes'])
@@ -78,7 +77,19 @@ def mock_get_config_from_yaml_data(config_file):
 def mock_setup_distributed_environment(rank, world_size, slurm=True):
     # Simula il device, essenziale per la logica successiva
     return torch.device('cuda:0' if slurm else 'cpu') 
-    
+
+def mock_join_logs_all_incomplete(*args, **kwargs):
+    """
+    Simula utils.join_logs restituendo un dizionario dove tutti i task sono incompleti (False).
+    """
+    status = {}
+    classes_list = TEST_CLASSES # ['Music', 'Voices', 'Birds']
+    cut_secs_list = [1.0, 3.0]
+    for cut in cut_secs_list:
+        for cls in classes_list:
+            status[(cut, cls)] = False # False = Incompleto
+    return status
+
 def mock_cleanup_distributed_environment():
     pass
 
@@ -185,56 +196,67 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
         mock_mp_manager = MagicMock()
         mock_mp_queue = MagicMock()
         
-        # Definisci il side effect per simulare la creazione del file di output (necessario per gli asserts di esistenza)
+        # Funzioni da utils.py
+        mock_write_log = MagicMock()
+        mock_join_logs = mock_join_logs_all_incomplete # Simuliamo tutti i task incompleti
+
+        # Definisci il side effect per simulare la creazione dei file e la scrittura del log
         def mock_worker_process_side_effect(*args, **kwargs):
-            # args: (audio_format, n_octave, config, rank, world_size, my_tasks, pbar)
             tasks = args[5] # my_tasks
+            rank = args[3] # rank
             for cut_secs, class_name in tasks:
-                # Crea un file HDF5 fittizio di output per simulare il lavoro del worker
-                h5_path = os.path.join(self.preprocessed_dir, TEST_AUDIO_FORMAT, f'{TEST_N_OCTAVE}_octave',
-                                                                  f'cut_{cut_secs}', f'{class_name}_emb.h5')
+                # Simula la creazione del file HDF5 di output
+                h5_path = os.path.join(self.preprocessed_dir, TEST_AUDIO_FORMAT, f'{TEST_N_OCTAVE}_octave', f'cut_{cut_secs}', f'{class_name}_emb.h5')
                 os.makedirs(os.path.dirname(h5_path), exist_ok=True)
                 with open(h5_path, 'w') as f:
-                    f.write("mock content") # Simula l'esistenza del file
+                    f.write("mock content")
+
+                # Simula la chiamata a utils.write_log
+                mock_write_log(rank=rank, 
+                               cut_secs=cut_secs, 
+                               class_to_process=class_name, 
+                               audio_format=TEST_AUDIO_FORMAT, 
+                               n_octave=TEST_N_OCTAVE)
+    
+    mock_worker_process.side_effect = mock_worker_process_side_effect
+    
+    # Simula il processo mp.Process in modo che chiami il worker mockato
+    mock_process = MagicMock()
+    
+    # AGGIUNGIAMO TUTTI i MOCK IN UN UNICO CONTESTO 'WITH PATCH'
+    with patch('src.models.CLAP_initializer', MagicMock()) as mock_clap_init, \
+         patch('src.distributed_clap_embeddings.local_worker_process', mock_worker_process), \
+         patch('src.utils.combine_hdf5_files', mock_combine_files), \
+         patch('src.distributed_clap_embeddings.mp.Manager', return_value=mock_mp_manager), \
+         patch.object(mock_mp_manager, 'Queue', return_value=mock_mp_queue), \
+         patch('src.distributed_clap_embeddings.mp.Process', return_value=mock_process), \
+         patch('src.utils.join_logs', mock_join_logs), \
+         patch('src.utils.write_log', mock_write_log), \
+         patch('src.distributed_clap_embeddings.logging.info', MagicMock()), \
+         patch('src.distributed_clap_embeddings.logging.error', MagicMock()), \
+         patch('src.utils.get_config_from_yaml', mock_get_config_from_yaml_data):
         
-        mock_worker_process.side_effect = mock_worker_process_side_effect
+        # ESECUZIONE DEL TEST
+        run_distributed_embeddings(
+            config_file=TEST_CONFIG_FILENAME,
+            raw_dir=self.raw_dir,
+            preprocessed_dir=self.preprocessed_dir,
+            n_octave=TEST_N_OCTAVE,
+            slurm=False # Modalità locale
+        )
         
-        # Simula il processo mp.Process in modo che chiami il worker mockato
-        mock_process = MagicMock()
+        # ASSERTIONS
+        self.assertEqual(mock_clap_init.call_count, 1, "CLAP_initializer deve essere chiamato una sola volta nel processo principale.")
+        self.assertEqual(mock_process.call_count, 4, "Devono essere avviati 4 processi worker (world_size=4).")
+        self.assertEqual(mock_worker_process.call_count, 4, "Il worker mockato deve essere chiamato una volta per ogni processo.")
+        self.assertEqual(mock_write_log.call_count, 6, "write_log deve essere chiamato 6 volte (una per ogni task completato).")
+        self.assertEqual(mock_combine_files.call_count, 1, "La combinazione deve avvenire una sola volta.")
         
-        # AGGIUNGIAMO TUTTI I MOCK IN UN UNICO CONTESTO 'WITH PATCH'
-        with patch('src.models.CLAP_initializer', MagicMock()) as mock_clap_init, \
-             patch('src.distributed_clap_embeddings.local_worker_process', mock_worker_process), \
-             patch('src.utils.combine_hdf5_files', mock_combine_files), \
-             patch('src.distributed_clap_embeddings.mp.Manager', return_value=mock_mp_manager), \
-             patch.object(mock_mp_manager, 'Queue', return_value=mock_mp_queue), \
-             patch('src.distributed_clap_embeddings.mp.Process', return_value=mock_process), \
-             patch('src.distributed_clap_embeddings.logging.info', MagicMock()), \
-             patch('src.distributed_clap_embeddings.logging.error', MagicMock()), \
-             patch('src.utils.get_config_from_yaml', mock_get_config_from_yaml_data), \
-             patch('src.dirs_config.LOGS_DIR', self.test_root_dir):
-            
-            # ESECUZIONE DEL TEST
-            run_distributed_embeddings(
-                config_file=TEST_CONFIG_FILENAME,
-                raw_dir=self.raw_dir,
-                preprocessed_dir=self.preprocessed_dir,
-                n_octave=TEST_N_OCTAVE,
-                slurm=False # Modalità locale
-            )
-            
-            # ASSERTIONS
-            self.assertEqual(mock_clap_init.call_count, 1, "CLAP_initializer deve essere chiamato una sola volta nel processo principale.")
-            self.assertEqual(mock_process.call_count, 4, "Devono essere avviati 4 processi worker (world_size=4).")
-            # Verifica che il combine_hdf5_files sia chiamato una volta dopo il join dei processi
-            self.assertEqual(mock_combine_files.call_count, 1, "La combinazione deve avvenire una sola volta.")
-            
-            # Verifica l'esistenza di tutti i 6 file di output (3 classi * 2 cut_secs)
-            total_tasks = [(1.0, c) for c in TEST_CLASSES] + [(3.0, c) for c in TEST_CLASSES]
-            for cut_secs, class_name in total_tasks:
-                h5_path = os.path.join(self.preprocessed_dir, TEST_AUDIO_FORMAT, f'{TEST_N_OCTAVE}_octave',
-                                                                  f'cut_{cut_secs}', f'{class_name}_emb.h5')
-                self.assertTrue(os.path.exists(h5_path), f"File HDF5 mancante per task: {class_name}, cut={cut_secs}")
+        # Verifica l'esistenza di tutti i 6 file di output
+        total_tasks = [(1.0, c) for c in TEST_CLASSES] + [(3.0, c) for c in TEST_CLASSES]
+        for cut_secs, class_name in total_tasks:
+            h5_path = os.path.join(self.preprocessed_dir, TEST_AUDIO_FORMAT, f'{TEST_N_OCTAVE}_octave', f'cut_{cut_secs}', f'{class_name}_emb.h5')
+            self.assertTrue(os.path.exists(h5_path), f"File HDF5 mancante per task: {class_name}, cut={cut_secs}")
 
     def test_run_distributed_slurm_gpu_mode_rank0(self):
         """Testa il loop principale in modalità SLURM (GPU distribuita) sul Rank 0."""
@@ -242,38 +264,46 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
         # DEFINIZIONE E SETUP DEI MOCK
         mock_process_class = MagicMock()
         mock_combine_files = MagicMock()
+        
+        # Funzioni da utils.py
         # setup_distributed_environment ritorna: device='cuda', rank=0, world_size=2
         mock_setup_dist = MagicMock(return_value=('cuda', 0, 2)) 
-        mock_cleanup_dist = MagicMock()
-        mock_log_info = MagicMock()
+        mock_cleanup_dist = MagicMock()                          
+        mock_write_log = MagicMock()                             
+        mock_join_logs = mock_join_logs_all_incomplete           # Simuliamo tutti i task incompleti
 
-        # Definisci il side effect per simulare la creazione del file di output
+        # Definisci il side effect per simulare la creazione del file HDF5 e la scrittura del log
         def mock_process_class_side_effect(*args, **kwargs):
             # args: (clap_model, audio_embedding, class_to_process, cut_secs, n_octave, config)
-            # Simula la creazione del file solo per i task eseguiti
             class_name = args[2] 
             cut_secs = args[3] 
             
-            # Questo rank (0) dovrebbe processare: (1.0, Music), (1.0, Birds), (3.0, Voices)
-            if (cut_secs, class_name) in [(1.0, 'Music'), (1.0, 'Birds'), (3.0, 'Voices')]:
-                h5_path = os.path.join(self.preprocessed_dir, TEST_AUDIO_FORMAT,f'{TEST_N_OCTAVE}_octave',
-                                                                f'cut_{cut_secs}', f'{class_name}_emb.h5')
-                os.makedirs(os.path.dirname(h5_path), exist_ok=True)
-                with open(h5_path, 'w') as f:
-                    f.write("mock content") # Simula l'esistenza del file
-        
+            # Simula la creazione del file di output
+            h5_path = os.path.join(self.preprocessed_dir, TEST_AUDIO_FORMAT, f'{TEST_N_OCTAVE}_octave', f'cut_{cut_secs}', f'{class_name}_emb.h5')
+            os.makedirs(os.path.dirname(h5_path), exist_ok=True)
+            with open(h5_path, 'w') as f:
+                f.write("mock content")
+
+            # Simula la chiamata a utils.write_log
+            mock_write_log(rank=0, 
+                           cut_secs=cut_secs, 
+                           class_to_process=class_name, 
+                           audio_format=TEST_AUDIO_FORMAT, 
+                           n_octave=TEST_N_OCTAVE) 
+
         mock_process_class.side_effect = mock_process_class_side_effect
         
         # AGGIUNGIAMO TUTTI I MOCK IN UN UNICO CONTESTO 'WITH PATCH'
         with patch('src.models.CLAP_initializer', MagicMock()) as mock_clap_init, \
              patch('src.distributed_clap_embeddings.process_class_with_cut_secs', mock_process_class), \
              patch('src.utils.combine_hdf5_files', mock_combine_files), \
-             patch('src.utils.setup_distributed_environment', mock_setup_dist), \
-             patch('src.utils.cleanup_distributed_environment', mock_cleanup_dist), \
-             patch('src.distributed_clap_embeddings.logging.info', mock_log_info), \
+             patch('src.utils.utils.setup_distributed_environment', mock_setup_dist), \
+             patch('src.utils.utils.cleanup_distributed_environment', mock_cleanup_dist), \
+             patch('src.utils.join_logs', mock_join_logs), \
+             patch('src.utils.write_log', mock_write_log), \
+             patch('src.distributed_clap_embeddings.logging.info', MagicMock()), \
              patch('src.distributed_clap_embeddings.logging.error', MagicMock()), \
-             patch('src.utils.get_config_from_yaml', mock_get_config_from_yaml_data), \
-             patch('src.dirs_config.LOGS_DIR', self.test_root_dir):
+             patch('src.utils.get_config_from_yaml', mock_get_config_from_yaml_data):
             
             # ESECUZIONE DEL TEST
             run_distributed_embeddings(
@@ -288,6 +318,8 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
             self.assertEqual(mock_clap_init.call_count, 1, "CLAP_initializer deve essere chiamato una sola volta.")
             self.assertEqual(mock_process_class.call_count, 3, "Il Rank 0 deve eseguire 3 task.")
             self.assertEqual(mock_combine_files.call_count, 2, "La combinazione deve avvenire per i 2 cut_secs (1.0 e 3.0).")
+            self.assertEqual(mock_write_log.call_count, 3, "write_log deve essere chiamato 3 volte.")
+            mock_cleanup_dist.assert_called_once()
             
             # Verifica l'esistenza dei file di output per i task del rank 0
             rank0_tasks = [(1.0, 'Music'), (1.0, 'Birds'), (3.0, 'Voices')]
@@ -295,8 +327,6 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
                 h5_path = os.path.join(self.preprocessed_dir, TEST_AUDIO_FORMAT,f'{TEST_N_OCTAVE}_octave',
                                                                 f'cut_{cut_secs}', f'{class_name}_emb.h5')
                 self.assertTrue(os.path.exists(h5_path), f"File HDF5 mancante per task: {class_name}, cut={cut_secs} (Rank 0)")
-                
-            mock_cleanup_dist.assert_called_once()
 
 
 if __name__ == '__main__':
