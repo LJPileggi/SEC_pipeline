@@ -331,7 +331,6 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
     config['spectrogram']['center_freqs'] = center_freqs
     config['audio']['noise_perc'] = noise_perc
     config['audio']['seed'] = seed
-    config['log']['save_log_every'] = save_log_every
     config['data']['divisions_xc_sizes_names'] = divisions_xc_sizes_names
 
     basedir_raw_format = os.path.join(basedir_raw, f'{audio_format}')
@@ -413,7 +412,6 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
     config['spectrogram']['center_freqs'] = center_freqs
     config['audio']['noise_perc'] = noise_perc
     config['audio']['seed'] = seed
-    config['log']['save_log_every'] = save_log_every
     config['data']['divisions_xc_sizes_names'] = divisions_xc_sizes_names
 
     basedir_raw_format = os.path.join(basedir_raw, f'{audio_format}')
