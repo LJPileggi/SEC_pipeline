@@ -224,20 +224,20 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
         mock_process = MagicMock()
 
         # AGGIUNGIAMO TUTTI i MOCK IN UN UNICO CONTESTO 'WITH PATCH'
-        with patch('src.models.CLAP_initializer', MagicMock()) as mock_clap_init, \
+        with patch('src.distributed_clap_embeddings.CLAP_initializer', MagicMock()) as mock_clap_init, \
              patch('src.distributed_clap_embeddings.local_worker_process', mock_worker_process), \
-             patch('src.utils.combine_hdf5_files', mock_combine_files), \
+             patch('src.distributed_clap_embeddings.combine_hdf5_files', mock_combine_files), \
              patch('src.distributed_clap_embeddings.mp.Manager', return_value=mock_mp_manager), \
              patch.object(mock_mp_manager, 'Queue', return_value=mock_mp_queue), \
              patch('src.distributed_clap_embeddings.mp.Process', return_value=mock_process), \
-             patch('src.utils.join_logs', mock_join_logs), \
-             patch('src.utils.write_log', mock_write_log), \
+             patch('src.distributed_clap_embeddings.join_logs', mock_join_logs), \
+             patch('src.distributed_clap_embeddings.write_log', mock_write_log), \
              patch('src.distributed_clap_embeddings.logging.info', MagicMock()), \
              patch('src.distributed_clap_embeddings.logging.error', MagicMock()), \
-             patch('src.utils.get_config_from_yaml', mock_get_config_from_yaml_data):
+             patch('src.distributed_clap_embeddings.get_config_from_yaml', mock_get_config_from_yaml_data):
         
             # ESECUZIONE DEL TEST
-            run_distributed_embeddings(
+            run_local_multiprocess(
                 config_file=TEST_CONFIG_FILENAME,
                 raw_dir=self.raw_dir,
                 preprocessed_dir=self.preprocessed_dir,
@@ -294,19 +294,19 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
         mock_process_class.side_effect = mock_process_class_side_effect
         
         # AGGIUNGIAMO TUTTI I MOCK IN UN UNICO CONTESTO 'WITH PATCH'
-        with patch('src.models.CLAP_initializer', MagicMock()) as mock_clap_init, \
+        with patch('src.distributed_clap_embeddings.CLAP_initializer', MagicMock()) as mock_clap_init, \
              patch('src.distributed_clap_embeddings.process_class_with_cut_secs', mock_process_class), \
-             patch('src.utils.combine_hdf5_files', mock_combine_files), \
-             patch('src.utils.utils.setup_distributed_environment', mock_setup_dist), \
-             patch('src.utils.utils.cleanup_distributed_environment', mock_cleanup_dist), \
-             patch('src.utils.join_logs', mock_join_logs), \
-             patch('src.utils.write_log', mock_write_log), \
+             patch('src.distributed_clap_embeddings.combine_hdf5_files', mock_combine_files), \
+             patch('src.distributed_clap_embeddings.setup_distributed_environment', mock_setup_dist), \
+             patch('src.distributed_clap_embeddings.cleanup_distributed_environment', mock_cleanup_dist), \
+             patch('src.distributed_clap_embeddings.join_logs', mock_join_logs), \
+             patch('src.distributed_clap_embeddings.write_log', mock_write_log), \
              patch('src.distributed_clap_embeddings.logging.info', MagicMock()), \
              patch('src.distributed_clap_embeddings.logging.error', MagicMock()), \
-             patch('src.utils.get_config_from_yaml', mock_get_config_from_yaml_data):
+             patch('src.distributed_clap_embeddings.get_config_from_yaml', mock_get_config_from_yaml_data):
             
             # ESECUZIONE DEL TEST
-            run_distributed_embeddings(
+            run_distributed_slurm(
                 config_file=TEST_CONFIG_FILENAME,
                 raw_dir=self.raw_dir,
                 preprocessed_dir=self.preprocessed_dir,
