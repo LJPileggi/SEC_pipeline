@@ -230,6 +230,8 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
             start_time = time.time()
             process_class_with_cut_secs(clap_model, audio_embedding, class_name, cut_secs, n_octave, config)
             process_time = time.time() - start_time
+            # DEBUGGING: Stampa la chiave usata per write_log
+            print(f"DEBUGGING: Rank {rank} - write_log key: ({cut_secs}, {class_name}). cut_secs type: {type(cut_secs)}", file=sys.stderr) # DEBUGGING
             write_log(config['dirs']['root_target'], (cut_secs, class_name), process_time, rank, **config)
             
             # Aggiorna la barra di avanzamento dopo aver completato un task
@@ -271,6 +273,8 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
             start_time = time.time()
             process_class_with_cut_secs(clap_model, audio_embedding, class_name, cut_secs, n_octave, config)
             process_time = time.time() - start_time
+            # DEBUGGING: Stampa la chiave usata per write_log
+            print(f"DEBUGGING: Rank {rank} - write_log key: ({cut_secs}, {class_name}). cut_secs type: {type(cut_secs)}", file=sys.stderr) # DEBUGGING
             write_log(config['dirs']['root_target'], (cut_secs, class_name), process_time, rank, **config)
             # Aggiorna la barra di avanzamento locale (che invia il messaggio alla coda)
             if pbar_instance:
@@ -341,12 +345,19 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
         with open(os.path.join(log_path, 'log.json', 'r')) as f:
             log_data = json.load(f)
             logging.info(f"Ripresa da log: {log_data}")
+            # DEBUGGING: Stampa un esempio di chiave dal log
+            if log_data:
+                first_key = next(iter(log_data.keys()))
+                print(f"DEBUGGING: Rank {rank} - Log loaded. First key: {first_key}. Type of key: {type(first_key)}", file=sys.stderr) # DEBUGGING
     except FileNotFoundError:
         logging.info("Nessun log trovato, avvio una nuova esecuzione.")
 
     all_tasks = []
     for cut_secs in cut_secs_list:
         for class_name in classes_list:
+        # DEBUGGING: Stampa la chiave che si sta cercando per la lookup
+            task_key = (cut_secs, class_name)
+            print(f"DEBUGGING: Rank {rank} - Lookup key: {task_key}. cut_secs type: {type(cut_secs)} (from config)", file=sys.stderr) # DEBUGGING
             if not log_data[(cut_secs, class_name)]:
                 all_tasks.append((cut_secs, class_name))
             else:
@@ -366,7 +377,15 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
             pbar = MultiProcessTqdm(message_queue, "main_pbar", desc="Progresso Totale", total=len(all_tasks))
 
     # Esegui la logica del worker con la fetta di task
-    worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_tasks, pbar)
+    try:
+        worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_tasks, pbar)
+    except Exception as e:
+        logging.error(f"Errore critico nel processo principale: {e}")
+        raise e
+    finally:
+        # DEBUGGING: Stampa che join_logs sta per essere chiamato
+        print(f"DEBUGGING: Rank {rank} - Chiamata a join_logs in finally block.", file=sys.stderr) # DEBUGGING
+        join_logs(log_path)
 
     # Assicurati che il rank 0 chiuda la pbar dopo che tutti hanno finito
     if rank == 0 and pbar:
@@ -421,13 +440,17 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
     try:
         with open(os.path.join(log_path, 'log.json', 'r')) as f:
             log_data = json.load(f)
-            logging.info(f"Ripresa da log: {log_data}")
+            logging.info(f"Ripresa da log: {log_data}")# DEBUGGING: Stampa un esempio di chiave dal log
+            if log_data:
+                first_key = next(iter(log_data.keys()))
     except FileNotFoundError:
         logging.info("Nessun log trovato, avvio una nuova esecuzione.")
 
     all_tasks = []
     for cut_secs in cut_secs_list:
-        for class_name in classes_list:
+        for class_name in classes_list:# DEBUGGING: Stampa la chiave che si sta cercando per la lookup
+            task_key = (cut_secs, class_name)
+            print(f"DEBUGGING: Main Process - Lookup key: {task_key}. cut_secs type: {type(cut_secs)} (from config)", file=sys.stderr) # DEBUGGING
             if not log_data[(cut_secs, class_name)]:
                 all_tasks.append((cut_secs, class_name))
             else:
@@ -446,19 +469,36 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
     if total_tasks > 0:
         pbar = MultiProcessTqdm(message_queue, f"main_pbar", desc="Progresso Totale", total=total_tasks)
 
-    for rank in range(world_size):
-        # Passa i task, il lock e le code a ogni processo
-        my_tasks = all_tasks[rank::world_size]
-        p = mp.Process(target=local_worker_process, args=(audio_format, n_octave, config, rank,
-                                                                    world_size, my_tasks, pbar))
-        p.start()
-        processes.append(p)
-        
-    # Aspetta che tutti i processi finiscano
-    for p in processes:
-        p.join()
+    try:
+        for rank in range(world_size):
+            # Passa i task, il lock e le code a ogni processo
+            my_tasks = all_tasks[rank::world_size]
+            p = mp.Process(target=local_worker_process, args=(audio_format, n_octave, config, rank,
+                                                                        world_size, my_tasks, pbar))
+            p.start()
+            processes.append(p)
+            
+        # Aspetta che tutti i processi finiscano
+        for p in processes:
+            p.join()
 
-    # Chiudi la barra di avanzamento dopo che tutti i processi hanno terminato
-    if pbar:
-        pbar.close()
+    # Non c'è bisogno di un 'except', il 'finally' gestisce sia l'errore che il successo
+    except Exception as e:
+        # Questo cattura le eccezioni NEL PROCESSO PADRE. 
+        # (Le eccezioni nei processi figli devono essere gestite dentro local_worker_process)
+        logging.error(f"Errore critico nel processo principale: {e}")
+        # Rilancia l'eccezione dopo aver chiamato join_logs (opzionale, ma utile per il debug)
+        raise e 
+        
+    finally:
+        # Chiudi la barra di avanzamento dopo che tutti i processi hanno terminato/fallito
+        if pbar:
+            pbar.close()
+            
+        # 7. Finalize & join_logs
+        # join_logs viene chiamato in ogni caso (successo, eccezione nel padre)
+        # Il log si aggiornerà con tutti i task completati fino a quel punto
+        # DEBUGGING: Stampa che join_logs sta per essere chiamato
+        print(f"DEBUGGING: Main Process - Chiamata a join_logs in finally block.", file=sys.stderr) # DEBUGGING
+        join_logs(log_path)
 
