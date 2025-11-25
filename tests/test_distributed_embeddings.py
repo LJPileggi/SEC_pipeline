@@ -212,7 +212,6 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
         """Testa il loop principale in modalità multiprocessing locale (CPU)."""
         
         # DEFINIZIONE E SETUP DEI MOCK
-        mock_get_track_reproducibility_parameters = MagicMock(side_effect=mock_get_track_reproducibility_parameters)
         mock_get_config_from_yaml = MagicMock(side_effect=mock_get_config_from_yaml_data)
         mock_worker_process = MagicMock()
         mock_combine_files = MagicMock()
@@ -256,8 +255,7 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
         mock_worker_process.side_effect = mock_worker_process_side_effect
         
         # AGGIUNGIAMO TUTTI i MOCK IN UN UNICO CONTESTO 'WITH PATCH'
-        with patch('src.distributed_clap_embeddings.get_track_reproducibility_parameters', mock_get_track_reproducibility_parameters), \
-             patch('src.distributed_clap_embeddings.get_config_from_yaml', mock_get_config_from_yaml), \
+        with patch('src.distributed_clap_embeddings.get_config_from_yaml', mock_get_config_from_yaml), \
              patch('src.distributed_clap_embeddings.logging.basicConfig', MagicMock()), \
              patch('src.models.CLAP_initializer', MagicMock()) as mock_clap_init, \
              patch('src.distributed_clap_embeddings.local_worker_process', mock_worker_process), \
@@ -294,7 +292,6 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
         """Testa il loop principale in modalità SLURM (GPU distribuita) sul Rank 0."""
         
         # DEFINIZIONE E SETUP DEI MOCK
-        mock_get_track_reproducibility_parameters = MagicMock(side_effect=mock_get_track_reproducibility_parameters)
         mock_get_config_from_yaml = MagicMock(side_effect=mock_get_config_from_yaml_data)
         mock_process_class = MagicMock()
         mock_combine_files = MagicMock()
@@ -332,8 +329,7 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
         mock_process_class.side_effect = mock_process_class_side_effect
         
         # AGGIUNGIAMO TUTTI I MOCK IN UN UNICO CONTESTO 'WITH PATCH'
-        with patch('src.distributed_clap_embeddings.get_track_reproducibility_parameters', mock_get_track_reproducibility_parameters), \
-             patch('src.distributed_clap_embeddings.get_config_from_yaml', mock_get_config_from_yaml), \
+        with patch('src.distributed_clap_embeddings.get_config_from_yaml', mock_get_config_from_yaml), \
              patch('src.distributed_clap_embeddings.logging.basicConfig', MagicMock()), \
              patch('src.models.CLAP_initializer', MagicMock()) as mock_clap_init, \
              patch('src.distributed_clap_embeddings.process_class_with_cut_secs', mock_process_class), \
