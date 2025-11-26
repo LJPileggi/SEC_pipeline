@@ -237,7 +237,7 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
         def process_side_effect(*args, **kwargs):
             target_args = kwargs.get('args')
             
-            # Esegui il worker mockato direttamente nel processo padre per contare le chiamate (FIX LOGICO: Rimosso il check 'if target_func == local_worker_process' che falliva)
+            # Esegui il worker mockato direttamente nel processo padre per contare le chiamate
             mock_worker_process(*target_args)
             
             # Ritorna un oggetto Process mockato
@@ -305,11 +305,11 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
                     n_octave=TEST_N_OCTAVE
                 )
 
-        # Uso ESCLUSIVO di with patch per tutti i mock (Aggiunto mock_setup_dist per stabilità)
+        # Uso ESCLUSIVO di with patch per tutti i mock (Aggiunto mock_combine_files per l'assertion)
         with patch('src.distributed_clap_embeddings.CLAP_initializer') as mock_clap_init, \
              patch('src.distributed_clap_embeddings.setup_environ_vars') as mock_setup_env, \
              patch('src.distributed_clap_embeddings.cleanup_distributed_environment') as mock_cleanup_dist, \
-             patch('src.distributed_clap_embeddings.setup_distributed_environment') as mock_setup_dist, \
+             patch('src.distributed_clap_embeddings.combine_hdf5_files') as mock_combine_files, \
              patch('src.distributed_clap_embeddings.write_log') as mock_write_log, \
              patch('src.distributed_clap_embeddings.worker_process_slurm') as mock_process_class, \
              patch('src.distributed_clap_embeddings.MultiProcessTqdm', MagicMock()) as mock_pbar, \
@@ -338,6 +338,8 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
             self.assertEqual(mock_write_log.call_count, 3, "write_log deve essere chiamato 3 volte.")
             mock_cleanup_dist.assert_called_once()
             mock_join_logs.assert_called_once()
+            # La combinazione dovrebbe avvenire dopo i worker.
+            self.assertEqual(mock_combine_files.call_count, 2, "La combinazione deve avvenire per i 2 cut_secs (1.0 e 3.0).")
 
 
 if __name__ == '__main__':
