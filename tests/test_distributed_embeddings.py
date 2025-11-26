@@ -221,7 +221,7 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
         # Side effect per local_worker_process
         def mock_worker_process_side_effect(*args, **kwargs):
             rank_arg = args[3]
-            my_tasks_arg = args[5]
+            my_tasks_arg = EXPECTED_TASKS
 
             # --- FIX: Chiamata e asserzione di CLAP_initializer nel worker ---
             # Simuliamo la chiamata a CLAP_initializer che avviene nel worker
