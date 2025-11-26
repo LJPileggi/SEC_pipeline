@@ -235,13 +235,10 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
                 
         # FIX CRITICO: Side effect per mp.Process che simula l'esecuzione del worker
         def process_side_effect(*args, **kwargs):
-            target_func = kwargs.get('target')
             target_args = kwargs.get('args')
             
-            # Se il processo sta avviando il nostro worker mockato
-            if target_func == local_worker_process:
-                # Esegui il worker mockato direttamente nel processo padre per contare le chiamate
-                mock_worker_process(*target_args)
+            # Esegui il worker mockato direttamente nel processo padre per contare le chiamate (FIX LOGICO: Rimosso il check 'if target_func == local_worker_process' che falliva)
+            mock_worker_process(*target_args)
             
             # Ritorna un oggetto Process mockato
             mock_p = MagicMock()
@@ -265,8 +262,8 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
             
             # IMPOSTAZIONE DEI VALORI DI RITORNO E SIDE EFFECT
             mock_clap_init.return_value = (MagicMock(), MagicMock(), MagicMock())
-            mock_get_config.side_effect = mock_get_config_from_yaml_data
-            mock_join_logs.side_effect = mock_join_logs_all_incomplete
+            mock_get_config.side_effect = self.mock_get_config_from_yaml_data
+            mock_join_logs.side_effect = self.mock_join_logs_all_incomplete
             
             # Associa i side effect
             mock_worker_process.side_effect = mock_worker_process_side_effect
@@ -308,13 +305,15 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
                     n_octave=TEST_N_OCTAVE
                 )
 
-        # Uso ESCLUSIVO di with patch per tutti i mock
+        # Uso ESCLUSIVO di with patch per tutti i mock (Aggiunto mock_setup_dist per stabilità)
         with patch('src.distributed_clap_embeddings.CLAP_initializer') as mock_clap_init, \
              patch('src.distributed_clap_embeddings.setup_environ_vars') as mock_setup_env, \
              patch('src.distributed_clap_embeddings.cleanup_distributed_environment') as mock_cleanup_dist, \
+             patch('src.distributed_clap_embeddings.setup_distributed_environment') as mock_setup_dist, \
              patch('src.distributed_clap_embeddings.write_log') as mock_write_log, \
              patch('src.distributed_clap_embeddings.worker_process_slurm') as mock_process_class, \
              patch('src.distributed_clap_embeddings.MultiProcessTqdm', MagicMock()) as mock_pbar, \
+             patch('src.distributed_clap_embeddings.delete_log') as mock_delete_log, \
              patch('src.distributed_clap_embeddings.join_logs') as mock_join_logs, \
              patch('src.distributed_clap_embeddings.get_config_from_yaml') as mock_get_config, \
              patch('src.distributed_clap_embeddings.basedir_preprocessed', self.preprocessed_dir), \
@@ -322,10 +321,10 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
             
             # IMPOSTAZIONE DEI VALORI DI RITORNO E SIDE EFFECT
             mock_clap_init.return_value = (MagicMock(), MagicMock(), MagicMock())
-            mock_get_config.side_effect = mock_get_config_from_yaml_data
+            mock_get_config.side_effect = self.mock_get_config_from_yaml_data
             mock_setup_env.return_value = (0, 2) # rank 0, world_size 2
             mock_process_class.side_effect = mock_process_class_side_effect
-            mock_join_logs.side_effect = mock_join_logs_all_incomplete
+            mock_join_logs.side_effect = self.mock_join_logs_all_incomplete
 
             # ESECUZIONE DEL TEST
             run_distributed_slurm(
