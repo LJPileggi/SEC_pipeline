@@ -230,8 +230,6 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
             start_time = time.time()
             process_class_with_cut_secs(clap_model, audio_embedding, class_name, cut_secs, n_octave, config)
             process_time = time.time() - start_time
-            # DEBUGGING: Stampa la chiave usata per write_log
-            print(f"DEBUGGING: Rank {rank} - write_log key: ({cut_secs}, {class_name}). cut_secs type: {type(cut_secs)}", file=sys.stderr) # DEBUGGING
             write_log(config['dirs']['root_target'], (cut_secs, class_name), process_time, rank, **config)
             
             # Aggiorna la barra di avanzamento dopo aver completato un task
@@ -273,8 +271,6 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
             start_time = time.time()
             process_class_with_cut_secs(clap_model, audio_embedding, class_name, cut_secs, n_octave, config)
             process_time = time.time() - start_time
-            # DEBUGGING: Stampa la chiave usata per write_log
-            print(f"DEBUGGING: Rank {rank} - write_log key: ({cut_secs}, {class_name}). cut_secs type: {type(cut_secs)}", file=sys.stderr) # DEBUGGING
             write_log(config['dirs']['root_target'], (cut_secs, class_name), process_time, rank, **config)
             # Aggiorna la barra di avanzamento locale (che invia il messaggio alla coda)
             if pbar_instance:
@@ -345,23 +341,15 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
         with open(os.path.join(log_path, 'log.json', 'r')) as f:
             log_data = json.load(f)
             logging.info(f"Ripresa da log: {log_data}")
-            # DEBUGGING: Stampa un esempio di chiave dal log
-            if log_data:
-                first_key = next(iter(log_data.keys()))
-                print(f"DEBUGGING: Rank {rank} - Log loaded. First key: {first_key}. Type of key: {type(first_key)}", file=sys.stderr) # DEBUGGING
     except FileNotFoundError:
         logging.info("Nessun log trovato, avvio una nuova esecuzione.")
 
     all_tasks = []
     for cut_secs in cut_secs_list:
-        for class_name in classes_list:
-            # DEBUGGING: Stampa la chiave che si sta cercando per la lookup
-            task_key = (cut_secs, class_name)
-            print(f"DEBUGGING: Rank {rank} - Lookup key: {task_key}. cut_secs type: {type(cut_secs)} (from config)", file=sys.stderr) # DEBUGGING
-            
+        for class_name in classes_list:            
             # FIX: Conversione della chiave in stringa per la lookup nel log JSON e check di esistenza.
             log_key_str = str((cut_secs, class_name))
-            
+
             # L'accesso al log è ora robusto: controlla se il task non è stato eseguito
             if log_key_str not in log_data or not log_data[log_key_str]:
                 all_tasks.append((cut_secs, class_name))
@@ -388,8 +376,6 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
         logging.error(f"Errore critico nel processo principale: {e}")
         raise e
     finally:
-        # DEBUGGING: Stampa che join_logs sta per essere chiamato
-        print(f"DEBUGGING: Rank {rank} - Chiamata a join_logs in finally block.", file=sys.stderr) # DEBUGGING
         join_logs(log_path)
 
     # Assicurati che il rank 0 chiuda la pbar dopo che tutti hanno finito
@@ -440,7 +426,7 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
     try:
         with open(os.path.join(log_path, 'log.json', 'r')) as f:
             log_data = json.load(f)
-            logging.info(f"Ripresa da log: {log_data}")# DEBUGGING: Stampa un esempio di chiave dal log
+            logging.info(f"Ripresa da log: {log_data}")
             if log_data:
                 first_key = next(iter(log_data.keys()))
     except FileNotFoundError:
@@ -449,13 +435,9 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
     all_tasks = []
     for cut_secs in cut_secs_list:
         for class_name in classes_list:
-            # DEBUGGING: Stampa la chiave che si sta cercando per la lookup
-            task_key = (cut_secs, class_name)
-            print(f"DEBUGGING: Main Process - Lookup key: {task_key}. cut_secs type: {type(cut_secs)} (from config)", file=sys.stderr) # DEBUGGING
-
             # FIX: Conversione della chiave in stringa per la lookup nel log JSON e check di esistenza.
             log_key_str = str((cut_secs, class_name))
-            
+
             # L'accesso al log è ora robusto: controlla se il task non è stato eseguito
             if log_key_str not in log_data or not log_data[log_key_str]:
                 all_tasks.append((cut_secs, class_name))
@@ -504,7 +486,5 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
         # 7. Finalize & join_logs
         # join_logs viene chiamato in ogni caso (successo, eccezione nel padre)
         # Il log si aggiornerà con tutti i task completati fino a quel punto
-        # DEBUGGING: Stampa che join_logs sta per essere chiamato
-        print(f"DEBUGGING: Main Process - Chiamata a join_logs in finally block.", file=sys.stderr) # DEBUGGING
         join_logs(log_path)
 
