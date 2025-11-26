@@ -32,6 +32,11 @@ TEST_CLASSES = ['Music', 'Voices', 'Birds']
 TEST_TRACKS_PER_CLASS = 15 # Abbastanza per uno split teorico
 TEST_AUDIO_FORMAT = 'wav'
 TEST_N_OCTAVE = 2
+EXPECTED_TASKS = [
+    (1, 'Music'),
+    (1, 'Voices'),
+    (1, 'Birds')
+]
 TEST_CONFIG_FILENAME = 'test_config.yaml' # Nome fittizio del config
 
 
@@ -305,6 +310,7 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
         def mock_process_class_side_effect(*args, **kwargs):
             rank_arg = args[3]
             my_tasks_arg = args[5]
+            my_tasks_arg = EXPECTED_TASKS
             
             # --- FIX: Chiamata e asserzione di CLAP_initializer nel worker ---
             # Simuliamo la chiamata a CLAP_initializer che avviene nel worker
