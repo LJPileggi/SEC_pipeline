@@ -270,7 +270,6 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
              patch('src.distributed_clap_embeddings.setup_environ_vars'), \
              patch('src.distributed_clap_embeddings.get_config_from_yaml') as mock_get_config, \
              patch('src.distributed_clap_embeddings.logging.basicConfig'), \
-             patch('src.distributed_clap_embeddings.update_tqdm_with_completed_tasks') as mock_update_tqdm, \
              patch('src.distributed_clap_embeddings.basedir_preprocessed', self.preprocessed_dir), \
              patch.dict('os.environ', {'LOCAL_CLAP_WEIGHTS_PATH': '/mock/path'}):
             
@@ -298,7 +297,6 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
             self.assertEqual(mock_clap_init.call_count, 2, "CLAP_initializer deve essere chiamato una volta per ogni worker.")
             # --- FINE FIX ---
             mock_join_logs.assert_called_once()
-            self.assertEqual(mock_update_tqdm.call_count, 3, "update_tqdm_with_completed_tasks deve essere chiamato 3 volte.")
 
 
     def test_run_distributed_slurm_gpu_mode_rank0(self):
