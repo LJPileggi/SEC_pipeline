@@ -293,8 +293,8 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
             # ASSERTIONS
             self.assertEqual(mock_process.call_count, 2, "Devono essere avviati 2 processi worker (world_size=2).")
             self.assertEqual(mock_worker_process.call_count, 2, "Il worker mockato deve essere chiamato una volta per ogni processo.")
-            # --- FIX: Asserzione per CLAP_initializer ora basata sul numero totale di worker ---
             self.assertEqual(mock_clap_init.call_count, 2, "CLAP_initializer deve essere chiamato una volta per ogni worker.")
+            self.assertEqual(mock_write_log.call_count, 3, "write_log deve essere chiamato 3 volte.")
             # --- FINE FIX ---
             mock_join_logs.assert_called_once()
 
