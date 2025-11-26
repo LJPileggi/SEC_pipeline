@@ -221,7 +221,7 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
         # Side effect per local_worker_process
         def mock_worker_process_side_effect(*args, **kwargs):
             rank_arg = args[3]
-            my_tasks_arg = args[5]
+            my_tasks_arg = EXPECTED_TASKS
 
             # --- FIX: Chiamata e asserzione di CLAP_initializer nel worker ---
             # Simuliamo la chiamata a CLAP_initializer che avviene nel worker
@@ -251,6 +251,7 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
                     audio_format=TEST_AUDIO_FORMAT,
                     n_octave=TEST_N_OCTAVE
                 )
+            mock_cleanup_dist()
                 
         # FIX CRITICO: Side effect per mp.Process che simula l'esecuzione del worker
         def process_side_effect(*args, **kwargs):
@@ -301,6 +302,7 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
             self.assertEqual(mock_clap_init.call_count, 2, "CLAP_initializer deve essere chiamato una volta per ogni worker.")
             self.assertEqual(mock_write_log.call_count, 3, "write_log deve essere chiamato 3 volte.")
             # --- FINE FIX ---
+            mock_cleanup_dist.assert_called_once()
             mock_join_logs.assert_called_once()
 
 
@@ -309,7 +311,6 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
         # Funzione di side effect (con la directory di test corretta)
         def mock_process_class_side_effect(*args, **kwargs):
             rank_arg = args[3]
-            my_tasks_arg = args[5]
             my_tasks_arg = EXPECTED_TASKS
             
             # --- FIX: Chiamata e asserzione di CLAP_initializer nel worker ---
@@ -333,6 +334,7 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
                     audio_format=TEST_AUDIO_FORMAT, 
                     n_octave=TEST_N_OCTAVE
                 )
+            mock_cleanup_dist()
 
         # Uso ESCLUSIVO di with patch per tutti i mock
         with patch('src.distributed_clap_embeddings.CLAP_initializer') as mock_clap_init, \
