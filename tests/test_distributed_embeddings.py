@@ -247,7 +247,7 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
 
         # Uso ESCLUSIVO di with patch per tutti i mock
         with patch('src.distributed_clap_embeddings.CLAP_initializer') as mock_clap_init, \
-             patch('src.distributed_clap_embeddings.local_worker_process') as mock_worker_process, \ù
+             patch('src.distributed_clap_embeddings.local_worker_process') as mock_worker_process, \
              patch('src.distributed_clap_embeddings.mp.Manager') as mock_mp_manager, \
              patch.object(mock_mp_manager, 'Queue', MagicMock()), \
              patch('src.distributed_clap_embeddings.mp.Process') as mock_process, \
