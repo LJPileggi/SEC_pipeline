@@ -59,8 +59,9 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
      - config (dict): The configuration dictionary containing all necessary parameters.
 
     returns:
-        None. The function saves the generated embeddings and spectrograms as a side effect
-        to the HDF5 file on disk.
+      - n_embeddings_per_run: # embeddings actually created during a run (excluding the
+        already existing ones);
+      - True/False, according to whether the execution terminated successfully or not.
     """
     root_source = config['dirs']['root_source']
     root_target = config['dirs']['root_target']
@@ -88,13 +89,14 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
     di = 0
     results = 0
     round_ = 0
+    n_embeddings_per_run = 0
 
     audio_dataset_manager = HDF5DatasetManager(os.path.join(target_class_dir,
                               f'{class_to_process}_{audio_format}_dataset.h5'))
 
     # Specifica le dimensioni dei dati
     embedding_dim = 1024 # Esempio, metti la dimensione corretta del tuo embedding
-    spec_shape = (128, 1024) # Esempio, metti la forma corretta dello spettrogramma
+    spec_shape = (2*n_octave+1, 1024) # Esempio, metti la forma corretta dello spettrogramma
 
     split_emb_dataset_manager = HDF5EmbeddingDatasetsManager(os.path.join(target_class_dir,
                     f'{class_to_process}_{division_names[di]}_{audio_format}_emb.h5'), 'a')
@@ -130,7 +132,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                             split_emb_dataset_manager.close()
                             audio_dataset_manager.close()
                             logging.info(f"Classe '{class_to_process}' elaborata. Creazioni totali: {results}")
-                            return
+                            return n_embeddings_per_run, True
                         else:
                             # flush existing buffers and initialise new split file
                             split_emb_dataset_manager.flush_buffers()
@@ -145,6 +147,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                         emb_pkey = f"{audio_dataset_manager.hf.attrs['class_idx']}_{track_idx}_{b}_{round}_{results}"
 
                         if split_emb_dataset_manager[emb_pkey]:
+                            results += 1
                             continue
 
                         start = b * window_size + offset
@@ -172,15 +175,16 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                         split_emb_dataset_manager.add_to_data_buffer(embedding, spec_n_o, emb_pkey,
                                     metadata['track_name'], class_to_process, metadata['subclass'])
                         results += 1
+                        n_embeddings_per_run += 1
 
 
     except Exception as e:
-        logging.info(f"{e}. Flushing existing buffers")
-    finally:
         split_emb_dataset_manager.flush_buffers()
         split_emb_dataset_manager.close()
         audio_dataset_manager.close()
+        logging.info(f"{e}. Flushing existing buffers")
         logging.info(f"Classe '{class_to_process}' elaborata. Creazioni totali: {results}")
+        return n_embeddings_per_run, False
 
 ### Workers ###
 
@@ -220,28 +224,22 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
     logging.info(f"Processo {rank} avviato su GPU {rank}.")
 
     # Itera sulla lista di task che competono a questo rank
-    try:
-        for cut_secs, class_name in my_tasks:
-            # Stampa un messaggio per il task corrente (opzionale)
-            if rank == 0:
-                print(f"[{rank}] Elaborando {cut_secs}, classe {class_name}", flush=True)
+    for cut_secs, class_name in my_tasks:
+        # Stampa un messaggio per il task corrente (opzionale)
+        if rank == 0:
+            print(f"[{rank}] Elaborando {cut_secs}, classe {class_name}", flush=True)
 
-            # Esegui la funzione di elaborazione degli embedding
-            start_time = time.time()
-            process_class_with_cut_secs(clap_model, audio_embedding, class_name, cut_secs, n_octave, config)
-            process_time = time.time() - start_time
-            write_log(config['dirs']['root_target'], (cut_secs, class_name), process_time, rank, **config)
-            
-            # Aggiorna la barra di avanzamento dopo aver completato un task
-            if pbar_instance:
-                pbar_instance.update(1)
+        # Esegui la funzione di elaborazione degli embedding
+        start_time = time.time()
+        n_embeddings_per_run, completed = process_class_with_cut_secs(clap_model, audio_embedding, class_name, cut_secs, n_octave, config)
+        process_time = time.time() - start_time
+        write_log(config['dirs']['root_target'], (cut_secs, class_name), process_time, n_embeddings_per_run, rank, completed, **config)
 
-    except Exception as e:
-        logging.error(f"Errore critico nel processo {rank} per task ({cut_secs}, {class_name}): {e}")
+        # Aggiorna la barra di avanzamento dopo aver completato un task
+        if pbar_instance:
+            pbar_instance.update(1)
 
-    finally:
-        # Sincronizza i processi prima di distruggere il gruppo
-        cleanup_distributed_environment(rank)
+    cleanup_distributed_environment(rank)
 
 
 # Funzione Worker per l'ambiente locale (richiamata da mp.Process)
@@ -265,22 +263,17 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
     logging.info(f"Processo {rank} avviato su CPU {rank}.")
 
     # Itera sui task assegnati
-    try:
-        for cut_secs, class_name in my_tasks:
-            # Esegui la funzione di elaborazione degli embedding
-            start_time = time.time()
-            process_class_with_cut_secs(clap_model, audio_embedding, class_name, cut_secs, n_octave, config)
-            process_time = time.time() - start_time
-            write_log(config['dirs']['root_target'], (cut_secs, class_name), process_time, rank, **config)
-            # Aggiorna la barra di avanzamento locale (che invia il messaggio alla coda)
-            if pbar_instance:
-                pbar_instance.update(1)
-    except Exception as e:
-        logging.error(f"Errore critico nel processo {rank} per task ({cut_secs}, {class_name}): {e}")
+    for cut_secs, class_name in my_tasks:
+        # Esegui la funzione di elaborazione degli embedding
+        start_time = time.time()
+        n_embeddings_per_run, completed = process_class_with_cut_secs(clap_model, audio_embedding, class_name, cut_secs, n_octave, config)
+        process_time = time.time() - start_time
+        write_log(config['dirs']['root_target'], (cut_secs, class_name), process_time, n_embeddings_per_run, rank, completed, **config)
+        # Aggiorna la barra di avanzamento locale (che invia il messaggio alla coda)
+        if pbar_instance:
+            pbar_instance.update(1)
 
-    finally:
-        # Sincronizza i processi prima di distruggere il gruppo
-        cleanup_distributed_environment(rank)
+    cleanup_distributed_environment(rank)
 
 
 ### Executions ###
@@ -378,10 +371,10 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
     finally:
         join_logs(log_path)
 
-    # Assicurati che il rank 0 chiuda la pbar dopo che tutti hanno finito
-    if rank == 0 and pbar:
-        pbar.close()
-    logging.info(f"Rank {rank}: tutti i processi hanno terminato il loro lavoro.")
+        # Assicurati che il rank 0 chiuda la pbar dopo che tutti hanno finito
+        if rank == 0 and pbar:
+            pbar.close()
+        logging.info(f"Rank {rank}: tutti i processi hanno terminato il loro lavoro.")
 
 
 def run_local_multiprocess(config_file, audio_format, n_octave, world_size):

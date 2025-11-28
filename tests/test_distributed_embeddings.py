@@ -125,6 +125,7 @@ def mock_process_class_with_cut_secs(clap_model, audio_embedding, class_to_proce
     output_dir = os.path.join(BASEDIR_PREPROCESSED_TEST, TEST_AUDIO_FORMAT, f'{n_octave}_octave', f'cut_{cut_secs}')
     os.makedirs(output_dir, exist_ok=True)
     h5_path = os.path.join(output_dir, f'{class_to_process}_emb.h5')
+    n_embeddings_per_run
     
     # 1. Crea un file HDF5 fittizio di embedding
     with h5py.File(h5_path, 'w') as hf:
@@ -136,7 +137,7 @@ def mock_process_class_with_cut_secs(clap_model, audio_embedding, class_to_proce
     with open(log_file, 'w') as f:
          json.dump({"completed": True}, f)
          
-    return h5_path
+    return n_embeddings_per_run, True
 
 
 # ==============================================================================
@@ -247,6 +248,7 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
                     log_path=os.path.join(self.preprocessed_dir, TEST_AUDIO_FORMAT, f'{TEST_N_OCTAVE}_octave'),
                     new_cut_secs_class=(int(cut_secs_float), class_name),
                     process_time=0.1,
+                    n_embeddings_per_run=5,
                     rank=rank_arg,
                     audio_format=TEST_AUDIO_FORMAT,
                     n_octave=TEST_N_OCTAVE
@@ -330,7 +332,8 @@ class TestDistributedClapEmbeddings(unittest.TestCase):
                 mock_write_log(
                     log_path=os.path.join(self.preprocessed_dir, TEST_AUDIO_FORMAT, f'{TEST_N_OCTAVE}_octave'), 
                     new_cut_secs_class=(int(cut_secs_float), class_name), 
-                    process_time=0.1, 
+                    process_time=0.1,
+                    n_embeddings_per_run=5,
                     rank=rank_arg, 
                     audio_format=TEST_AUDIO_FORMAT, 
                     n_octave=TEST_N_OCTAVE

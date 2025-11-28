@@ -42,7 +42,7 @@ def process_audio_dir_to_hdf5(base_dir: Path, audio_format: str):
     METADATA_DTYPE = np.dtype([
         ('subclass', h5py.string_dtype(encoding='utf-8')), # Sottoclasse
         ('track_name', h5py.string_dtype(encoding='utf-8')), # Nome traccia
-        ('original_index', np.int32) # Indice di riga originale (0, 1, 2...)
+        ('hdf5_index', np.int32) # Indice di riga originale (0, 1, 2...)
     ])
 
     for class_idx, class_dir in enumerate(sorted(os.listdir(base_dir))):

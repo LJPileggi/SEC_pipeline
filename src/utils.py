@@ -50,7 +50,10 @@ def get_config_from_yaml(config_file="config0.yaml"):
     ref = configs["ref"]
     noise_perc = configs["noise_perc"]
     seed = configs["seed"]
-    center_freqs = np.array(configs["center_freqs"])
+    if configs["center_freqs"]:
+        center_freqs = np.array(configs["center_freqs"])
+    else:
+        center_freqs = None
     valid_cut_secs = configs["valid_cut_secs"]
     splits_xc_sizes_names = [("train", configs["train_size"]),
                                 ("es", configs["es_size"]),
@@ -62,7 +65,7 @@ def get_config_from_yaml(config_file="config0.yaml"):
    
 ### Log file functions for embedding calculation ###
 
-def write_log(log_path, new_cut_secs_class, process_time, rank, **kwargs):
+def write_log(log_path, new_cut_secs_class, process_time, n_embeddings_per_run, rank, completed, **kwargs):
     """
     Generates or updates json log file after each process_class_with_cut_secs completion.
     Saves completion time, rank plus general config information.
@@ -73,7 +76,10 @@ def write_log(log_path, new_cut_secs_class, process_time, rank, **kwargs):
        for O(1) time lookup;
      - process_time (float): processing time in seconds for the process_class_with_cut_secs
        instance;
+     - n_embeddings_per_run (int): number of embeddings created per class and cut_secs in
+       a single run, excluded the ones already present in previous ones;
      - rank (int): rank of the process of the execution;
+     - completed (bool): whether the execution was completed or not;
      - **kwargs (dict): dictionary containing all the general config information for all
        runs.
     """
@@ -90,10 +96,21 @@ def write_log(log_path, new_cut_secs_class, process_time, rank, **kwargs):
         log = {"config": {}}
     if log["config"] == {}: 
         log["config"].update(kwargs)
-    log[new_cut_secs_class] = {
-        "process_time": process_time,
-        "rank": rank
-        }
+    if log[new_cut_secs_class]:
+        log[new_cut_secs_class]["process_time"].append(process_time)
+        log[new_cut_secs_class]["n_embeddings_per_run"].append(n_embeddings_per_run)
+        log[new_cut_secs_class]["rank"].append(rank)
+        log[new_cut_secs_class]["completed"] = completed
+    else:
+        log[new_cut_secs_class] = {
+            "process_time": [],
+            "n_embeddings_per_run": [],
+            "rank": []
+            }
+        log[new_cut_secs_class]["process_time"].append(process_time)
+        log[new_cut_secs_class]["n_embeddings_per_run"].append(n_embeddings_per_run)
+        log[new_cut_secs_class]["rank"].append(rank)
+        log[new_cut_secs_class]["completed"] = completed
     try:
         with open(logfile, 'w') as f:
             json.dump(log, f, indent=4)
@@ -338,27 +355,28 @@ class HDF5EmbeddingDatasetsManager(Dataset):
         """
         Flushes buffers to hdf5 file.
         """
-        data_buffer = list(zip(
-                    self.hash_keys_buffer,
-                    self.embeddings_buffer,
-                    self.spectrograms_buffer,
-                    [s.encode('utf-8') for s in self.track_names_buffer],
-                    [s.encode('utf-8') if isinstance(s, str) else None for s in self.subclasses_buffer]
-            )) if 'classes' in self.partitions else list(zip(
-                    self.hash_keys_buffer,
-                    self.embeddings_buffer,
-                    self.spectrograms_buffer,
-                    [s.encode('utf-8') for s in self.track_names_buffer],
-                    [s.encode('utf-8') for s in self.classes_buffer],
-                    [s.encode('utf-8') if isinstance(s, str) else None for s in self.subclasses_buffer]
-            ))
-        data_buffer = np.array(data_buffer, dtype=self.dt)
+        if os.getenv('NO_EMBEDDING_SAVE', 'False').lower() in ('false', '0', 'f'):
+            data_buffer = list(zip(
+                        self.hash_keys_buffer,
+                        self.embeddings_buffer,
+                        self.spectrograms_buffer,
+                        [s.encode('utf-8') for s in self.track_names_buffer],
+                        [s.encode('utf-8') if isinstance(s, str) else None for s in self.subclasses_buffer]
+                )) if 'classes' in self.partitions else list(zip(
+                        self.hash_keys_buffer,
+                        self.embeddings_buffer,
+                        self.spectrograms_buffer,
+                        [s.encode('utf-8') for s in self.track_names_buffer],
+                        [s.encode('utf-8') for s in self.classes_buffer],
+                        [s.encode('utf-8') if isinstance(s, str) else None for s in self.subclasses_buffer]
+                ))
+            data_buffer = np.array(data_buffer, dtype=self.dt)
 
-        dataset = self.hf['embedding_dataset']
-        current_size = dataset.shape[0]
-        new_size = current_size + len(data_buffer)
-        dataset.resize(new_size, axis=0)
-        dataset[current_size:] = data_buffer
+            dataset = self.hf['embedding_dataset']
+            current_size = dataset.shape[0]
+            new_size = current_size + len(data_buffer)
+            dataset.resize(new_size, axis=0)
+            dataset[current_size:] = data_buffer
 
         # Empty buffers
         self.embeddings_buffer = []

@@ -21,16 +21,15 @@ TEST_CUT_SECS_VALUES: List[int] = [1, 2] # Manteniamo per riferimento futuro
 METADATA_DTYPE = np.dtype([
     ('subclass', h5py.string_dtype(encoding='utf-8')), # Sottoclasse
     ('track_name', h5py.string_dtype(encoding='utf-8')), # Nome traccia
-    ('original_index', np.int32) # Indice di riga originale (0, 1, 2...)
+    ('hdf5_index', np.int32) # Indice di riga originale (0, 1, 2...)
 ])
 
 def create_fake_raw_audio_h5(base_raw_dir: str) -> List[str]:
     """
     Crea una struttura di directory e file HDF5 finti contenenti tracce audio RAW.
     Questi file emulano l'output della conversione iniziale di file audio reali.
-    Ogni file HDF5 contiene un dataset audio, 'hdf5_index',
-    e un dataset 'metadata_{audio_format}' per i metadati specifici delle tracce,
-    oltre agli attributi globali richiesti.
+    Ogni file HDF5 contiene un dataset audio e un dataset 'metadata_{audio_format}'
+    per i metadati specifici delle tracce, oltre agli attributi globali richiesti.
     
     Args:
         base_raw_dir (str): La directory radice dove verranno creati i file raw HDF5.
@@ -66,13 +65,11 @@ def create_fake_raw_audio_h5(base_raw_dir: str) -> List[str]:
         
         all_class_audio_data = np.random.rand(num_tracks * samples_per_track).astype(AUDIO_DTYPE) * 0.2 - 0.1
 
-        hdf5_index: List[Tuple[int, int, float]] = []
         metadata_records: List[Tuple[bytes, bytes, int]] = [] # Per il nuovo dataset di metadati
         
         current_start_sample = 0
         for i in range(num_tracks):
             end_sample = current_start_sample + samples_per_track
-            hdf5_index.append((current_start_sample, end_sample, float(TEST_TRACK_DURATION_SECONDS)))
             
             # Creazione del record di metadati per ogni traccia
             # 'subclass' userà il class_name come sottoclasse per semplicità
@@ -80,14 +77,13 @@ def create_fake_raw_audio_h5(base_raw_dir: str) -> List[str]:
             metadata_records.append((
                 class_name.encode('utf-8'), 
                 f'{class_name}_track_{i}'.encode('utf-8'), 
-                i # original_index
+                i # hdf5_index
             ))
             current_start_sample = end_sample
         
         # Scrivi i dati audio, l'indice e i metadati nel file HDF5
         with h5py.File(h5_filepath, 'w') as f:
             f.create_dataset(f'audio_{TEST_AUDIO_FORMAT}', data=all_class_audio_data)
-            f.create_dataset('hdf5_index', data=np.array(hdf5_index, dtype=[('start', 'i4'), ('end', 'i4'), ('duration', 'f4')]))
             
             # --- AGGIUNTA CHIRURGICA: Dataset dei metadati specifici delle tracce ---
             f.create_dataset(f'metadata_{TEST_AUDIO_FORMAT}', data=np.array(metadata_records, dtype=METADATA_DTYPE))
@@ -100,7 +96,7 @@ def create_fake_raw_audio_h5(base_raw_dir: str) -> List[str]:
             f.attrs['sample_rate'] = SAMPLING_RATE
             f.attrs['description'] = f"Fake audio data for {class_name} class for testing."
 
-        print(f"Created fake RAW HDF5: {h5_filepath} with 'audio_{TEST_AUDIO_FORMAT}' shape {all_class_audio_data.shape}, {len(hdf5_index)} tracks and {len(metadata_records)} metadata entries.")
+        print(f"Created fake RAW HDF5: {h5_filepath} with 'audio_{TEST_AUDIO_FORMAT}' shape {all_class_audio_data.shape} and {len(metadata_records)} metadata entries.")
         generated_files.append(h5_filepath)
             
     return generated_files
@@ -120,7 +116,6 @@ if __name__ == "__main__":
             with h5py.File(f_path, 'r') as f:
                 print(f"  {f_path}")
                 print(f"    Dataset 'audio_{TEST_AUDIO_FORMAT}' shape: {f[f'audio_{TEST_AUDIO_FORMAT}'].shape}, dtype: {f[f'audio_{TEST_AUDIO_FORMAT}'].dtype}")
-                print(f"    Dataset 'hdf5_index' shape: {f['hdf5_index'].shape}, dtype: {f['hdf5_index'].dtype}")
                 # --- VERIFICA CHIRURGICA: Nuova stampa per il dataset di metadati ---
                 print(f"    Dataset 'metadata_{TEST_AUDIO_FORMAT}' shape: {f[f'metadata_{TEST_AUDIO_FORMAT}'].shape}, dtype: {f[f'metadata_{TEST_AUDIO_FORMAT}'].dtype}")
                 # --- FINE VERIFICA CHIRURGICA ---

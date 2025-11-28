@@ -283,7 +283,9 @@ class TestUtils(unittest.TestCase):
         initial_config_kwargs = {"sampling_rate": 44100, "epochs": 50}
         initial_new_cut_secs_class = '1_ClassX'
         initial_process_time = 10.0
+        initial_n_embeddings_per_run = 5
         initial_rank = 0
+        initial_completed = True
 
         log_file_name = f'log_rank_{initial_rank}.json' # Nome del file di log per questo test specifico
         log_file_path = os.path.join(self.temp_log_dir, log_file_name)
@@ -293,7 +295,9 @@ class TestUtils(unittest.TestCase):
             log_path=self.temp_log_dir,
             new_cut_secs_class=initial_new_cut_secs_class,
             process_time=initial_process_time,
+            n_embeddings_per_run=initial_n_embeddings_per_run,
             rank=initial_rank,
+            completed=initial_completed,
             **initial_config_kwargs
         )
         self.assertTrue(os.path.exists(log_file_path)) # Il file dovrebbe essere stato creato
@@ -305,8 +309,10 @@ class TestUtils(unittest.TestCase):
         self.assertIn('config', log_content_initial)
         self.assertEqual(log_content_initial['config'], initial_config_kwargs)
         self.assertIn(initial_new_cut_secs_class, log_content_initial)
-        self.assertEqual(log_content_initial[initial_new_cut_secs_class]['process_time'], initial_process_time)
-        self.assertEqual(log_content_initial[initial_new_cut_secs_class]['rank'], initial_rank)
+        self.assertEqual(log_content_initial[initial_new_cut_secs_class]['process_time'][-1], initial_process_time)
+        self.assertEqual(log_content_initial[initial_new_cut_secs_class]['n_embeddings_per_run'][-1], initial_n_embeddings_per_run)
+        self.assertEqual(log_content_initial[initial_new_cut_secs_class]['rank'][-1], initial_rank)
+        self.assertEqual(log_content_initial[initial_new_cut_secs_class]['completed'], initial_completed)
 
         # --- TEST 2: Aggiornamento di un file esistente e config parziale ---
         # Simula l'esistenza di un file di log con una config parziale
@@ -328,13 +334,17 @@ class TestUtils(unittest.TestCase):
 
         new_cut_secs_class_2 = '1_ClassA'
         process_time_2 = 123.45
+        n_embeddings_per_run_2 = 7
         rank_2 = 0
+        completed_2 = True
         
         write_log(
             log_path=self.temp_log_dir,
             new_cut_secs_class=new_cut_secs_class_2,
             process_time=process_time_2,
-            rank=rank_2
+            n_embeddings_per_run=n_embeddings_per_run_2,
+            rank=rank_2,
+            completed=completed_2
         )
         
         with open(log_file_path, 'r') as f:
@@ -346,8 +356,10 @@ class TestUtils(unittest.TestCase):
             
             # Verifica che i nuovi risultati della task siano stati aggiunti
             self.assertIn(new_cut_secs_class_2, log_content_updated)
-            self.assertEqual(log_content_updated[new_cut_secs_class_2]['process_time'], process_time_2)
-            self.assertEqual(log_content_updated[new_cut_secs_class_2]['rank'], rank_2)
+            self.assertEqual(log_content_updated[new_cut_secs_class_2]['process_time'][-1], process_time_2)
+            self.assertEqual(log_content_updated[new_cut_secs_class_2]['n_embeddings_per_run'][-1], n_embeddings_per_run_2)
+            self.assertEqual(log_content_updated[new_cut_secs_class_2]['rank'][-1], rank_2)
+            self.assertEqual(log_content_updated[new_cut_secs_class_2]['completed'], completed_2)
             
             # Verifica che la chiave 'config' esista e contenga la configurazione correttamente aggiornata
             self.assertIn('config', log_content_updated)
@@ -370,7 +382,9 @@ class TestUtils(unittest.TestCase):
             log_path=self.temp_log_dir,
             new_cut_secs_class='1.0_Bells',
             process_time=10.0,
+            n_embeddings_per_run=7,
             rank=0,
+            completed=True,
             sampling_rate=52100, # Questi vanno in config
             n_octave=3
         )
@@ -380,7 +394,9 @@ class TestUtils(unittest.TestCase):
             log_path=self.temp_log_dir,
             new_cut_secs_class='2.0_Birds',
             process_time=20.0,
+            n_embeddings_per_run=5,
             rank=1,
+            completed=True,
             sampling_rate=52100, # Questi vanno in config
             n_octave=3 
         )
@@ -399,8 +415,8 @@ class TestUtils(unittest.TestCase):
             self.assertIn('2.0_Birds', consolidated_log)
 
             # Verifica la struttura delle task
-            self.assertEqual(consolidated_log['1.0_Bells']['process_time'], 10.0)
-            self.assertEqual(consolidated_log['2.0_Birds']['rank'], 1)
+            self.assertEqual(consolidated_log['1.0_Bells']['process_time'][-1], 10.0)
+            self.assertEqual(consolidated_log['2.0_Birds']['rank'][-1], 1)
 
             # Verifica che la chiave 'config' sia presente e unita
             self.assertIn('config', consolidated_log)
