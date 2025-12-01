@@ -176,7 +176,7 @@ if __name__ == '__main__':
     
     TEST_AUDIO_FORMAT = "wav"
     TEST_N_OCTAVE = "1"
-    TEST_CONFIG_FILE = "config_benchmark.yaml" 
+    TEST_CONFIG_FILE = "test_config.yaml" 
     
     # 1. Imposta la cartella temporanea (mock) e pulisci
     mock_embed_folder = os.path.join(basedir_preprocessed, TEST_AUDIO_FORMAT, f'{TEST_N_OCTAVE}_octave')

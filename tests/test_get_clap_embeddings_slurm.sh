@@ -10,8 +10,8 @@
 
 # --- 1. VARIABILI GLOBALI E PERCORSI ---
 
-SIF_FILE="/leonardo_scratch/large/$USER/containers/clap_pipeline.sif"
-CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
+SIF_FILE="/leonardo_scratch/large/userexternal/$USER/.containers/clap_pipeline.sif"
+CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
 TEMP_DIR="/tmp/$SLURM_JOB_ID"
 TEMP_PYTHON_SCRIPT_PATH="$TEMP_DIR/create_h5_data.py" # Script Python temporaneo per la generazione dati
 PERSISTENT_DESTINATION="/leonardo_scratch/large/$USER/SEC_pipeline/benchmark_logs/$SLURM_JOB_ID"
