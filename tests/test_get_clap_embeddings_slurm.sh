@@ -45,7 +45,7 @@ sys.path.append('.') # Assicurati che i moduli locali siano importabili
 
 # Importa TUTTE le funzioni necessarie dal tuo file create_fake_raw_audio_h5.py
 # (Questo snippet deve essere eseguito all'interno del container)
-from src.utils import create_fake_raw_audio_h5 # Assumo che la funzione sia in src.utils o simile
+from tests.utils.create_fake_raw_audio_h5 import create_fake_raw_audio_h5 # Assumo che la funzione sia in src.utils o simile
 
 # Percorso di destinazione che mappa a $TEMP_DIR/dataSEC/RAW_DATASET/
 # Visto che siamo dentro il container, usiamo /tmp_data/dataSEC/RAW_DATASET
@@ -104,6 +104,58 @@ mkdir -p "$PERSISTENT_DESTINATION"
 # Copia l'intera struttura 'dataSEC' (che include tutti i log e i file temporanei)
 # L'unica cosa che si salva è la cartella 'dataSEC' (e tutto ciò che c'è sotto)
 cp -r "$TEMP_DIR/dataSEC" "$PERSISTENT_DESTINATION/"
+
+# 5. ANALISI FINALE DEI LOG (DOPO LA MERGE)
+# -------------------------------------------------------------
+
+# Definiamo il percorso dello script Python temporaneo per l'analisi
+TEMP_LOG_ANALYSE_SCRIPT="/tmp/temp_log_analyse_script_$$.py"
+
+# Creiamo lo script Python per l'analisi.
+# Questo script carica la funzione di analisi e la esegue.
+
+cat << EOF > "$TEMP_LOG_ANALYSE_SCRIPT"
+import sys
+import os
+import argparse
+# Aggiusta il percorso per l'importazione
+# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'SEC_pipeline')))
+sys.path.append('.')
+
+# Importa l'analizzatore di log (il file che mi hai appena confermato)
+from tests.utils.analyse_test_execution_times import analyze_execution_times, print_analysis_results 
+
+# Parametri passati dalla shell: audio_format, n_octave, config_file
+if __name__ == '__main__':
+    if len(sys.argv) < 4:
+        print("Errore: argomenti mancanti per lo script di analisi.")
+        sys.exit(1)
+        
+    audio_format = sys.argv[1]
+    n_octave = sys.argv[2]
+    config_file = sys.argv[3]
+    
+    # 1. Esegui l'analisi
+    results = analyze_execution_times(audio_format, n_octave, config_file)
+    
+    # 2. Stampa i risultati
+    print_analysis_results(results)
+
+EOF
+
+# Esegui lo script di analisi usando i parametri definiti in precedenza
+# Audio format e n_octave vengono passati dalla shell
+echo "Avvio dell'analisi dei tempi di esecuzione..."
+singularity exec \
+    --bind $TEMP_DIR:/tmp_data \
+    "$SIF_FILE" \
+    python3 "$TEMP_LOG_ANALYSE_SCRIPT" $AUDIO_FORMAT $N_OCTAVE $CONFIG_FILE
+
+# Rimozione degli script temporanei
+rm -f "$TEMP_LOG_ANALYSE_SCRIPT"
+# Ricordati di rimuovere anche TEMP_LOG_MERGE_SCRIPT e altri script temporanei!
+rm -f "$TEMP_LOG_MERGE_SCRIPT" 
+rm -f "$TEMP_PYTHON_SCRIPT"
 
 # Pulizia di tutti i dati locali (incluso il dataset HDF5 di test e i log originali)
 echo "Pulizia della cartella temporanea locale..."
