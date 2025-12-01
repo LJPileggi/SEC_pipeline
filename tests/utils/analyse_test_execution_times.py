@@ -8,15 +8,7 @@ from typing import Dict, Any, Tuple, Optional
 import sys
 sys.path.append('.')
 
-# Importa le dipendenze necessarie
-try:
-    # Importa basedir_preprocessed dal tuo file di configurazione
-    from src.dirs_config import basedir_preprocessed
-except ImportError:
-    # Fallback per il testing locale
-    class MockDirsConfig:
-        basedir_preprocessed = os.path.join('.', 'tmp_test_logs', 'PREPROCESSED_DATASET')
-    basedir_preprocessed = MockDirsConfig.basedir_preprocessed
+config_test_folder = os.path.join('.', 'tmp_test_logs', 'PREPROCESSED_DATASET')
 
 # Regex per estrarre cut_secs e classe da una chiave stringa come "(1, 'Music')"
 TASK_KEY_PATTERN = re.compile(r"\((?P<cut_secs>\d+), '(?P<class_name>.*?)'\)")
@@ -39,7 +31,7 @@ def analyze_execution_times(audio_format: str, n_octave: str, config_file: str) 
     Analizza il file log.json e calcola il tempo totale per task e il tempo medio per embedding.
     """
     # 1. Determina il percorso del file di log unificato
-    embed_folder = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave')
+    embed_folder = os.path.join(config_test_folder, f'{audio_format}', f'{n_octave}_octave')
     log_file_path = os.path.join(embed_folder, "log.json") 
     
     if not os.path.exists(log_file_path):
@@ -179,7 +171,7 @@ if __name__ == '__main__':
     TEST_CONFIG_FILE = "test_config.yaml" 
     
     # 1. Imposta la cartella temporanea (mock) e pulisci
-    mock_embed_folder = os.path.join(basedir_preprocessed, TEST_AUDIO_FORMAT, f'{TEST_N_OCTAVE}_octave')
+    mock_embed_folder = os.path.join(config_test_folder, TEST_AUDIO_FORMAT, f'{TEST_N_OCTAVE}_octave')
     if os.path.exists(mock_embed_folder): shutil.rmtree(mock_embed_folder)
     os.makedirs(mock_embed_folder, exist_ok=True)
         
@@ -228,3 +220,4 @@ if __name__ == '__main__':
     
     # 4. Stampa i risultati
     print_analysis_results(results)
+    shutil.rmtree(config_test_folder)
