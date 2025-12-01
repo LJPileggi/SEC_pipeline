@@ -50,7 +50,7 @@ def get_config_from_yaml(config_file="config0.yaml"):
     ref = configs["ref"]
     noise_perc = configs["noise_perc"]
     seed = configs["seed"]
-    if configs["center_freqs"]:
+    if configs.get("center_freqs"):
         center_freqs = np.array(configs["center_freqs"])
     else:
         center_freqs = None
