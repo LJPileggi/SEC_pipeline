@@ -12,7 +12,7 @@ TEMP_DIR="/tmp/clap_test_$$"
 TEMP_PYTHON_SCRIPT_PATH="$TEMP_DIR/create_h5_data.py"
 
 # Variabili di configurazione per il Benchmark Rapido
-BENCHMARK_CONFIG_FILE="configs/test_config.yaml" 
+BENCHMARK_CONFIG_FILE="test_config.yaml" 
 BENCHMARK_AUDIO_FORMAT="wav"
 BENCHMARK_N_OCTAVE="1"
 
