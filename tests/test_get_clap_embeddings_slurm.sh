@@ -85,7 +85,7 @@ singularity exec \
     --bind $TEMP_DIR:/tmp_data \
     --bind $(pwd)/configs:/app/configs \
     "$SIF_FILE" \
-    python3 ./get_clap_embeddings.py \
+    python3 scripts/get_clap_embeddings.py \
         --config_file "$BENCHMARK_CONFIG_FILE" \
         --n_octave "$BENCHMARK_N_OCTAVE" \
         --audio_format "$BENCHMARK_AUDIO_FORMAT"
