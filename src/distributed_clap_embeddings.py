@@ -216,7 +216,7 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
         os.makedirs(config['dirs']['root_target'])
     config['audio']['audio_format'] = audio_format
     config['audio']['n_octave'] = n_octave
-    config['device'] = device
+    config['device'] = str(device)
     
     logging.info(f"Processo {rank} avviato su GPU {rank}.")
 
@@ -254,7 +254,7 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
         os.makedirs(config['dirs']['root_target'])
     config['audio']['audio_format'] = audio_format
     config['audio']['n_octave'] = n_octave
-    config['device'] = device
+    config['device'] = str(device)
 
     # Dividi i task (come prima)
     logging.info(f"Processo {rank} avviato su CPU {rank}.")
