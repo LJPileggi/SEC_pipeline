@@ -52,7 +52,9 @@ def create_fake_raw_audio_h5(base_raw_dir: str) -> List[str]:
 
     for class_name in TEST_CLASSES:
         h5_filename = f'{class_name}_{TEST_AUDIO_FORMAT}_dataset.h5'
-        h5_filepath = os.path.join(output_path_base, h5_filename)
+        h5_classdir = os.path.join(output_path_base, class_name)
+        os.makedirs(h5_classdir, exist_ok=True)
+        h5_filepath = os.path.join(h5_classdir, h5_filename)
         
         num_tracks = TEST_TRACKS_PER_CLASS.get(class_name, 0)
         if num_tracks == 0:
