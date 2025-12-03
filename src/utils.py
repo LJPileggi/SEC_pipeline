@@ -97,7 +97,7 @@ def write_log(log_path, new_cut_secs_class, process_time, n_embeddings_per_run, 
         log = {"config": {}}
     if log["config"] == {}: 
         log["config"].update(kwargs)
-    if not log.get(new_cut_secs_class):
+    if log.get(new_cut_secs_class):
         log[new_cut_secs_class]["process_time"].append(process_time)
         log[new_cut_secs_class]["n_embeddings_per_run"].append(n_embeddings_per_run)
         log[new_cut_secs_class]["rank"].append(rank)
