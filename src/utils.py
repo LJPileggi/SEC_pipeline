@@ -83,7 +83,7 @@ def write_log(log_path, new_cut_secs_class, process_time, n_embeddings_per_run, 
      - **kwargs (dict): dictionary containing all the general config information for all
        runs.
     """
-    new_cut_secs_class = f"{new_cut_secs_class}"
+    new_cut_secs_class = str(new_cut_secs_class)
     logfile = os.path.join(log_path, f"log_rank_{rank}.json")
     if os.path.exists(logfile):
         try:
@@ -97,7 +97,7 @@ def write_log(log_path, new_cut_secs_class, process_time, n_embeddings_per_run, 
         log = {"config": {}}
     if log["config"] == {}: 
         log["config"].update(kwargs)
-    if log[new_cut_secs_class]:
+    if not log.get(new_cut_secs_class):
         log[new_cut_secs_class]["process_time"].append(process_time)
         log[new_cut_secs_class]["n_embeddings_per_run"].append(n_embeddings_per_run)
         log[new_cut_secs_class]["rank"].append(rank)
