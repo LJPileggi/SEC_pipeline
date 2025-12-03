@@ -179,6 +179,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
         split_emb_dataset_manager.flush_buffers()
         split_emb_dataset_manager.close()
         audio_dataset_manager.close()
+        logging.error(f"{traceback.format_exc()}")
         logging.info(f"{e}. Flushing existing buffers")
         logging.info(f"Classe '{class_to_process}' elaborata. Creazioni totali: {results}")
         return n_embeddings_per_run, False
