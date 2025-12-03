@@ -90,8 +90,8 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
     round_ = 0
     n_embeddings_per_run = 0
 
-    audio_dataset_manager = HDF5DatasetManager(os.path.join(root_source, f'{cut_secs}_secs',
-                         class_to_process, f'{class_to_process}_{audio_format}_dataset.h5'))
+    audio_dataset_manager = HDF5DatasetManager(os.path.join(root_source, class_to_process,
+                                          f'{class_to_process}_{audio_format}_dataset.h5'))
 
     # Specifica le dimensioni dei dati
     embedding_dim = 1024 # Esempio, metti la dimensione corretta del tuo embedding
