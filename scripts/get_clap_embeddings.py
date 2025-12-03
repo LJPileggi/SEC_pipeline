@@ -35,11 +35,11 @@ def main():
     # Rileva l'ambiente di esecuzione
     if "SLURM_PROCID" in os.environ:
         print("Ambiente SLURM rilevato. Avvio in modalità distribuita...")
-        run_distributed_slurm(args.config_file, args.n_octave, args.audio_format)
+        run_distributed_slurm(args.config_file, args.audio_format, args.n_octave)
     else:
         # Ambiente locale o altro non-SLURM
         print("Ambiente locale rilevato. Avvio in modalità multi-processo...")
-        run_local_multiprocess(args.config_file, args.n_octave, args.audio_format, world_size)
+        run_local_multiprocess(args.config_file, args.audio_format, args.n_octave, world_size)
 
 if __name__ == "__main__":
     main()
