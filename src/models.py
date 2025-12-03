@@ -23,8 +23,8 @@ def CLAP_initializer(device='cpu', use_cuda=False):
     #    NOTA: Il nome corretto della variabile d'ambiente è CLAP_TEXT_ENCODER_PATH
     text_encoder_path = os.getenv("CLAP_TEXT_ENCODER_PATH")
 
-    os.environ['CLAP_WEIGHTS_PATH'] = clap_weights_path 
-    os.environ['CLAP_TEXT_PATH'] = text_encoder_path
+    os.environ['CLAP_WEIGHTS'] = clap_weights_path 
+    os.environ['TEXT_MODEL_PATH'] = text_encoder_path
 
     # --- Verifica dei percorsi (Solo i pesi devono esistere sulla macchina) ---
     if not clap_weights_path:
