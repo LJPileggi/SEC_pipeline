@@ -22,7 +22,10 @@ def CLAP_initializer(device='cpu', use_cuda=False):
     # 2. Recupera il percorso del Text Encoder (dall'interno del Container)
     #    NOTA: Il nome corretto della variabile d'ambiente è CLAP_TEXT_ENCODER_PATH
     text_encoder_path = os.getenv("CLAP_TEXT_ENCODER_PATH")
-    
+
+    os.environ['CLAP_WEIGHTS_PATH'] = clap_weights_path 
+    os.environ['CLAP_TEXT_PATH'] = text_encoder_path
+
     # --- Verifica dei percorsi (Solo i pesi devono esistere sulla macchina) ---
     if not clap_weights_path:
         raise ValueError("Variabile d'ambiente LOCAL_CLAP_WEIGHTS_PATH non impostata.")
@@ -38,7 +41,7 @@ def CLAP_initializer(device='cpu', use_cuda=False):
          raise FileNotFoundError(f"Impossibile trovare l'encoder testuale CLAP a: {text_encoder_path}")
 
     # --- Inizializzazione CLAP (USA IL PERCORSO LOCALE) ---
-    clap_model = CLAP(version='2023', use_cuda=use_cuda, download_if_missing=False)    
+    clap_model = CLAP(version='2023', use_cuda=use_cuda) # download_if_missing=False    
     # ... (resto del codice CLAP, non modificato)
     original_parameters = clap_model.clap.audio_encoder.to('cpu').state_dict()
     clap_model.clap.audio_encoder = clap_model.clap.audio_encoder.to(device)
