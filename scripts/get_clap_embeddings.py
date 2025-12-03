@@ -13,7 +13,7 @@ def parsing():
     parser = argparse.ArgumentParser(description='Get CLAP embeddings from audio files')
     parser.add_argument('--config_file', metavar='config_file', dest='config_file',
             help='config file to load to get model and training params.')
-    parser.add_argument('--n_octave', metavar='n_octave', dest='n_octave',
+    parser.add_argument('--n_octave', metavar='n_octave', dest='n_octave', type=int,
             help='octaveband split for the spectrograms.')
     parser.add_argument('--audio_format', metavar='audio_format', dest='audio_format',
             help='audio format to embed; choose between \'wav\', \'mp3\', \'flac\'.')
