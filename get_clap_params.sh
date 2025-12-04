@@ -45,7 +45,7 @@ try:
     
     # Utilizziamo la firma a 2 argomenti (Pesi e Config)
     clap_model, audio_embedding, _, _, _, sr = CLAP_initializer(
-        CLAP_PATH, config
+        'cpu', False
     )
 
     # 2. Ispezione dell'encoder audio (audio_embedding)
