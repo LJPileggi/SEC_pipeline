@@ -81,33 +81,21 @@ if __name__ == '__main__':
 EOF
 
 # 4.2. Esegui lo script Python temporaneo. Bind mount puliti.
-singularity exec \
-    --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" \
-    --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" \
-    "$SIF_FILE" \
-    # 🎯 CORREZIONE CHIAVE 1: Aggiunto 'python3' prima del percorso dello script.
-    python3 "$CONTAINER_WORK_DIR/create_h5_data.py"
+# 🎯 CORREZIONE: Comando singularity EXEC su un'UNICA RIGA per evitare interruzioni.
+singularity exec --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" "$SIF_FILE" python3 "$CONTAINER_WORK_DIR/create_h5_data.py"
 
 
 # --- 5. ESECUZIONE DELLA PIPELINE (get_clap_embeddings.py) ---
 
 echo "--- 🚀 Avvio Esecuzione Interattiva ---"
 
-singularity exec \
-    --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" \
-    --bind "$(pwd)/configs:/app/configs" \
-    --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" \
-    "$SIF_FILE" \
-    # 🎯 CORREZIONE CHIAVE 2: Path completo per get_clap_embeddings.py
-    python3 scripts/get_clap_embeddings.py \
-        --config_file "$BENCHMARK_CONFIG_FILE" \
-        --n_octave "$BENCHMARK_N_OCTAVE" \
-        --audio_format "$BENCHMARK_AUDIO_FORMAT"
+# 🎯 CORREZIONE: Comando singularity EXEC su un'UNICA RIGA.
+singularity exec --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" --bind "$(pwd)/configs:/app/configs" --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" "$SIF_FILE" python3 scripts/get_clap_embeddings.py --config_file "$BENCHMARK_CONFIG_FILE" --n_octave "$BENCHMARK_N_OCTAVE" --audio_format "$BENCHMARK_AUDIO_FORMAT"
 
 
 # --- 6. ANALISI FINALE DEI LOG (DOPO LA MERGE) ---
-# ... (La generazione e l'esecuzione degli script di merge e analisi vanno qui,
-# usando i path corretti: $CONTAINER_WORK_DIR per gli script temporanei) ...
+# ... (Inserisci qui la sezione 6 se è necessaria. Non ho file di log di merge/analisi, 
+# ma assicurati che anche quel blocco usi la sintassi corretta di Singularity e i percorsi interni) ...
 
 
 # --- 7. PULIZIA FINALE ---
