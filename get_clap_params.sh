@@ -24,6 +24,7 @@ export CONFIG_PATH="$CONFIG_FILE"
 cat << EOF > "$TEMP_PYTHON_SCRIPT"
 import os
 import sys
+import torch
 
 # Le uniche due importazioni necessarie per caricare il tuo modello.
 from src.models import CLAP_initializer 
