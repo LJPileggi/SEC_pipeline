@@ -9,8 +9,11 @@ CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.c
 
 # 🎯 NUOVO: Definiamo la directory di base TEMPORANEA sul tuo SCRATCH permanente.
 SCRATCH_TEMP_DIR="/leonardo_scratch/large/userexternal/$USER/tmp_data_pipeline_$$"
-# Questo è il percorso nel container dove monteremo SCRATCH_TEMP_DIR
+# Questo è il percorso nel container dove monteremo la base Scratch
 CONTAINER_SCRATCH_BASE="/scratch_base" 
+# Container mount point per la cartella di lavoro (dove ci sono pesi e script)
+CONTAINER_WORK_DIR="/app/temp_work"
+
 # Cartella di lavoro/temporanea, ora SU SCRATCH
 TEMP_DIR="$SCRATCH_TEMP_DIR/work_dir" 
 TEMP_PYTHON_SCRIPT_PATH="$TEMP_DIR/create_h5_data.py"
@@ -47,13 +50,13 @@ echo "--- ⚙️ Configurazione Ambiente di Esecuzione ---"
 # Queste variabili d'ambiente sono usate dal tuo models.py:
 export CLAP_TEXT_ENCODER_PATH="/usr/local/clap_cache/tokenizer_model/" 
 
-# Il percorso locale dove abbiamo copiato i pesi del modello CLAP (ora su Scratch)
-export LOCAL_CLAP_WEIGHTS_PATH="$CLAP_LOCAL_WEIGHTS"
+# 🎯 CORREZIONE: Il percorso dei pesi CLAP deve essere il PERCORSO INTERNO AL CONTAINER.
+export LOCAL_CLAP_WEIGHTS_PATH="$CONTAINER_WORK_DIR/CLAP_weights_2023.pth"
 
 # Variabile per evitare il salvataggio degli embeddings in un test rapido
 export NO_EMBEDDING_SAVE="True" 
 
-# 🎯 MODIFICA CHIAVE: Reindirizziamo basedir su Scratch
+# Reindirizziamo basedir su Scratch
 export NODE_TEMP_BASE_DIR="$CONTAINER_SCRATCH_BASE/dataSEC"
 
 
@@ -70,7 +73,6 @@ sys.path.append('.')
 from tests.utils.create_fake_raw_audio_h5 import create_fake_raw_audio_h5 
 
 # Path interno al container per il dataset RAW. Legge NODE_TEMP_BASE_DIR.
-# 🎯 MODIFICA: Rimuovo il fallback a /tmp_data per sicurezza, affinché fallisca se la variabile non c'è.
 TARGET_DIR = os.path.join(os.getenv('NODE_TEMP_BASE_DIR'), 'RAW_DATASET') 
 
 if __name__ == '__main__':
@@ -80,10 +82,11 @@ EOF
 
 # 4.2. Esegui lo script Python temporaneo. Bind mount puliti.
 singularity exec \
-    --bind "$TEMP_DIR:/app/temp_work" \
+    --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" \
     --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" \
     "$SIF_FILE" \
-    python3 "$TEMP_PYTHON_SCRIPT_PATH"
+    # 🎯 CORREZIONE: Esegui lo script usando il PERCORSO INTERNO AL CONTAINER.
+    python3 "$CONTAINER_WORK_DIR/create_h5_data.py"
 
 
 # --- 5. ESECUZIONE DELLA PIPELINE (get_clap_embeddings.py) ---
@@ -91,7 +94,7 @@ singularity exec \
 echo "--- 🚀 Avvio Esecuzione Interattiva ---"
 
 singularity exec \
-    --bind "$TEMP_DIR:/app/temp_work" \
+    --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" \
     --bind "$(pwd)/configs:/app/configs" \
     --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" \
     "$SIF_FILE" \
@@ -102,10 +105,9 @@ singularity exec \
 
 
 # --- 6. ANALISI FINALE DEI LOG (DOPO LA MERGE) ---
-
-# ... (La generazione e l'esecuzione degli script di merge e analisi dovrebbero 
-# usare $TEMP_LOG_MERGE_SCRIPT e $TEMP_LOG_ANALYSE_SCRIPT e i bind mount puliti, 
-# come nel blocco precedente - nessuna modifica strutturale necessaria qui, solo paths) ...
+# ... (La generazione e l'esecuzione degli script di merge e analisi vanno qui.
+# Ricorda di usare i percorsi interni $CONTAINER_WORK_DIR per gli script temporanei
+# e di aggiungere il bind mount come nei blocchi precedenti) ...
 
 
 # --- 7. PULIZIA FINALE ---
@@ -114,7 +116,5 @@ echo "--------------------------------------------------------"
 echo "Pulizia di tutti i file temporanei su Scratch: $SCRATCH_TEMP_DIR"
 echo "--------------------------------------------------------"
 
-# 🎯 MODIFICA CHIAVE: L'unica pulizia è la cartella Scratch temporanea.
-# Non c'è più nulla da pulire in /tmp.
 rm -rf "$SCRATCH_TEMP_DIR"
 echo "Pulizia completata."
