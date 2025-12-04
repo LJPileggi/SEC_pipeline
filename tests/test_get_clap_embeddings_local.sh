@@ -50,7 +50,7 @@ echo "--- ⚙️ Configurazione Ambiente di Esecuzione ---"
 # Queste variabili d'ambiente sono usate dal tuo models.py:
 export CLAP_TEXT_ENCODER_PATH="/usr/local/clap_cache/tokenizer_model/" 
 
-# 🎯 CORREZIONE: Il percorso dei pesi CLAP deve essere il PERCORSO INTERNO AL CONTAINER.
+# Il percorso dei pesi CLAP DEVE essere il PERCORSO INTERNO AL CONTAINER.
 export LOCAL_CLAP_WEIGHTS_PATH="$CONTAINER_WORK_DIR/CLAP_weights_2023.pth"
 
 # Variabile per evitare il salvataggio degli embeddings in un test rapido
@@ -85,7 +85,7 @@ singularity exec \
     --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" \
     --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" \
     "$SIF_FILE" \
-    # 🎯 CORREZIONE: Esegui lo script usando il PERCORSO INTERNO AL CONTAINER.
+    # 🎯 CORREZIONE CHIAVE 1: Aggiunto 'python3' prima del percorso dello script.
     python3 "$CONTAINER_WORK_DIR/create_h5_data.py"
 
 
@@ -98,6 +98,7 @@ singularity exec \
     --bind "$(pwd)/configs:/app/configs" \
     --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" \
     "$SIF_FILE" \
+    # 🎯 CORREZIONE CHIAVE 2: Path completo per get_clap_embeddings.py
     python3 scripts/get_clap_embeddings.py \
         --config_file "$BENCHMARK_CONFIG_FILE" \
         --n_octave "$BENCHMARK_N_OCTAVE" \
@@ -105,9 +106,8 @@ singularity exec \
 
 
 # --- 6. ANALISI FINALE DEI LOG (DOPO LA MERGE) ---
-# ... (La generazione e l'esecuzione degli script di merge e analisi vanno qui.
-# Ricorda di usare i percorsi interni $CONTAINER_WORK_DIR per gli script temporanei
-# e di aggiungere il bind mount come nei blocchi precedenti) ...
+# ... (La generazione e l'esecuzione degli script di merge e analisi vanno qui,
+# usando i path corretti: $CONTAINER_WORK_DIR per gli script temporanei) ...
 
 
 # --- 7. PULIZIA FINALE ---
