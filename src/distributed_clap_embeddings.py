@@ -203,19 +203,50 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                     # preprocessed_audio = clap_model.preprocess_audio([new_audio])
                     audio_input_tensor = torch.tensor(new_audio, dtype=torch.float32).unsqueeze(0).to(device)
 
-                    # 2. Chiama il metodo di pre-elaborazione Log-Mel sull'encoder (audio_embedding).
-                    # Se audio_embedding è il modulo encoder, questa è la sintassi corretta.
-                    try:
-                        preprocessed_audio = audio_embedding.get_log_mel_spectrogram(
-                            audio_input_tensor,
-                            sampling_rate=sr
+                    attribute_names_to_try = [
+                        'get_log_mel_spectrogram', # Nome standard
+                        'log_mel_spec_generator', # Possibile nome interno
+                        'mel_transform', # Nome standard PyTorch
+                        '_spectrogram_transformer', # Nome di attributo privato
+                        'audio.get_log_mel_spectrogram' # Se l'attributo 'audio' esiste sul wrapper
+                    ]
+                    
+                    found_function = None
+                    
+                    # Prova prima sull'encoder stesso (audio_embedding)
+                    for name in attribute_names_to_try:
+                        try:
+                            # Tenta di accedere al metodo. L'accesso tramite '.' (es. audio.get...) è gestito da getattr()
+                            if '.' in name:
+                                # Accesso a oggetti annidati (es. clap_model.audio.get...)
+                                obj = clap_model
+                                for part in name.split('.'):
+                                    obj = getattr(obj, part)
+                                found_function = obj
+                            else:
+                                # Accesso diretto sul modulo encoder (audio_embedding)
+                                found_function = getattr(audio_embedding, name)
+                            
+                            if callable(found_function):
+                                break # Trovato il nome corretto
+                            else:
+                                found_function = None
+                        except AttributeError:
+                            found_function = None
+
+                    if found_function is None:
+                        # Se proprio non si trova il modulo, solleva un errore significativo
+                        raise RuntimeError(
+                            f"Impossibile trovare il modulo Log-Mel Spectrogram in CLAP. "
+                            f"Controlla il sorgente CLAP per il metodo che accetta un tensor. "
+                            f"Hai provato tutti i nomi più comuni."
                         )
-                    except AttributeError:
-                        # Se fallisce, proviamo la versione che salta il 'model' e usa un attributo audio diretto.
-                        preprocessed_audio = clap_model.audio.get_log_mel_spectrogram(
-                            audio_input_tensor,
-                            sampling_rate=sr
-                        )
+                    
+                    # Esegui la funzione trovata
+                    preprocessed_audio = found_function(
+                        audio_input_tensor,
+                        sampling_rate=sr # Questo parametro è fondamentale se la funzione lo richiede
+                    )
                     preprocessed_audio = preprocessed_audio.reshape(preprocessed_audio.shape[0], preprocessed_audio.shape[2])
                     x = preprocessed_audio.to(device)
                     with torch.no_grad():
