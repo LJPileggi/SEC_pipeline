@@ -107,8 +107,9 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
         n_records = len(perms_metadata)
         while True:
             round_ += 1
-            print(perms_metadata)
-            for metadata in perms_metadata:
+            for i in range(n_records):
+            # for metadata in perms_metadata:
+                metadata = perms_metadata.iloc[i]
                 track_idx = metadata['hdf5_index']
                 track = audio_dataset_manager[track_idx]
                 window_size = int(cut_secs * sr)

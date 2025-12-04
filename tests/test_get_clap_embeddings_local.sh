@@ -16,13 +16,23 @@ BENCHMARK_CONFIG_FILE="test_config.yaml"
 BENCHMARK_AUDIO_FORMAT="wav"
 BENCHMARK_N_OCTAVE="1"
 
+# 🎯 NUOVO: Definisci la directory di base TEMPORANEA sul tuo SCRATCH permanente
+# Usiamo un ID univoco per la pulizia.
+SCRATCH_TEMP_DIR="/leonardo_scratch/large/userexternal/$USER/tmp_data_pipeline_$$"
+# Questo è il percorso nel container dove monteremo SCRATCH_TEMP_DIR
+CONTAINER_SCRATCH_BASE="/scratch_base"
+mkdir -p "$SCRATCH_TEMP_DIR"
+
+# 🎯 MODIFICA CHIAVE: Reindirizza basedir su Scratch
+export NODE_TEMP_BASE_DIR="$CONTAINER_SCRATCH_BASE/dataSEC"
+
 # --- 2. PREPARAZIONE DATI SUL DISCO LOCALE VELOCE (/tmp) ---
 
 echo "--- 🛠️ Preparazione Dati Temporanei in $TEMP_DIR ---"
 
 # 2.1. Creazione della cartella temporanea e della sua struttura interna
 # RAW_DATASET è dove verranno generati i file HDF5 di test
-mkdir -p "$TEMP_DIR/dataSEC/RAW_DATASET"
+mkdir -p "$TEMP_DIR"
 
 # 2.2. Copia dei pesi CLAP
 echo "Copia dei pesi CLAP su /tmp..."
@@ -30,8 +40,9 @@ CLAP_LOCAL_WEIGHTS="$TEMP_DIR/CLAP_weights_2023.pth"
 cp "$CLAP_SCRATCH_WEIGHTS" "$CLAP_LOCAL_WEIGHTS"
 
 # 2.3. GENERAZIONE DINAMICA DEL DATASET HDF5
-echo "Generazione dinamica del dataset HDF5 di test..."
+echo "Generazione dinamica del dataset HDF5 di test in $SCRATCH_TEMP_DIR/dataSEC/RAW_DATASET"
 
+# 4.1. Creazione dello script Python temporaneo per la generazione
 cat << EOF > "$TEMP_PYTHON_SCRIPT_PATH"
 import sys
 import os
@@ -40,20 +51,20 @@ sys.path.append('.')
 # Assumiamo che la funzione sia in src.utils
 from tests.utils.create_fake_raw_audio_h5 import create_fake_raw_audio_h5 
 
-# Path interno al container per il dataset RAW
-TARGET_DIR = os.path.join(os.getenv('NODE_TEMP_BASE_DIR', '/tmp_data/dataSEC'), 'RAW_DATASET') 
+# Path interno al container per il dataset RAW (ora punta a Scratch)
+# Legge la variabile d'ambiente NODE_TEMP_BASE_DIR impostata nella shell
+TARGET_DIR = os.path.join(os.getenv('NODE_TEMP_BASE_DIR'), 'RAW_DATASET') 
 
 if __name__ == '__main__':
     print(f"Generazione file in: {TARGET_DIR}")
-    # Il codice in create_fake_raw_audio_h5 deve essere aggiornato per essere importabile
-    # Se create_fake_raw_audio_h5 è definito nel file omonimo, la sintassi di import
-    # deve essere gestita. Assumiamo che sia in un modulo che possiamo importare.
+    # Nota: create_fake_raw_audio_h5 creerà la sottostruttura se non esiste
     create_fake_raw_audio_h5(TARGET_DIR)
 EOF
 
 # Esegui lo script Python temporaneo
 singularity exec \
     --bind "$TEMP_DIR:/tmp_data" \
+    --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" \
     "$SIF_FILE" \
     python3 "$TEMP_PYTHON_SCRIPT_PATH"
     
@@ -76,6 +87,7 @@ echo "--- 🚀 Avvio Esecuzione Interattiva ---"
 singularity exec \
     --bind "$TEMP_DIR:/tmp_data" \
     --bind "$(pwd)/configs:/app/configs" \
+    --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" \
     "$SIF_FILE" \
     python3 scripts/get_clap_embeddings.py \
         --config_file "$BENCHMARK_CONFIG_FILE" \
@@ -137,10 +149,13 @@ rm -f "$TEMP_PYTHON_SCRIPT"
 # --- 5. PULIZIA FINALE ---
 
 echo "--------------------------------------------------------"
-echo "ATTENZIONE: Nessun file di log è stato trasferito su disco persistente. I log si trovano su $TEMP_DIR e verranno cancellati."
+echo "ATTENZIONE: Log e file temporanei si trovavano su $SCRATCH_TEMP_DIR e verranno cancellati."
 echo "--------------------------------------------------------"
 
-# Pulizia di tutti i dati locali 
+# Pulizia di tutti i dati locali temporanei (solo pesi CLAP)
 echo "Pulizia della cartella temporanea locale ($TEMP_DIR)..."
 rm -rf "$TEMP_DIR" 
+# Pulizia della cartella temporanea su Scratch (tutti i dati HDF5 e i log)
+echo "Pulizia della cartella temporanea su Scratch ($SCRATCH_TEMP_DIR)..."
+rm -rf "$SCRATCH_TEMP_DIR"
 echo "Pulizia completata."
