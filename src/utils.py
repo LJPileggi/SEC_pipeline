@@ -278,7 +278,7 @@ class HDF5EmbeddingDatasetsManager(Dataset):
             if 'embedding_dataset' in self.hf:
                 # Carica tutte le chiavi dal campo 'emb_pkey' del dataset strutturato.
                 # Questo può essere lento con dataset molto grandi, ma è il metodo diretto.
-                keys = self.hf['embedding_dataset']['emb_pkey'][:]
+                keys = self.hf['embedding_dataset']['ID'][:]
             
                 # Controlla l'esistenza della chiave
                 return emb_pkey in keys

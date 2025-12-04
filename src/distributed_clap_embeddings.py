@@ -200,7 +200,13 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                     spec_n_o = spectrogram_n_octaveband_generator(new_audio, sr, integration_seconds=0.1,
                                                     n_octave=n_octave, center_freqs=center_freqs, ref=ref)
 
-                    preprocessed_audio = clap_model.preprocess_audio([new_audio])
+                    # preprocessed_audio = clap_model.preprocess_audio([new_audio])
+                    audio_input_tensor = torch.tensor(new_audio, dtype=torch.float32).unsqueeze(0).to(device)
+
+                    preprocessed_audio = clap_model.model.audio.get_log_mel_spectrogram(
+                        audio_input_tensor,
+                        sampling_rate=sr
+                        )
                     preprocessed_audio = preprocessed_audio.reshape(preprocessed_audio.shape[0], preprocessed_audio.shape[2])
                     x = preprocessed_audio.to(device)
                     with torch.no_grad():
