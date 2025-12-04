@@ -169,53 +169,53 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                             split_emb_dataset_manager.initialize_hdf5(embedding_dim, spec_shape, audio_format, cut_secs,
                                                                     n_octave, seed, sr, noise_perc, division_names[di], class_to_process)
 
-                        # the primary keys for the embedding follow the following format:
-                        # (class_idx)_(track hdf5 index)_(bucket number)_(round_)_(results number)
-                        emb_pkey = f"{audio_dataset_manager.hf.attrs['class_idx']}_{track_idx}_{b}_{round_}_{results}"
+                    # the primary keys for the embedding follow the following format:
+                    # (class_idx)_(track hdf5 index)_(bucket number)_(round_)_(results number)
+                    emb_pkey = f"{audio_dataset_manager.hf.attrs['class_idx']}_{track_idx}_{b}_{round_}_{results}"
 
-                        if split_emb_dataset_manager[emb_pkey]:
-                            ### DEBUG ###
-                            if not log_limit_reached:
-                                logging.info(f"[{rank}] ---> SKIP: Embedding {emb_pkey} già esistente. Risultati: {results + 1}")
-                            ### FINE DEBUG ###
-                            results += 1
-                            continue
-
-                        start = b * window_size + offset
-                        end = start + window_size
-                        cut_data = track[start:end]
-
-                        if len(cut_data) < window_size:
-                            pad_length = window_size - len(cut_data)
-                            cut_data = np.pad(cut_data, (0, pad_length), 'constant')
-
-                        abs_cutdata = np.abs(cut_data)
-                        max_threshold = np.mean(abs_cutdata)
-                        noise = noise_rng.uniform(-max_threshold, max_threshold, cut_data.shape)
-                        new_audio = (1 - noise_perc) * cut_data + noise_perc * noise
-
-                        spec_n_o = spectrogram_n_octaveband_generator(new_audio, sr, integration_seconds=0.1,
-                                                                    n_octave=n_octave, center_freqs=center_freqs, ref=ref)
-
-                        preprocessed_audio = clap_model.preprocess_audio([new_audio], is_path=False)
-                        preprocessed_audio = preprocessed_audio.reshape(preprocessed_audio.shape[0], preprocessed_audio.shape[2])
-                        x = preprocessed_audio.to(device)
-                        with torch.no_grad():
-                            embedding = audio_embedding(x)[0][0]
-
-                        split_emb_dataset_manager.add_to_data_buffer(embedding, spec_n_o, emb_pkey,
-                                            metadata['track_name'], class_to_process, metadata['subclass'])
-                        
-                        results += 1
-                        n_embeddings_per_run += 1
-                        
+                    if split_emb_dataset_manager[emb_pkey]:
                         ### DEBUG ###
                         if not log_limit_reached:
-                            logging.info(f"[{rank}] ---> CREATO: Embedding {emb_pkey}. Nuovo results: {results}")
-                        if results >= 20 and not log_limit_reached:
-                            logging.info(f"[{rank}] DEBUG LIMIT: Raggiunti 20 embeddings, i log di tracciamento interni verranno soppressi.")
-                            log_limit_reached = True
+                            logging.info(f"[{rank}] ---> SKIP: Embedding {emb_pkey} già esistente. Risultati: {results + 1}")
                         ### FINE DEBUG ###
+                        results += 1
+                        continue
+
+                    start = b * window_size + offset
+                    end = start + window_size
+                    cut_data = track[start:end]
+
+                    if len(cut_data) < window_size:
+                        pad_length = window_size - len(cut_data)
+                        cut_data = np.pad(cut_data, (0, pad_length), 'constant')
+
+                    abs_cutdata = np.abs(cut_data)
+                    max_threshold = np.mean(abs_cutdata)
+                    noise = noise_rng.uniform(-max_threshold, max_threshold, cut_data.shape)
+                    new_audio = (1 - noise_perc) * cut_data + noise_perc * noise
+
+                    spec_n_o = spectrogram_n_octaveband_generator(new_audio, sr, integration_seconds=0.1,
+                                                    n_octave=n_octave, center_freqs=center_freqs, ref=ref)
+
+                    preprocessed_audio = clap_model.preprocess_audio([new_audio], is_path=False)
+                    preprocessed_audio = preprocessed_audio.reshape(preprocessed_audio.shape[0], preprocessed_audio.shape[2])
+                    x = preprocessed_audio.to(device)
+                    with torch.no_grad():
+                        embedding = audio_embedding(x)[0][0]
+
+                    split_emb_dataset_manager.add_to_data_buffer(embedding, spec_n_o, emb_pkey,
+                                metadata['track_name'], class_to_process, metadata['subclass'])
+                        
+                    results += 1
+                    n_embeddings_per_run += 1
+                        
+                    ### DEBUG ###
+                    if not log_limit_reached:
+                        logging.info(f"[{rank}] ---> CREATO: Embedding {emb_pkey}. Nuovo results: {results}")
+                    if results >= 20 and not log_limit_reached:
+                        logging.info(f"[{rank}] DEBUG LIMIT: Raggiunti 20 embeddings, i log di tracciamento interni verranno soppressi.")
+                        log_limit_reached = True
+                    ### FINE DEBUG ###
 
 
     except Exception as e:
