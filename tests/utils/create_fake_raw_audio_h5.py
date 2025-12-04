@@ -64,8 +64,6 @@ def create_fake_raw_audio_h5(base_raw_dir: str) -> List[str]:
         print(f"Creating {num_tracks} fake tracks for class '{class_name}' in {h5_filepath}...")
         
         samples_per_track = SAMPLING_RATE * TEST_TRACK_DURATION_SECONDS
-        
-        all_class_audio_data = np.random.rand(num_tracks * samples_per_track).astype(AUDIO_DTYPE) * 0.2 - 0.1
 
         metadata_records: List[Tuple[bytes, bytes, int]] = [] # Per il nuovo dataset di metadati
         
@@ -85,11 +83,28 @@ def create_fake_raw_audio_h5(base_raw_dir: str) -> List[str]:
         
         # Scrivi i dati audio, l'indice e i metadati nel file HDF5
         with h5py.File(h5_filepath, 'w') as f:
-            f.create_dataset(f'audio_{TEST_AUDIO_FORMAT}', data=all_class_audio_data, dtype=AUDIO_DTYPE)
             
-            # --- AGGIUNTA CHIRURGICA: Dataset dei metadati specifici delle tracce ---
+            audio_dset_name = f'audio_{TEST_AUDIO_FORMAT}'
+
+            # 1. Crea il dataset audio VLEN vuoto e ridimensionabile (NUOVA LOGICA)
+            f.create_dataset(audio_dset_name, 
+                             shape=(0,), 
+                             maxshape=(None,), 
+                             dtype=AUDIO_DTYPE, # Usa il tipo VLEN definito a riga 23
+                             compression="gzip")
+            audio_dset = f[audio_dset_name]
+            
+            # 2. Scrivi le tracce audio una per una (NUOVA LOGICA)
+            for i in range(num_tracks):
+                # Genera la singola traccia audio. Nota: usiamo np.float32, NON AUDIO_DTYPE VLEN
+                track_data = np.random.rand(samples_per_track).astype(np.float32) * 0.2 - 0.1
+                
+                # Ridimensiona il dataset VLEN e aggiunge la traccia
+                audio_dset.resize((audio_dset.shape[0] + 1,))
+                audio_dset[-1] = track_data
+
+            # 3. Scrivi il dataset metadati (riutilizzando la lista metadata_records popolata precedentemente)
             f.create_dataset(f'metadata_{TEST_AUDIO_FORMAT}', data=np.array(metadata_records, dtype=METADATA_DTYPE))
-            # --- FINE AGGIUNTA CHIRURGICA ---
             
             # Aggiungi gli attributi globali al file HDF5
             f.attrs['audio_format'] = TEST_AUDIO_FORMAT
@@ -97,8 +112,10 @@ def create_fake_raw_audio_h5(base_raw_dir: str) -> List[str]:
             f.attrs['class_idx'] = class_to_idx[class_name]
             f.attrs['sample_rate'] = SAMPLING_RATE
             f.attrs['description'] = f"Fake audio data for {class_name} class for testing."
+            
+            # Stampa di verifica corretta (usa la shape del dataset appena scritto)
+            print(f"Created fake RAW HDF5: {h5_filepath} with 'audio_{TEST_AUDIO_FORMAT}' shape {audio_dset.shape} and {len(metadata_records)} metadata entries.")
 
-        print(f"Created fake RAW HDF5: {h5_filepath} with 'audio_{TEST_AUDIO_FORMAT}' shape {all_class_audio_data.shape} and {len(metadata_records)} metadata entries.")
         generated_files.append(h5_filepath)
             
     return generated_files
