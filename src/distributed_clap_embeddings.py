@@ -173,7 +173,10 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                     # (class_idx)_(track hdf5 index)_(bucket number)_(round_)_(results number)
                     emb_pkey = f"{audio_dataset_manager.hf.attrs['class_idx']}_{track_idx}_{b}_{round_}_{results}"
 
-                    if split_emb_dataset_manager[emb_pkey]:
+                    # --- Check di esistenza (Usa __contains__) ---
+                    if emb_pkey in split_emb_dataset_manager:
+                    # OPPURE, se preferisci mantenere la sintassi originale:
+                    # if split_emb_dataset_manager[emb_pkey]:
                         ### DEBUG ###
                         if not log_limit_reached:
                             logging.info(f"[{rank}] ---> SKIP: Embedding {emb_pkey} già esistente. Risultati: {results + 1}")

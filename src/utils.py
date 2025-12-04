@@ -270,15 +270,41 @@ class HDF5EmbeddingDatasetsManager(Dataset):
             return self.hf['embedding_dataset'].shape[0]
         return 0
 
+    def __contains__(self, emb_pkey: str) -> bool:
+        """
+        Verifica se un embedding con la chiave primaria (emb_pkey) esiste già nel dataset HDF5.
+        """
+        try:
+            if 'embedding_dataset' in self.hf:
+                # Carica tutte le chiavi dal campo 'emb_pkey' del dataset strutturato.
+                # Questo può essere lento con dataset molto grandi, ma è il metodo diretto.
+                keys = self.hf['embedding_dataset']['emb_pkey'][:]
+            
+                # Controlla l'esistenza della chiave
+                return emb_pkey in keys
+        
+            return False
+        
+        except KeyError:
+            # Se il campo 'emb_pkey' non esiste nel dtype, la chiave non è stata salvata.
+            return False
+        except Exception as e:
+            # Gestione errori I/O o HDF5
+            logging.error(f"Errore durante la ricerca della chiave HDF5 {emb_pkey}: {e}")
+            return False
+
     def __getitem__(self, idx):
         """
-        Valid only if object is in read or append mode.
+        Metodo modificato per gestire sia l'accesso per chiave (stringa) che l'accesso per indice (numero).
         """
-        if self.mode not in ['r', 'a']:
-            raise Exception("Exception: can't use getitem method in mode different than read.")
+        if isinstance(idx, str):
+            # Se l'indice è una stringa, lo interpreta come una richiesta di esistenza (contains)
+            # e delega al metodo __contains__.
+            return self.__contains__(idx) 
+    
+        # Altrimenti, gestisce l'accesso per indice numerico standard (es. riga 0, 1, 2...)
         return self.hf['embedding_dataset'][idx]
         
-
     def _set_dataset_format(self, embedding_dim, spec_shape):
         if 'classes' in self.partitions:
             dt = np.dtype([
