@@ -115,6 +115,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                 window_size = int(cut_secs * sr)
                 # Determina l'offset per l'elaborazione di questo file in questo round
                 offset = 0
+                print(track)
                 if round_ > 1 and track.shape[0] > window_size:
                     # Applica un offset casuale se non è il primo round
                     max_offset = track.shape[0] - window_size
