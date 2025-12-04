@@ -90,27 +90,42 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
     round_ = 0
     n_embeddings_per_run = 0
 
+    ### DEBUG ###
+    log_limit_reached = False # Flag per limitare i log di creazione/skip
+    rank = dist.get_rank() # Ottieni il rank per tracciare il processo
+    ### FINE DEBUG ###
+
     audio_dataset_manager = HDF5DatasetManager(os.path.join(root_source, class_to_process,
-                                          f'{class_to_process}_{audio_format}_dataset.h5'))
+                                                f'{class_to_process}_{audio_format}_dataset.h5'))
 
     # Specifica le dimensioni dei dati
     embedding_dim = 1024 # Esempio, metti la dimensione corretta del tuo embedding
     spec_shape = (2*n_octave+1, 1024) # Esempio, metti la forma corretta dello spettrogramma
 
     split_emb_dataset_manager = HDF5EmbeddingDatasetsManager(os.path.join(target_class_dir,
-                    f'{class_to_process}_{division_names[di]}_{audio_format}_emb.h5'), 'a')
+                        f'{class_to_process}_{division_names[di]}_{audio_format}_emb.h5'), 'a')
     split_emb_dataset_manager.initialize_hdf5(embedding_dim, spec_shape, audio_format, cut_secs,
-                          n_octave, sr, seed, noise_perc, division_names[di], class_to_process)
+                                n_octave, sr, seed, noise_perc, division_names[di], class_to_process)
 
     try:
         perms_metadata = audio_dataset_manager.get_reproducible_permutation(class_seed)
         n_records = len(perms_metadata)
         while True:
             round_ += 1
+            ### DEBUG ###
+            if not log_limit_reached: 
+                logging.info(f"[{rank}] --- INIZIO ROUND {round_} --- Risultati attuali: {results}. Target split: {target_counts_list[di]}")
+            ### FINE DEBUG ###
+            
             for i in range(n_records):
             # for metadata in perms_metadata:
                 metadata = perms_metadata.iloc[i]
                 track_idx = metadata['hdf5_index']
+                ### DEBUG ###
+                if not log_limit_reached:
+                    logging.info(f"[{rank}] -> Elaborazione Traccia {track_idx}, Round {round_}")
+                ### FINE DEBUG ###
+                
                 track = audio_dataset_manager[track_idx]
                 window_size = int(cut_secs * sr)
                 # Determina l'offset per l'elaborazione di questo file in questo round
@@ -122,8 +137,19 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                     if max_offset > 0:
                         offset = offset_rng.integers(0, max_offset)
                 n_buckets = math.ceil((track.shape[0] - offset) / window_size)
+                
+                ### DEBUG ###
+                if not log_limit_reached:
+                    logging.info(f"[{rank}] -> Track {track_idx}, Round {round_}. Buckets: {n_buckets}, Offset: {offset}")
+                ### FINE DEBUG ###
+                
                 for b in range(n_buckets):
                     if results >= target_counts_list[di]:
+                        ### DEBUG ###
+                        if not log_limit_reached: 
+                            logging.info(f"[{rank}] TARGET RAGGIUNTO/SUPERATO. Transizione split, results={results}")
+                        ### FINE DEBUG ###
+                        
                         logging.info(f"Split '{division_names[di]}' completato con {results} elementi. Avvio flush...")
                         # Passa al prossimo split e reinizializza
                         di += 1
@@ -139,15 +165,19 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                             split_emb_dataset_manager.flush_buffers()
                             split_emb_dataset_manager.close()
                             split_emb_dataset_manager = HDF5EmbeddingDatasetsManager(os.path.join(target_class_dir,
-                                            f'{class_to_process}_{division_names[di]}_{audio_format}_emb.h5'), 'a')
+                                                                                                  f'{class_to_process}_{division_names[di]}_{audio_format}_emb.h5'), 'a')
                             split_emb_dataset_manager.initialize_hdf5(embedding_dim, spec_shape, audio_format, cut_secs,
-                                                  n_octave, seed, sr, noise_perc, division_names[di], class_to_process)
+                                                                    n_octave, seed, sr, noise_perc, division_names[di], class_to_process)
 
                         # the primary keys for the embedding follow the following format:
                         # (class_idx)_(track hdf5 index)_(bucket number)_(round_)_(results number)
-                        emb_pkey = f"{audio_dataset_manager.hf.attrs['class_idx']}_{track_idx}_{b}_{round}_{results}"
+                        emb_pkey = f"{audio_dataset_manager.hf.attrs['class_idx']}_{track_idx}_{b}_{round_}_{results}"
 
                         if split_emb_dataset_manager[emb_pkey]:
+                            ### DEBUG ###
+                            if not log_limit_reached:
+                                logging.info(f"[{rank}] ---> SKIP: Embedding {emb_pkey} già esistente. Risultati: {results + 1}")
+                            ### FINE DEBUG ###
                             results += 1
                             continue
 
@@ -165,7 +195,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                         new_audio = (1 - noise_perc) * cut_data + noise_perc * noise
 
                         spec_n_o = spectrogram_n_octaveband_generator(new_audio, sr, integration_seconds=0.1,
-                                                      n_octave=n_octave, center_freqs=center_freqs, ref=ref)
+                                                                    n_octave=n_octave, center_freqs=center_freqs, ref=ref)
 
                         preprocessed_audio = clap_model.preprocess_audio([new_audio], is_path=False)
                         preprocessed_audio = preprocessed_audio.reshape(preprocessed_audio.shape[0], preprocessed_audio.shape[2])
@@ -174,9 +204,18 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                             embedding = audio_embedding(x)[0][0]
 
                         split_emb_dataset_manager.add_to_data_buffer(embedding, spec_n_o, emb_pkey,
-                                    metadata['track_name'], class_to_process, metadata['subclass'])
+                                            metadata['track_name'], class_to_process, metadata['subclass'])
+                        
                         results += 1
                         n_embeddings_per_run += 1
+                        
+                        ### DEBUG ###
+                        if not log_limit_reached:
+                            logging.info(f"[{rank}] ---> CREATO: Embedding {emb_pkey}. Nuovo results: {results}")
+                        if results >= 20 and not log_limit_reached:
+                            logging.info(f"[{rank}] DEBUG LIMIT: Raggiunti 20 embeddings, i log di tracciamento interni verranno soppressi.")
+                            log_limit_reached = True
+                        ### FINE DEBUG ###
 
 
     except Exception as e:
