@@ -1,7 +1,7 @@
 #!/bin/bash
 #
-# Script minimale per estrarre N_FFT, HOP_LENGTH, N_MELS da CLAP.
-# Non contiene logica o complicazioni.
+# Script CORRETTO per estrarre N_FFT, HOP_LENGTH, N_MELS da CLAP.
+# Risolve l'errore 'str expected, not NoneType' usando --env.
 
 # ----------------------------------------------------------------------
 # ⚠️ CONFIGURAZIONE NECESSARIA (Verifica i percorsi)
@@ -13,33 +13,25 @@ CONFIG_FILE="config0.yaml"
 TEMP_SCRIPT_NAME="simple_clap_inspect_$$.py"
 TEMP_PYTHON_SCRIPT="./$TEMP_SCRIPT_NAME"
 
-# --- 2. ESPORTAZIONE DELLE VARIABILI CHIAVE ---
-# Usiamo variabili d'ambiente per passare i percorsi allo script Python in modo pulito.
-export CLAP_PATH="$CLAP_WEIGHTS_PATH" 
-export CONFIG_PATH="$CONFIG_FILE" 
-
-# --- 3. CREAZIONE DELLO SCRIPT PYTHON TEMPORANEO ---
-# Il codice più semplice che riesce a caricare il tuo modello.
+# --- 2. CREAZIONE DELLO SCRIPT PYTHON (Minimalista e Pulito) ---
 
 cat << EOF > "$TEMP_PYTHON_SCRIPT"
 import os
 import sys
-import torch
 
 # Le uniche due importazioni necessarie per caricare il tuo modello.
 from src.models import CLAP_initializer 
 from src.utils import get_config_from_yaml 
-
-DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # --------------------------------------------------------------------
 # LOGICA DI ISPEZIONE
 # --------------------------------------------------------------------
 try:
     # 1. Caricamento della configurazione e del modello
+    # Ora i valori sono garantiti essere stringhe (non None) grazie al comando shell corretto.
     config = get_config_from_yaml(os.environ.get('CONFIG_PATH'))
     clap_model, audio_embedding, _, _, _, sr = CLAP_initializer(
-        DEVICE, torch.cuda.is_available()
+        os.environ.get('CLAP_PATH'), config
     )
 
     # 2. Ispezione dell'encoder audio (audio_embedding)
@@ -74,16 +66,19 @@ except Exception as e:
 # --------------------------------------------------------------------
 EOF
 
-# --- 4. ESECUZIONE DEL CONTAINER ---
+# --- 3. ESECUZIONE DEL CONTAINER (LA CORREZIONE È QUI) ---
 
 echo "--- 🔍 Esecuzione Script Ispezione Parametri CLAP ---"
 
+# 🎯 CORREZIONE: Uso esplicito di --env per garantire che le variabili arrivino al Python.
 singularity exec \
     --bind "$(pwd)":/app \
+    --env CLAP_PATH="$CLAP_WEIGHTS_PATH" \
+    --env CONFIG_PATH="$CONFIG_FILE" \
     "$SIF_FILE" \
     python3 /app/"$TEMP_PYTHON_SCRIPT"
 
-# --- 5. PULIZIA ---
+# --- 4. PULIZIA ---
 echo "Pulizia script temporaneo..."
 rm -f "$TEMP_PYTHON_SCRIPT"
 echo "Esecuzione completata."
