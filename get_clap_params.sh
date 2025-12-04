@@ -1,7 +1,7 @@
 #!/bin/bash
 #
-# Script CORRETTO FINALMENTE. Risolve l'errore 'str expected, not NoneType'
-# correggendo i percorsi assoluti all'interno del container.
+# Script ULTIMA VERSIONE per estrarre N_FFT, HOP_LENGTH, N_MELS da CLAP.
+# Risolve l'errore 'str expected, not NoneType' cambiando la CWD.
 
 # ----------------------------------------------------------------------
 # ⚠️ CONFIGURAZIONE NECESSARIA (Verifica i percorsi)
@@ -9,7 +9,7 @@
 USER="lpilegg1"
 SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/clap_pipeline.sif"
 CLAP_WEIGHTS_PATH="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
-CONFIG_FILE="config0.yaml" # Il nome del file, non il percorso assoluto
+CONFIG_FILE="config0.yaml" 
 TEMP_SCRIPT_NAME="simple_clap_inspect_$$.py"
 TEMP_PYTHON_SCRIPT="./$TEMP_SCRIPT_NAME"
 
@@ -18,6 +18,7 @@ TEMP_PYTHON_SCRIPT="./$TEMP_SCRIPT_NAME"
 cat << EOF > "$TEMP_PYTHON_SCRIPT"
 import sys
 import os
+import logging
 from src.models import CLAP_initializer 
 from src.utils import get_config_from_yaml 
 
@@ -31,14 +32,19 @@ try:
         
     # Leggi i percorsi da sys.argv
     CLAP_PATH = sys.argv[1]
-    CONFIG_NAME = sys.argv[2] # Ottieni il nome del file
+    CONFIG_NAME = sys.argv[2] # Sarà "config0.yaml"
 
-    # 🎯 CORREZIONE: Forza il percorso del file config al percorso assoluto del mount.
-    CONFIG_PATH_CORRECTED = os.path.join("/app", CONFIG_NAME)
-    
     # 1. Caricamento della configurazione e del modello
-    config = get_config_from_yaml(CONFIG_PATH_CORRECTED)
+    # get_config_from_yaml userà os.path.join('configs', CONFIG_NAME)
+    # Se la CWD è /app/ (cioè la directory dove si trova src), allora cercherà configs/config0.yaml
     
+    # 🎯 TENTATIVO 1: Prova a chiamare la funzione con il nome file semplice.
+    config = get_config_from_yaml(CONFIG_NAME)
+    
+    if config is None or not isinstance(config, dict) or not config:
+        print(f"❌ ERRORE: get_config_from_yaml ha restituito un valore nullo o vuoto per {CONFIG_NAME}. Controlla la presenza del file in configs/.")
+        sys.exit(1)
+
     # 2. Inizializzazione del modello (firma a 2 argomenti)
     clap_model, audio_embedding, _, _, _, sr = CLAP_initializer(
         'cpu', False
@@ -47,6 +53,7 @@ try:
     # 3. Ispezione dell'encoder audio
     test_attrs = ['mel_transform', 'spectrogram_extractor', 'log_mel_spec', 'spectrogram']
     
+    # ... (Stampa dei parametri come prima, il codice non è il problema)
     found = False
     for attr_name in test_attrs:
         try:
@@ -74,18 +81,17 @@ try:
         print("❌ FALLIMENTO: Parametri Mel Spectrogram non trovati.")
 
 except Exception as e:
-    # L'errore ora dovrebbe essere risolto. Se non lo è, la firma è sbagliata.
     print(f"❌ ERRORE CRITICO DURANTE L'INIZIALIZZAZIONE: {e}")
-    print("Controlla che la firma di CLAP_initializer sia CLAP_initializer(weights, config)")
 
 # --------------------------------------------------------------------
 EOF
 
-# --- 3. ESECUZIONE DEL CONTAINER ---
+# --- 3. ESECUZIONE DEL CONTAINER (LA CORREZIONE LOGICA) ---
 
 echo "--- 🔍 Esecuzione Script Ispezione Parametri CLAP ---"
 
-# Passa il percorso dei pesi e il NOME del file di configurazione
+# Esegui lo script Python DALLA DIRECTORY MONTATA /app
+# Questa è l'ultima possibilità per risolvere il problema di percorso.
 singularity exec \
     --bind "$(pwd)":/app \
     "$SIF_FILE" \
