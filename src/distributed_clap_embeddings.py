@@ -104,9 +104,12 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
 
     try:
         perms_metadata = audio_dataset_manager.get_reproducible_permutation(class_seed)
+        n_records = len(perms_metadata)
         while True:
             round_ += 1
-            for metadata in perms_metadata:
+            for i in range(n_records):
+            # for metadata in perms_metadata:
+                metadata = perms_metadata[i]
                 print(metadata)
                 track_idx = metadata['hdf5_index']
                 track = audio_dataset_manager[track_idx]
