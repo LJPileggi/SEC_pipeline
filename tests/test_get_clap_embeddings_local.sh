@@ -61,6 +61,18 @@ if __name__ == '__main__':
     create_fake_raw_audio_h5(TARGET_DIR)
 EOF
 
+# Il problema è che un path si ostina a usare /tmp_data/dataSEC. 
+# La soluzione è mappare il contenuto dello Scratch temporaneo a QUEL percorso
+# in aggiunta al mount /scratch_base.
+
+# Percorso nel container che il codice continua a usare
+LEGACY_DATASEC_PATH="/tmp_data/dataSEC"
+# Percorso nel container dove risiede la tua vera dataSEC
+NEW_DATASEC_PATH="$CONTAINER_SCRATCH_BASE/dataSEC" 
+
+# Creiamo la cartella dataSEC nella Scratch TEMP_DIR, che conterrà i dati RAW e PREPROCESSED
+mkdir -p "$SCRATCH_TEMP_DIR/dataSEC"
+
 # Esegui lo script Python temporaneo
 singularity exec \
     --bind "$TEMP_DIR:/tmp_data" \
@@ -88,6 +100,7 @@ singularity exec \
     --bind "$TEMP_DIR:/tmp_data" \
     --bind "$(pwd)/configs:/app/configs" \
     --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" \
+    --bind "$SCRATCH_TEMP_DIR/dataSEC:$LEGACY_DATASEC_PATH" \
     "$SIF_FILE" \
     python3 scripts/get_clap_embeddings.py \
         --config_file "$BENCHMARK_CONFIG_FILE" \
