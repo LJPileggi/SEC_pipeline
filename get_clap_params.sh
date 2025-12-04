@@ -1,7 +1,6 @@
 #!/bin/bash
 #
-# Script ULTIMA VERSIONE per estrarre N_FFT, HOP_LENGTH, N_MELS da CLAP.
-# Risolve l'errore 'str expected, not NoneType' cambiando la CWD.
+# Script CORRETTO FINALMENTE. Forza la CWD a /app per risolvere l'errore di percorso.
 
 # ----------------------------------------------------------------------
 # ⚠️ CONFIGURAZIONE NECESSARIA (Verifica i percorsi)
@@ -18,7 +17,6 @@ TEMP_PYTHON_SCRIPT="./$TEMP_SCRIPT_NAME"
 cat << EOF > "$TEMP_PYTHON_SCRIPT"
 import sys
 import os
-import logging
 from src.models import CLAP_initializer 
 from src.utils import get_config_from_yaml 
 
@@ -27,33 +25,31 @@ from src.utils import get_config_from_yaml
 # --------------------------------------------------------------------
 try:
     if len(sys.argv) < 3:
-        print("ERRORE: Argomenti mancanti.")
         sys.exit(1)
         
-    # Leggi i percorsi da sys.argv
     CLAP_PATH = sys.argv[1]
-    CONFIG_NAME = sys.argv[2] # Sarà "config0.yaml"
+    CONFIG_NAME = sys.argv[2]
+    
+    # 🎯 CORREZIONE CHIAVE: Cambia la CWD alla radice del progetto montato
+    # Questo assicura che get_config_from_yaml trovi 'configs/config0.yaml'
+    os.chdir("/app")
 
     # 1. Caricamento della configurazione e del modello
-    # get_config_from_yaml userà os.path.join('configs', CONFIG_NAME)
-    # Se la CWD è /app/ (cioè la directory dove si trova src), allora cercherà configs/config0.yaml
-    
-    # 🎯 TENTATIVO 1: Prova a chiamare la funzione con il nome file semplice.
     config = get_config_from_yaml(CONFIG_NAME)
     
+    # Check di sicurezza per il config nullo (che genera l'errore precedente)
     if config is None or not isinstance(config, dict) or not config:
-        print(f"❌ ERRORE: get_config_from_yaml ha restituito un valore nullo o vuoto per {CONFIG_NAME}. Controlla la presenza del file in configs/.")
+        print("❌ ERRORE CRITICO: Configurazione nulla dopo il tentativo di correzione CWD.")
         sys.exit(1)
 
     # 2. Inizializzazione del modello (firma a 2 argomenti)
     clap_model, audio_embedding, _, _, _, sr = CLAP_initializer(
-        'cpu', False
+        CLAP_PATH, config
     )
 
     # 3. Ispezione dell'encoder audio
     test_attrs = ['mel_transform', 'spectrogram_extractor', 'log_mel_spec', 'spectrogram']
     
-    # ... (Stampa dei parametri come prima, il codice non è il problema)
     found = False
     for attr_name in test_attrs:
         try:
@@ -86,12 +82,10 @@ except Exception as e:
 # --------------------------------------------------------------------
 EOF
 
-# --- 3. ESECUZIONE DEL CONTAINER (LA CORREZIONE LOGICA) ---
+# --- 3. ESECUZIONE DEL CONTAINER ---
 
 echo "--- 🔍 Esecuzione Script Ispezione Parametri CLAP ---"
 
-# Esegui lo script Python DALLA DIRECTORY MONTATA /app
-# Questa è l'ultima possibilità per risolvere il problema di percorso.
 singularity exec \
     --bind "$(pwd)":/app \
     "$SIF_FILE" \
