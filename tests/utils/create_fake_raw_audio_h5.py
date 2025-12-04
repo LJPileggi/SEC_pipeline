@@ -10,7 +10,7 @@ TEST_CLASSES: List[str] = ['Music', 'Voices', 'Birds']
 TEST_TRACKS_PER_CLASS: Dict[str, int] = {'Music': 3, 'Voices': 3, 'Birds': 2} # 8 tracce totali
 TEST_TRACK_DURATION_SECONDS: int = 3 # Durata di ogni traccia finta
 SAMPLING_RATE: int = 44100 # Hz
-AUDIO_DTYPE: type = np.float32 # Tipo di dati per le forme d'onda
+AUDIO_DTYPE: type = h5py.vlen_dtype(np.dtype('float32')) # Tipo di dati per le forme d'onda
 TEST_AUDIO_FORMAT: str = "wav" # Usato per la struttura del path e il nome del dataset interno
 TEST_N_OCTAVE: int = 1 # Usato per la struttura del path degli embeddings, non raw audio
 
@@ -85,7 +85,7 @@ def create_fake_raw_audio_h5(base_raw_dir: str) -> List[str]:
         
         # Scrivi i dati audio, l'indice e i metadati nel file HDF5
         with h5py.File(h5_filepath, 'w') as f:
-            f.create_dataset(f'audio_{TEST_AUDIO_FORMAT}', data=all_class_audio_data)
+            f.create_dataset(f'audio_{TEST_AUDIO_FORMAT}', data=all_class_audio_data, dtype=AUDIO_DTYPE)
             
             # --- AGGIUNTA CHIRURGICA: Dataset dei metadati specifici delle tracce ---
             f.create_dataset(f'metadata_{TEST_AUDIO_FORMAT}', data=np.array(metadata_records, dtype=METADATA_DTYPE))
