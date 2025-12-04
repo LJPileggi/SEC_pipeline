@@ -60,7 +60,7 @@ except Exception as e:
 try:
     # La firma della funzione CLAP_initializer è inferita dal tuo codice:
     clap_model, audio_embedding, _, _, _, sr = CLAP_initializer(
-        CLAP_WEIGHTS_PATH, config, DEVICE, logging
+        DEVICE, torch.cuda.is_available()
     )
     logging.info("Modello CLAP caricato con successo.")
 
