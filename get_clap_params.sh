@@ -1,44 +1,61 @@
 #!/bin/bash
 #
-# Script MINIMALE E CORRETTO. Nessuna configurazione YAML, solo inizializzazione CLAP.
+# Script CORRETTO DEFINITIVAMENTE. Adotta la logica di file mounting dello script 
+# dell'utente e rimuove ogni logica di configurazione YAML.
 
 # ----------------------------------------------------------------------
-# ⚠️ CONFIGURAZIONE NECESSARIA (Verifica i percorsi)
+# ⚠️ CONFIGURAZIONE NECESSARIA (Adottata da test_get_clap_embeddings_local.sh)
 # ----------------------------------------------------------------------
-# Forza la variabile USER.
+# Forza la variabile USER (Sostituisci se il tuo utente non è l'esempio)
 USER="lpilegg1" 
 SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/clap_pipeline.sif"
-CLAP_WEIGHTS_HOST_PATH="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
-TEMP_SCRIPT_NAME="clap_inspector_$$.py"
+CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
 
-# --- 1. CONFIGURAZIONE AMBIENTE INTERNO AL CONTAINER (Cruciale!) ---
-# Directory di lavoro nel container per i pesi.
+# Definisce la directory di base TEMPORANEA sul tuo SCRATCH permanente.
+SCRATCH_TEMP_DIR="/leonardo_scratch/large/userexternal/$USER/tmp_data_pipeline_$$"
+# Percorsi interni al container.
 CONTAINER_WORK_DIR="/app/temp_work"
-# Path interno al container.
-PESI_CLAP_INTERNI="$CONTAINER_WORK_DIR/CLAP_weights_2023.pth" 
+CONTAINER_SCRIPT_PATH="$CONTAINER_WORK_DIR/clap_inspector_script.py"
 
-# Imposta le variabili d'ambiente che models.py si aspetta.
-export LOCAL_CLAP_WEIGHTS_PATH="$PESI_CLAP_INTERNI" 
+# Cartella di lavoro/temporanea, su SCRATCH (dove copiamo i pesi)
+TEMP_DIR="$SCRATCH_TEMP_DIR/work_dir" 
+TEMP_SCRIPT_NAME="clap_inspector_script.py"
+
+# --- 1. PREPARAZIONE DATI SULLO SCRATCH ---
+
+echo "--- 🛠️ Preparazione Dati Temporanei su Scratch ($SCRATCH_TEMP_DIR) ---"
+
+# 1.1. Creazione della cartella di lavoro su Scratch
+mkdir -p "$TEMP_DIR" 
+
+# 1.2. Copia dei pesi CLAP nella cartella di lavoro su Scratch
+echo "Copia dei pesi CLAP su Scratch temporanea ($TEMP_DIR)..."
+CLAP_LOCAL_WEIGHTS="$TEMP_DIR/CLAP_weights_2023.pth"
+cp "$CLAP_SCRATCH_WEIGHTS" "$CLAP_LOCAL_WEIGHTS" 
+
+# --- 2. CONFIGURAZIONE ESECUTIVA (Variabili d'Ambiente) ---
+
+echo "--- ⚙️ Configurazione Ambiente di Esecuzione ---"
+
+# Il percorso dei pesi CLAP DEVE essere il PERCORSO INTERNO AL CONTAINER.
+export LOCAL_CLAP_WEIGHTS_PATH="$CONTAINER_WORK_DIR/CLAP_weights_2023.pth"
+# Percorso per l'encoder testuale (preso dall'interno del container come nel tuo script)
 export CLAP_TEXT_ENCODER_PATH="/usr/local/clap_cache/tokenizer_model/" 
 
-# 1.1. Prepara la directory di lavoro temporanea su host
-TEMP_DIR_ON_HOST="$(pwd)/temp_clap_inspect_$USER"
-mkdir -p "$TEMP_DIR_ON_HOST"
 
-# 1.2. Copia i pesi (necessario per montarli come file locale per il container)
-echo "Copia temporanea dei pesi CLAP su $TEMP_DIR_ON_HOST..."
-cp "$CLAP_WEIGHTS_HOST_PATH" "$TEMP_DIR_ON_HOST/CLAP_weights_2023.pth"
-
-
-# --- 2. CREAZIONE DELLO SCRIP PYTHON TEMPORANEO (LOGICA CORRETTA) ---
-# Elimina ogni riferimento a YAML e get_config_from_yaml.
+# --- 3. CREAZIONE DELLO SCRIP PYTHON TEMPORANEO (Minimale) ---
+# NON contiene logica config/YAML.
 
 cat << EOF > "$TEMP_SCRIPT_NAME"
 import sys
 import os
 import logging
-from src.models import CLAP_initializer 
+import torch
+# Assicuriamo che Python trovi models.py
+sys.path.append(os.path.join(os.getcwd(), 'src')) 
+from models import CLAP_initializer 
 
+# Disattiva logging non critico
 logging.basicConfig(level=logging.CRITICAL)
 
 # --------------------------------------------------------------------
@@ -46,7 +63,7 @@ logging.basicConfig(level=logging.CRITICAL)
 # --------------------------------------------------------------------
 try:
     # 1. Inizializzazione del modello (Firma corretta, usa le variabili d'ambiente)
-    # Usiamo 'cpu' perché non abbiamo garanzie di avere la GPU
+    # L'inizializzatore utilizza LOCAL_CLAP_WEIGHTS_PATH e CLAP_TEXT_ENCODER_PATH dall'ambiente.
     clap_model, audio_embedding, _ = CLAP_initializer(device='cpu', use_cuda=False) 
     
     # 2. Ispezione dei parametri 
@@ -78,6 +95,8 @@ try:
     
     if not found:
         print("❌ FALLIMENTO: Parametri Mel Spectrogram non trovati sull'encoder CLAP.")
+        # Stampa l'audio_embedding per il debug se fallisce
+        # print(f"DEBUG: Contenuto di audio_embedding: {audio_embedding}")
 
 except Exception as e:
     print(f"❌ ERRORE CRITICO DURANTE L'INIZIALIZZAZIONE: {e}")
@@ -85,21 +104,22 @@ except Exception as e:
 # --------------------------------------------------------------------
 EOF
 
-# --- 3. ESECUZIONE DEL CONTAINER ---
+# --- 4. ESECUZIONE DEL CONTAINER ---
 
 echo "--- 🔍 Esecuzione Script Ispezione Parametri CLAP ---"
 
-# 🎯 CORREZIONE: Non passare più argomenti posizionali non necessari allo script Python.
+# 🎯 CORREZIONE CHIAVE: Utilizzo del bind mount che ha la tua copia dei pesi
+# 1. Mount della directory di lavoro su Scratch ($TEMP_DIR) a $CONTAINER_WORK_DIR (/app/temp_work)
+# 2. Mount della directory corrente (che contiene src/) a /app per trovare models.py
 singularity exec \
-    --bind "$TEMP_DIR_ON_HOST:$CONTAINER_WORK_DIR" \
-    --bind "$(pwd)/configs:/app/configs" \
+    --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" \
     --bind "$(pwd)":/app \
     --pwd /app \
     "$SIF_FILE" \
-    python3 "$TEMP_SCRIPT_NAME"
+    python3 "$CONTAINER_WORK_DIR/$TEMP_SCRIPT_NAME"
 
-# --- 4. PULIZIA ---
-echo "Pulizia script e directory temporanea..."
+# --- 5. PULIZIA ---
+echo "Pulizia script e directory temporanea su Scratch..."
 rm -f "$TEMP_SCRIPT_NAME"
-rm -rf "$TEMP_DIR_ON_HOST"
+rm -rf "$SCRATCH_TEMP_DIR"
 echo "Esecuzione completata."
