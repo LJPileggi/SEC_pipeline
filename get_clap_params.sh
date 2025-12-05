@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Script CORRETTO DEFINITIVAMENTE. Elimina ogni ambiguità nel percorso di esecuzione.
+# Script CORRETTO DEFINITIVAMENTE. Risolve l'errore di path eliminando ambiguità.
 
 # ----------------------------------------------------------------------
 # ⚠️ CONFIGURAZIONE NECESSARIA (Verifica i percorsi)
@@ -12,12 +12,11 @@ CONFIG_FILE="config0.yaml"
 TEMP_SCRIPT_NAME="clap_inspector_$$.py"
 
 # --- 2. CREAZIONE DELLO SCRIP PYTHON TEMPORANEO ---
-# Codice di ispezione invariato.
+# Codice minimale e funzionante per l'ispezione CLAP.
 
 cat << EOF > "$TEMP_SCRIPT_NAME"
 import sys
 import os
-sys.path.append('.')
 from src.models import CLAP_initializer 
 from src.utils import get_config_from_yaml 
 
@@ -33,11 +32,11 @@ try:
     CONFIG_NAME = sys.argv[2]
     
     # 1. Caricamento della configurazione e del modello
-    # La CWD è forzata a /app, quindi 'configs/config0.yaml' funziona grazie al bind mount.
+    # get_config_from_yaml cercherà 'configs/config0.yaml' rispetto a /app.
     config = get_config_from_yaml(CONFIG_NAME)
     
     if config is None or not isinstance(config, dict) or not config:
-        print("❌ ERRORE CRITICO: Configurazione nulla o non trovata. Il file configs/config0.yaml non è accessibile.")
+        print("❌ ERRORE CRITICO: Configurazione nulla. Il file configs/config0.yaml non è accessibile. (Controlla il bind mount)")
         sys.exit(1)
 
     # 2. Inizializzazione del modello (firma a 2 argomenti)
@@ -80,17 +79,17 @@ except Exception as e:
 # --------------------------------------------------------------------
 EOF
 
-# --- 3. ESECUZIONE DEL CONTAINER (LA CORREZIONE È STATA QUI) ---
+# --- 3. ESECUZIONE DEL CONTAINER (LA CORREZIONE È QUI) ---
 
 echo "--- 🔍 Esecuzione Script Ispezione Parametri CLAP ---"
 
-# Esecuzione corretta: Il percorso dello script Python è /app/nome_script_pulito.py
+# 🎯 CORREZIONE: L'esecuzione usa solo il nome del file, perché la CWD è /app.
 singularity exec \
     --bind "$(pwd)":/app \
     --bind "$(pwd)/configs:/app/configs" \
     --pwd /app \
     "$SIF_FILE" \
-    python3 "/app/$TEMP_SCRIPT_NAME" "$CLAP_WEIGHTS_PATH" "$CONFIG_FILE"
+    python3 "$TEMP_SCRIPT_NAME" "$CLAP_WEIGHTS_PATH" "$CONFIG_FILE"
 
 # --- 4. PULIZIA ---
 echo "Pulizia script temporaneo..."
