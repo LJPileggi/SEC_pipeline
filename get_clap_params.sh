@@ -34,6 +34,7 @@ try:
     # 1. Caricamento della configurazione e del modello
     # get_config_from_yaml cercherà 'configs/config0.yaml' rispetto a /app.
     config = get_config_from_yaml(CONFIG_NAME)
+    print(config)
     
     if config is None or not isinstance(config, dict) or not config:
         print("❌ ERRORE CRITICO: Configurazione nulla. Il file configs/config0.yaml non è accessibile. (Controlla il bind mount)")
