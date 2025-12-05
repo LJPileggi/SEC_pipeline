@@ -1,7 +1,7 @@
 #!/bin/bash
 #
-# Script RIVISTO. Ripristina la logica di base del tuo script funzionante, 
-# ma con diagnostica aggressiva sul path di origine.
+# Script CORRETTO FINALMENTE. Allinea il percorso di mount con la logica interna a models.py
+# che si aspetta una directory temporanea (presumibilmente /tmp) nel container.
 
 # ----------------------------------------------------------------------
 # ⚠️ CONFIGURAZIONE NECESSARIA 
@@ -11,20 +11,14 @@ USER="lpilegg1"
 SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/clap_pipeline.sif"
 CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
 
-# 🎯 VERIFICA INIZIALE CRITICA: Assicurati che il file ORIGINALE esista
-if [ ! -f "$CLAP_SCRATCH_WEIGHTS" ]; then
-    echo "❌ ERRORE DI ORIGINE: Impossibile trovare i pesi CLAP originali al percorso: $CLAP_SCRATCH_WEIGHTS. Controlla il path o i permessi."
-    exit 1
-fi
-
 # Variabili di Path
 SCRATCH_TEMP_DIR="/leonardo_scratch/large/userexternal/$USER/tmp_data_pipeline_$$"
 TEMP_DIR="$SCRATCH_TEMP_DIR/work_dir" 
 
-# Percorsi interni al container.
-CONTAINER_SCRATCH_BASE="/scratch_base" 
-CONTAINER_WORK_DIR="/app/temp_work"
+# 🎯 MODIFICA CHIAVE: Mount point nel container. Usiamo una sottodirectory di /tmp
+CONTAINER_WORK_DIR="/tmp/clap_temp_work"
 TEMP_SCRIPT_NAME="clap_inspector_script.py"
+CONTAINER_SCRATCH_BASE="/scratch_base" 
 
 # --- 1. PREPARAZIONE DATI SULLO SCRATCH ---
 
@@ -45,21 +39,12 @@ if ! cp "$CLAP_SCRATCH_WEIGHTS" "$CLAP_LOCAL_WEIGHTS"; then
     exit 1
 fi
 
-# 1.3. Diagnostica di Esistenza del file copiato
-if [ ! -f "$CLAP_LOCAL_WEIGHTS" ]; then
-    echo "❌ DIAGNOSTICA FINALE: Il file dei pesi ($CLAP_LOCAL_WEIGHTS) NON ESISTE SULL'HOST dopo la copia. La copia è fallita."
-    rm -rf "$SCRATCH_TEMP_DIR"
-    exit 1
-fi
-
-
 # --- 2. CONFIGURAZIONE ESECUTIVA (Variabili d'Ambiente) ---
 
 echo "--- ⚙️ Configurazione Ambiente di Esecuzione ---"
 
-# Il percorso dei pesi CLAP DEVE essere il PERCORSO INTERNO AL CONTAINER.
+# 🎯 MODIFICA CHIAVE: Aggiorna la variabile d'ambiente per puntare al NUOVO mount point /tmp
 export LOCAL_CLAP_WEIGHTS_PATH="$CONTAINER_WORK_DIR/CLAP_weights_2023.pth"
-# Percorso per l'encoder testuale (preso dall'interno del container)
 export CLAP_TEXT_ENCODER_PATH="/usr/local/clap_cache/tokenizer_model/" 
 export NODE_TEMP_BASE_DIR="$CONTAINER_SCRATCH_BASE/dataSEC" 
 
@@ -112,6 +97,7 @@ try:
         print("❌ FALLIMENTO: Parametri Mel Spectrogram non trovati sull'encoder CLAP.")
 
 except Exception as e:
+    # Stampa l'errore di inizializzazione
     print(f"❌ ERRORE CRITICO DURANTE L'INIZIALIZZAZIONE: {e}")
 
 # --------------------------------------------------------------------
@@ -121,7 +107,7 @@ EOF
 
 echo "--- 🔍 Esecuzione Script Ispezione Parametri CLAP ---"
 
-# Lancio dello script da /app/clap_inspector_script.py (Path corretto)
+# Lancio dello script. I pesi CLAP sono montati in /tmp/clap_temp_work/
 singularity exec \
     --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" \
     --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" \
