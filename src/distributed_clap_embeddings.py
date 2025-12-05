@@ -221,7 +221,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                         hop_length=HOP_LENGTH, 
                         n_mels=N_MELS
                     )
-
+                    S_db = librosa.power_to_db(S_mel, ref=1.0)
                     S_db_tensor = torch.tensor(S_db, dtype=torch.float32)
                     # Devi ripristinare i due unsqueeze (Batch e Canale)
                     preprocessed_audio = S_db_tensor.unsqueeze(0).unsqueeze(0).to(device) # -> [1, 1, 64, 218]
