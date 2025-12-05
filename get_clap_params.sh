@@ -1,21 +1,22 @@
 #!/bin/bash
 #
 # Script CORRETTO FINALMENTE. Risolve l'errore di timing di Singularity garantendo che
-# la directory Scratch esista prima del mount.
+# il file dei pesi esista sull'HOST prima del mount.
 
 # ----------------------------------------------------------------------
-# ⚠️ CONFIGURAZIONE NECESSARIA (Adottata da test_get_clap_embeddings_local.sh)
+# ⚠️ CONFIGURAZIONE NECESSARIA (Adottata dal tuo script funzionante)
 # ----------------------------------------------------------------------
 # Forza la variabile USER.
 USER="lpilegg1" 
 SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/clap_pipeline.sif"
 CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
 
-# Definisce la directory di base TEMPORANEA sul tuo SCRATCH permanente.
+# Variabili di Path
 SCRATCH_TEMP_DIR="/leonardo_scratch/large/userexternal/$USER/tmp_data_pipeline_$$"
 TEMP_DIR="$SCRATCH_TEMP_DIR/work_dir" 
 
 # Percorsi interni al container.
+CONTAINER_SCRATCH_BASE="/scratch_base" 
 CONTAINER_WORK_DIR="/app/temp_work"
 TEMP_SCRIPT_NAME="clap_inspector_script.py"
 
@@ -24,9 +25,8 @@ TEMP_SCRIPT_NAME="clap_inspector_script.py"
 echo "--- 🛠️ Preparazione Dati Temporanei su Scratch ($SCRATCH_TEMP_DIR) ---"
 
 # 1.1. Creazione della cartella di lavoro su Scratch
-# Utilizziamo un controllo di errore esplicito.
 if ! mkdir -p "$TEMP_DIR"; then
-    echo "❌ ERRORE CRITICO: Impossibile creare la directory temporanea su Scratch: $TEMP_DIR. Controlla i permessi o lo spazio."
+    echo "❌ ERRORE CRITICO: Impossibile creare la directory temporanea su Scratch: $TEMP_DIR. Controlla i permessi."
     exit 1
 fi
 
@@ -39,14 +39,13 @@ if ! cp "$CLAP_SCRATCH_WEIGHTS" "$CLAP_LOCAL_WEIGHTS"; then
     exit 1
 fi
 
-# 🎯 DIAGNOSTICA DI SICUREZZA
-# Verifichiamo che la directory esista per la shell ESATTAMENTE prima del mount.
-if [ ! -d "$TEMP_DIR" ]; then
-    echo "❌ DIAGNOSTICA CRITICA: La directory mount source ($TEMP_DIR) non è visibile subito dopo la creazione. Problema di consistenza del File System (Scratch)."
+# 🎯 DIAGNOSTICA DI SICUREZZA AGGIUNTA
+# Verifica che il file dei pesi esista sull'host prima di lanciare Singularity.
+if [ ! -f "$CLAP_LOCAL_WEIGHTS" ]; then
+    echo "❌ DIAGNOSTICA FINALE: Il file dei pesi ($CLAP_LOCAL_WEIGHTS) NON ESISTE SULL'HOST dopo la copia. La copia è fallita."
     rm -rf "$SCRATCH_TEMP_DIR"
     exit 1
 fi
-
 
 # --- 2. CONFIGURAZIONE ESECUTIVA (Variabili d'Ambiente) ---
 
@@ -54,9 +53,10 @@ echo "--- ⚙️ Configurazione Ambiente di Esecuzione ---"
 
 # Il percorso dei pesi CLAP DEVE essere il PERCORSO INTERNO AL CONTAINER.
 export LOCAL_CLAP_WEIGHTS_PATH="$CONTAINER_WORK_DIR/CLAP_weights_2023.pth"
-# Percorso per l'encoder testuale (preso dall'interno del container come nel tuo script)
+# Percorso per l'encoder testuale (preso dall'interno del container)
 export CLAP_TEXT_ENCODER_PATH="/usr/local/clap_cache/tokenizer_model/" 
-
+# Variabile NODE_TEMP_BASE_DIR per coerenza
+export NODE_TEMP_BASE_DIR="$CONTAINER_SCRATCH_BASE/dataSEC" 
 
 # --- 3. CREAZIONE DELLO SCRIP PYTHON TEMPORANEO (Minimale) ---
 # Crea il file nella directory corrente (montata come /app)
@@ -65,9 +65,8 @@ import sys
 import os
 import logging
 import torch
-# Assicuriamo che Python trovi models.py (che è in /app/src)
-sys.path.append(os.path.join(os.getcwd(), 'src')) 
-from models import CLAP_initializer 
+sys.path.append('.') 
+from src.models import CLAP_initializer 
 
 logging.basicConfig(level=logging.CRITICAL)
 
@@ -122,6 +121,7 @@ echo "--- 🔍 Esecuzione Script Ispezione Parametri CLAP ---"
 # Lancio dello script da /app/clap_inspector_script.py (Path corretto)
 singularity exec \
     --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" \
+    --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" \
     --bind "$(pwd)":/app \
     --pwd /app \
     "$SIF_FILE" \
