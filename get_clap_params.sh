@@ -1,6 +1,7 @@
 #!/bin/bash
 #
-# Script CORRETTO FINALMENTE. Forza la CWD a /app con --pwd /app per risolvere l'errore di percorso.
+# Script CORRETTO FINALMENTE. Utilizza il bind esplicito della cartella configs
+# e forza la CWD per replicare l'ambiente di esecuzione funzionante.
 
 # ----------------------------------------------------------------------
 # ⚠️ CONFIGURAZIONE NECESSARIA (Verifica i percorsi)
@@ -10,9 +11,10 @@ SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/cl
 CLAP_WEIGHTS_PATH="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
 CONFIG_FILE="config0.yaml" 
 TEMP_SCRIPT_NAME="simple_clap_inspect_$$.py"
-TEMP_PYTHON_SCRIPT="./$TEMP_SCRIPT_NAME"
+TEMP_PYTHON_SCRIPT="./$TEMP_PYTHON_SCRIPT_NAME"
 
 # --- 2. CREAZIONE DELLO SCRIP PYTHON TEMPORANEO ---
+# Codice più semplice possibile.
 
 cat << EOF > "$TEMP_PYTHON_SCRIPT"
 import sys
@@ -31,22 +33,19 @@ try:
     CLAP_PATH = sys.argv[1]
     CONFIG_NAME = sys.argv[2]
     
-    # Stampa di debug per verificare la CWD
-    print(f"CWD attesa (dovrebbe essere /app): {os.getcwd()}")
-    print(f"Percorso config cercato: {os.path.join('configs', CONFIG_NAME)}")
-
+    # Non è necessario cambiare la directory qui se usiamo --pwd /app nello script SH
+    
     # 1. Caricamento della configurazione e del modello
+    # get_config_from_yaml('config0.yaml') cerca 'configs/config0.yaml' rispetto alla CWD (/app)
     config = get_config_from_yaml(CONFIG_NAME)
     
-    # Check di sicurezza per il config nullo (che genera l'errore precedente)
     if config is None or not isinstance(config, dict) or not config:
-        # Se siamo qui, il file configs/config0.yaml non esiste o non è leggibile
-        print("❌ ERRORE CRITICO: Configurazione nulla. Il file configs/config0.yaml non è accessibile dalla CWD.")
+        print("❌ ERRORE CRITICO: Configurazione nulla o non trovata (CONTROLLARE IL BIND configs).")
         sys.exit(1)
 
     # 2. Inizializzazione del modello (firma a 2 argomenti)
     clap_model, audio_embedding, _, _, _, sr = CLAP_initializer(
-        'cpu', False
+        CLAP_PATH, config
     )
 
     # 3. Ispezione dell'encoder audio
@@ -76,7 +75,7 @@ try:
             continue
     
     if not found:
-        print("❌ FALLIMENTO: Parametri Mel Spectrogram non trovati.")
+        print("❌ FALLIMENTO: Parametri Mel Spectrogram non trovati sull'encoder CLAP.")
 
 except Exception as e:
     print(f"❌ ERRORE CRITICO DURANTE L'INIZIALIZZAZIONE: {e}")
@@ -88,12 +87,16 @@ EOF
 
 echo "--- 🔍 Esecuzione Script Ispezione Parametri CLAP ---"
 
-# 🎯 CORREZIONE: Uso di --pwd /app per forzare la CWD all'interno del container
+# 🎯 CORREZIONE: 
+# 1. --bind "$(pwd)":/app (monta la radice del progetto per accedere a src e allo script temporaneo)
+# 2. --bind "$(pwd)/configs:/app/configs" (monta esplicitamente la cartella config, replicando il codice funzionante)
+# 3. --pwd /app (forza la CWD, così 'configs/config0.yaml' viene risolto correttamente)
 singularity exec \
     --bind "$(pwd)":/app \
+    --bind "$(pwd)/configs:/app/configs" \
     --pwd /app \
     "$SIF_FILE" \
-    python3 "$TEMP_PYTHON_SCRIPT" "$CLAP_WEIGHTS_PATH" "$CONFIG_FILE"
+    python3 /app/"$TEMP_PYTHON_SCRIPT" "$CLAP_WEIGHTS_PATH" "$CONFIG_FILE"
 
 # --- 4. PULIZIA ---
 echo "Pulizia script temporaneo..."
