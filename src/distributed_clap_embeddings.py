@@ -222,17 +222,28 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                         n_mels=N_MELS
                     )
 
-                    # 2. Converti in scala logaritmica (dB)
-                    # Utilizza le impostazioni standard per la conversione logaritmica
-                    S_db = librosa.power_to_db(S_mel, ref=1.0) 
+                    S_db_tensor = torch.tensor(S_db, dtype=torch.float32)
+                    # Devi ripristinare i due unsqueeze (Batch e Canale)
+                    preprocessed_audio = S_db_tensor.unsqueeze(0).unsqueeze(0).to(device) # -> [1, 1, 64, 218]
 
-                    # 3. Formatta come Tensor [1, 1, H, W] per l'encoder CLAP
-                    preprocessed_audio = torch.tensor(S_db, dtype=torch.float32)
+                    # Prova a chiamare l'encoder più in profondità per saltare la pre-elaborazione automatica
+                    try:
+                        x = preprocessed_audio # Il tensore 4D corretto
+                        embedding = audio_embedding(x)[0][0] # <--- QUI STA IL PROBLEMA
+    
+                    except AttributeError:
+                        # Se non è possibile accedere direttamente, devi fare un'ulteriore ispezione
+                        print("Tentativo di chiamata diretta fallito. Riprova con la chiamata originale.")
+
+                    preprocessed_audio = S_db_tensor.unsqueeze(0).unsqueeze(0).to(device)
+
+                    with torch.no_grad():
+                        embedding = audio_embedding(preprocessed_audio)[0][0]
                     # preprocessed_audio = S_db_tensor.unsqueeze(0).unsqueeze(0).to(device)
                     # preprocessed_audio = preprocessed_audio.reshape(preprocessed_audio.shape[0], preprocessed_audio.shape[2])
-                    x = preprocessed_audio.to(device)
-                    with torch.no_grad():
-                        embedding = audio_embedding(x)[0][0]
+                    # x = preprocessed_audio.to(device)
+                    # with torch.no_grad():
+                    #     embedding = audio_embedding(x)[0][0]
 
                     split_emb_dataset_manager.add_to_data_buffer(embedding, spec_n_o, emb_pkey,
                                 metadata['track_name'], class_to_process, metadata['subclass'])
