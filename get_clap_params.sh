@@ -8,7 +8,6 @@
 USER="lpilegg1"
 SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/clap_pipeline.sif"
 CLAP_WEIGHTS_PATH="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
-CONFIG_FILE="config0.yaml" 
 TEMP_SCRIPT_NAME="clap_inspector_$$.py"
 
 # --- 2. CREAZIONE DELLO SCRIP PYTHON TEMPORANEO ---
@@ -18,7 +17,6 @@ cat << EOF > "$TEMP_SCRIPT_NAME"
 import sys
 import os
 from src.models import CLAP_initializer 
-from src.utils import get_config_from_yaml 
 
 # --------------------------------------------------------------------
 # LOGICA DI ISPEZIONE
@@ -29,16 +27,6 @@ try:
         sys.exit(1)
         
     CLAP_PATH = sys.argv[1]
-    CONFIG_NAME = sys.argv[2]
-    
-    # 1. Caricamento della configurazione e del modello
-    # get_config_from_yaml cercherà 'configs/config0.yaml' rispetto a /app.
-    config = get_config_from_yaml(CONFIG_NAME)
-    print(config)
-    
-    if config is None or not isinstance(config, dict) or not config:
-        print("❌ ERRORE CRITICO: Configurazione nulla. Il file configs/config0.yaml non è accessibile. (Controlla il bind mount)")
-        sys.exit(1)
 
     # 2. Inizializzazione del modello (firma a 2 argomenti)
     clap_model, audio_embedding, _, _, _, sr = CLAP_initializer(
@@ -87,10 +75,9 @@ echo "--- 🔍 Esecuzione Script Ispezione Parametri CLAP ---"
 # 🎯 CORREZIONE: L'esecuzione usa solo il nome del file, perché la CWD è /app.
 singularity exec \
     --bind "$(pwd)":/app \
-    --bind "$(pwd)/configs:/app/configs" \
     --pwd /app \
     "$SIF_FILE" \
-    python3 "$TEMP_SCRIPT_NAME" "$CLAP_WEIGHTS_PATH" "$CONFIG_FILE"
+    python3 "$TEMP_SCRIPT_NAME" "$CLAP_WEIGHTS_PATH"
 
 # --- 4. PULIZIA ---
 echo "Pulizia script temporaneo..."
