@@ -201,52 +201,34 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                                                     n_octave=n_octave, center_freqs=center_freqs, ref=ref)
 
                     # preprocessed_audio = clap_model.preprocess_audio([new_audio])
-                    audio_input_tensor = torch.tensor(new_audio, dtype=torch.float32).unsqueeze(0).to(device)
+                    # ----------------------------------------------------------------------------------------
+                    # PATCH FINALE: Calcolo Spettrogramma Log-Mel con Librosa (Valori Fissi CLAP)
+                    # ----------------------------------------------------------------------------------------
 
-                    attribute_names_to_try = [
-                        'get_log_mel_spectrogram', # Nome standard
-                        'log_mel_spec_generator', # Possibile nome interno
-                        'mel_transform', # Nome standard PyTorch
-                        '_spectrogram_transformer', # Nome di attributo privato
-                        'audio.get_log_mel_spectrogram' # Se l'attributo 'audio' esiste sul wrapper
-                    ]
-                    
-                    found_function = None
-                    
-                    # Prova prima sull'encoder stesso (audio_embedding)
-                    for name in attribute_names_to_try:
-                        try:
-                            # Tenta di accedere al metodo. L'accesso tramite '.' (es. audio.get...) è gestito da getattr()
-                            if '.' in name:
-                                # Accesso a oggetti annidati (es. clap_model.audio.get...)
-                                obj = clap_model
-                                for part in name.split('.'):
-                                    obj = getattr(obj, part)
-                                found_function = obj
-                            else:
-                                # Accesso diretto sul modulo encoder (audio_embedding)
-                                found_function = getattr(audio_embedding, name)
-                            
-                            if callable(found_function):
-                                break # Trovato il nome corretto
-                            else:
-                                found_function = None
-                        except AttributeError:
-                            found_function = None
+                    # PARAMETRI UFFICIALI DEL MODELLO CLAP
+                    N_FFT = 1024
+                    HOP_LENGTH = 480
+                    N_MELS = 64
+                    # La Frequenza di campionamento (sr) è 48000 Hz, ma devi usare il 'sr' 
+                    # che hai già nel tuo loop (presumo sia 48000 o 44100 a seconda del tuo audio). 
+                    # Se il tuo audio è già risampolato a 48kHz, usa quel valore.
 
-                    if found_function is None:
-                        # Se proprio non si trova il modulo, solleva un errore significativo
-                        raise RuntimeError(
-                            f"Impossibile trovare il modulo Log-Mel Spectrogram in CLAP. "
-                            f"Controlla il sorgente CLAP per il metodo che accetta un tensor. "
-                            f"Hai provato tutti i nomi più comuni."
-                        )
-                    
-                    # Esegui la funzione trovata
-                    preprocessed_audio = found_function(
-                        audio_input_tensor,
-                        sampling_rate=sr # Questo parametro è fondamentale se la funzione lo richiede
+                    # 1. Calcola lo spettrogramma Mel di potenza (in-memory)
+                    S_mel = librosa.feature.melspectrogram(
+                        y=new_audio, # L'audio già caricato e risampolato
+                        sr=sr,       # Usa il Sample Rate corretto (dovrebbe essere 48000)
+                        n_fft=N_FFT, 
+                        hop_length=HOP_LENGTH, 
+                        n_mels=N_MELS
                     )
+
+                    # 2. Converti in scala logaritmica (dB)
+                    # Utilizza le impostazioni standard per la conversione logaritmica
+                    S_db = librosa.power_to_db(S_mel, ref=1.0) 
+
+                    # 3. Formatta come Tensor [1, 1, H, W] per l'encoder CLAP
+                    S_db_tensor = torch.tensor(S_db, dtype=torch.float32)
+                    preprocessed_audio = S_db_tensor.unsqueeze(0).unsqueeze(0).to(device)
                     preprocessed_audio = preprocessed_audio.reshape(preprocessed_audio.shape[0], preprocessed_audio.shape[2])
                     x = preprocessed_audio.to(device)
                     with torch.no_grad():
