@@ -1,10 +1,10 @@
 #!/bin/bash
 #
-# Script CORRETTO FINALMENTE. Risolve l'errore di timing di Singularity garantendo che
-# il file dei pesi esista sull'HOST prima del mount.
+# Script CORRETTO FINALMENTE. Forzatura della sincronizzazione del filesystem 
+# per risolvere i problemi di I/O consistency su Scratch.
 
 # ----------------------------------------------------------------------
-# ⚠️ CONFIGURAZIONE NECESSARIA (Adottata dal tuo script funzionante)
+# ⚠️ CONFIGURAZIONE NECESSARIA 
 # ----------------------------------------------------------------------
 # Forza la variabile USER.
 USER="lpilegg1" 
@@ -26,7 +26,7 @@ echo "--- 🛠️ Preparazione Dati Temporanei su Scratch ($SCRATCH_TEMP_DIR) --
 
 # 1.1. Creazione della cartella di lavoro su Scratch
 if ! mkdir -p "$TEMP_DIR"; then
-    echo "❌ ERRORE CRITICO: Impossibile creare la directory temporanea su Scratch: $TEMP_DIR. Controlla i permessi."
+    echo "❌ ERRORE CRITICO: Impossibile creare la directory temporanea su Scratch: $TEMP_DIR."
     exit 1
 fi
 
@@ -39,27 +39,28 @@ if ! cp "$CLAP_SCRATCH_WEIGHTS" "$CLAP_LOCAL_WEIGHTS"; then
     exit 1
 fi
 
-# 🎯 DIAGNOSTICA DI SICUREZZA AGGIUNTA
-# Verifica che il file dei pesi esista sull'host prima di lanciare Singularity.
+# 🎯 SINCERAMENTO FORZATO E PAUSA (CRUCIALE PER FILESYSTEM DI RETE)
+echo "Forzatura sincronizzazione filesystem (sync + sleep 2)..."
+sync
+sleep 2
+
+# 1.3. Diagnostica finale su HOST
 if [ ! -f "$CLAP_LOCAL_WEIGHTS" ]; then
-    echo "❌ DIAGNOSTICA FINALE: Il file dei pesi ($CLAP_LOCAL_WEIGHTS) NON ESISTE SULL'HOST dopo la copia. La copia è fallita."
+    echo "❌ DIAGNOSTICA FINALE: Il file dei pesi ($CLAP_LOCAL_WEIGHTS) NON ESISTE SULL'HOST anche dopo la sincronizzazione. La copia è fallita."
     rm -rf "$SCRATCH_TEMP_DIR"
     exit 1
 fi
+
 
 # --- 2. CONFIGURAZIONE ESECUTIVA (Variabili d'Ambiente) ---
 
 echo "--- ⚙️ Configurazione Ambiente di Esecuzione ---"
 
-# Il percorso dei pesi CLAP DEVE essere il PERCORSO INTERNO AL CONTAINER.
 export LOCAL_CLAP_WEIGHTS_PATH="$CONTAINER_WORK_DIR/CLAP_weights_2023.pth"
-# Percorso per l'encoder testuale (preso dall'interno del container)
 export CLAP_TEXT_ENCODER_PATH="/usr/local/clap_cache/tokenizer_model/" 
-# Variabile NODE_TEMP_BASE_DIR per coerenza
 export NODE_TEMP_BASE_DIR="$CONTAINER_SCRATCH_BASE/dataSEC" 
 
 # --- 3. CREAZIONE DELLO SCRIP PYTHON TEMPORANEO (Minimale) ---
-# Crea il file nella directory corrente (montata come /app)
 cat << EOF > "$TEMP_SCRIPT_NAME"
 import sys
 import os
@@ -108,7 +109,6 @@ try:
         print("❌ FALLIMENTO: Parametri Mel Spectrogram non trovati sull'encoder CLAP.")
 
 except Exception as e:
-    # Stampa l'errore di inizializzazione
     print(f"❌ ERRORE CRITICO DURANTE L'INIZIALIZZAZIONE: {e}")
 
 # --------------------------------------------------------------------
@@ -118,7 +118,7 @@ EOF
 
 echo "--- 🔍 Esecuzione Script Ispezione Parametri CLAP ---"
 
-# Lancio dello script da /app/clap_inspector_script.py (Path corretto)
+# Lancio dello script da /app/clap_inspector_script.py
 singularity exec \
     --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" \
     --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" \
@@ -129,8 +129,6 @@ singularity exec \
 
 # --- 5. PULIZIA ---
 echo "Pulizia script e directory temporanea su Scratch..."
-# Rimuove lo script Python dalla directory corrente
 rm -f "$TEMP_SCRIPT_NAME"
-# Rimuove tutta la directory temporanea su Scratch
 rm -rf "$SCRATCH_TEMP_DIR"
 echo "Esecuzione completata."
