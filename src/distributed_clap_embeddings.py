@@ -227,10 +227,9 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                     S_db = librosa.power_to_db(S_mel, ref=1.0) 
 
                     # 3. Formatta come Tensor [1, 1, H, W] per l'encoder CLAP
-                    S_db_tensor = torch.tensor(S_db, dtype=torch.float32)
-                    preprocessed_audio = S_db_tensor.unsqueeze(0).unsqueeze(0).to(device)
-                    print(preprocessed_audio.shape)
-                    preprocessed_audio = preprocessed_audio.reshape(preprocessed_audio.shape[0], preprocessed_audio.shape[2])
+                    preprocessed_audio = torch.tensor(S_db, dtype=torch.float32)
+                    # preprocessed_audio = S_db_tensor.unsqueeze(0).unsqueeze(0).to(device)
+                    # preprocessed_audio = preprocessed_audio.reshape(preprocessed_audio.shape[0], preprocessed_audio.shape[2])
                     x = preprocessed_audio.to(device)
                     with torch.no_grad():
                         embedding = audio_embedding(x)[0][0]
