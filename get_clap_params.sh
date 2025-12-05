@@ -1,7 +1,7 @@
 #!/bin/bash
 #
-# Script CORRETTO DEFINITIVAMENTE. Risolve l'errore di Singularity montando la directory 
-# Scratch solo dopo averla creata.
+# Script CORRETTO FINALMENTE. Risolve l'errore di timing di Singularity garantendo che
+# la directory Scratch esista prima del mount.
 
 # ----------------------------------------------------------------------
 # ⚠️ CONFIGURAZIONE NECESSARIA (Adottata da test_get_clap_embeddings_local.sh)
@@ -13,7 +13,6 @@ CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.c
 
 # Definisce la directory di base TEMPORANEA sul tuo SCRATCH permanente.
 SCRATCH_TEMP_DIR="/leonardo_scratch/large/userexternal/$USER/tmp_data_pipeline_$$"
-# 🎯 CORREZIONE CHIAVE: DEFINIZIONE TEMPESTIVA DI TEMP_DIR
 TEMP_DIR="$SCRATCH_TEMP_DIR/work_dir" 
 
 # Percorsi interni al container.
@@ -25,12 +24,29 @@ TEMP_SCRIPT_NAME="clap_inspector_script.py"
 echo "--- 🛠️ Preparazione Dati Temporanei su Scratch ($SCRATCH_TEMP_DIR) ---"
 
 # 1.1. Creazione della cartella di lavoro su Scratch
-mkdir -p "$TEMP_DIR" # <-- Ora TEMP_DIR è definito e punta al percorso completo
+# Utilizziamo un controllo di errore esplicito.
+if ! mkdir -p "$TEMP_DIR"; then
+    echo "❌ ERRORE CRITICO: Impossibile creare la directory temporanea su Scratch: $TEMP_DIR. Controlla i permessi o lo spazio."
+    exit 1
+fi
 
 # 1.2. Copia dei pesi CLAP nella cartella di lavoro su Scratch
 echo "Copia dei pesi CLAP su Scratch temporanea ($TEMP_DIR)..."
 CLAP_LOCAL_WEIGHTS="$TEMP_DIR/CLAP_weights_2023.pth"
-cp "$CLAP_SCRATCH_WEIGHTS" "$CLAP_LOCAL_WEIGHTS" 
+if ! cp "$CLAP_SCRATCH_WEIGHTS" "$CLAP_LOCAL_WEIGHTS"; then
+    echo "❌ ERRORE CRITICO: Impossibile copiare i pesi da $CLAP_SCRATCH_WEIGHTS a $CLAP_LOCAL_WEIGHTS."
+    rm -rf "$SCRATCH_TEMP_DIR"
+    exit 1
+fi
+
+# 🎯 DIAGNOSTICA DI SICUREZZA
+# Verifichiamo che la directory esista per la shell ESATTAMENTE prima del mount.
+if [ ! -d "$TEMP_DIR" ]; then
+    echo "❌ DIAGNOSTICA CRITICA: La directory mount source ($TEMP_DIR) non è visibile subito dopo la creazione. Problema di consistenza del File System (Scratch)."
+    rm -rf "$SCRATCH_TEMP_DIR"
+    exit 1
+fi
+
 
 # --- 2. CONFIGURAZIONE ESECUTIVA (Variabili d'Ambiente) ---
 
@@ -93,6 +109,7 @@ try:
         print("❌ FALLIMENTO: Parametri Mel Spectrogram non trovati sull'encoder CLAP.")
 
 except Exception as e:
+    # Stampa l'errore di inizializzazione
     print(f"❌ ERRORE CRITICO DURANTE L'INIZIALIZZAZIONE: {e}")
 
 # --------------------------------------------------------------------
@@ -102,7 +119,7 @@ EOF
 
 echo "--- 🔍 Esecuzione Script Ispezione Parametri CLAP ---"
 
-# Lancio dello script da /app/clap_inspector_script.py
+# Lancio dello script da /app/clap_inspector_script.py (Path corretto)
 singularity exec \
     --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" \
     --bind "$(pwd)":/app \
