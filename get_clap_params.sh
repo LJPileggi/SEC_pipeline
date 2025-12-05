@@ -22,7 +22,7 @@ from src.models import CLAP_initializer
 # LOGICA DI ISPEZIONE
 # --------------------------------------------------------------------
 try:
-    if len(sys.argv) < 3:
+    if len(sys.argv) < 2:
         print("ERRORE: Argomenti mancanti.")
         sys.exit(1)
         
