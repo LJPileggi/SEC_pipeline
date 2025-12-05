@@ -11,7 +11,7 @@ SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/cl
 CLAP_WEIGHTS_PATH="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
 CONFIG_FILE="config0.yaml" 
 TEMP_SCRIPT_NAME="simple_clap_inspect_$$.py"
-TEMP_PYTHON_SCRIPT="./$TEMP_PYTHON_SCRIPT_NAME"
+TEMP_PYTHON_SCRIPT="$TEMP_PYTHON_SCRIPT_NAME"
 
 # --- 2. CREAZIONE DELLO SCRIP PYTHON TEMPORANEO ---
 # Codice più semplice possibile.
