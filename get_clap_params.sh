@@ -1,6 +1,7 @@
 #!/bin/bash
 #
-# Script CORRETTO DEFINITIVAMENTE. Corregge l'errore di path nello script Python.
+# Script CORRETTO DEFINITIVAMENTE. Risolve l'errore di Singularity montando la directory 
+# Scratch solo dopo averla creata.
 
 # ----------------------------------------------------------------------
 # ⚠️ CONFIGURAZIONE NECESSARIA (Adottata da test_get_clap_embeddings_local.sh)
@@ -12,6 +13,9 @@ CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.c
 
 # Definisce la directory di base TEMPORANEA sul tuo SCRATCH permanente.
 SCRATCH_TEMP_DIR="/leonardo_scratch/large/userexternal/$USER/tmp_data_pipeline_$$"
+# 🎯 CORREZIONE CHIAVE: DEFINIZIONE TEMPESTIVA DI TEMP_DIR
+TEMP_DIR="$SCRATCH_TEMP_DIR/work_dir" 
+
 # Percorsi interni al container.
 CONTAINER_WORK_DIR="/app/temp_work"
 TEMP_SCRIPT_NAME="clap_inspector_script.py"
@@ -21,8 +25,7 @@ TEMP_SCRIPT_NAME="clap_inspector_script.py"
 echo "--- 🛠️ Preparazione Dati Temporanei su Scratch ($SCRATCH_TEMP_DIR) ---"
 
 # 1.1. Creazione della cartella di lavoro su Scratch
-mkdir -p "$TEMP_DIR" 
-TEMP_DIR="$SCRATCH_TEMP_DIR/work_dir"
+mkdir -p "$TEMP_DIR" # <-- Ora TEMP_DIR è definito e punta al percorso completo
 
 # 1.2. Copia dei pesi CLAP nella cartella di lavoro su Scratch
 echo "Copia dei pesi CLAP su Scratch temporanea ($TEMP_DIR)..."
@@ -40,7 +43,7 @@ export CLAP_TEXT_ENCODER_PATH="/usr/local/clap_cache/tokenizer_model/"
 
 
 # --- 3. CREAZIONE DELLO SCRIP PYTHON TEMPORANEO (Minimale) ---
-# Crea il file nella directory corrente ($TEMP_SCRIPT_NAME è solo il nome file)
+# Crea il file nella directory corrente (montata come /app)
 cat << EOF > "$TEMP_SCRIPT_NAME"
 import sys
 import os
@@ -50,7 +53,6 @@ import torch
 sys.path.append(os.path.join(os.getcwd(), 'src')) 
 from models import CLAP_initializer 
 
-# Disattiva logging non critico
 logging.basicConfig(level=logging.CRITICAL)
 
 # --------------------------------------------------------------------
@@ -100,7 +102,7 @@ EOF
 
 echo "--- 🔍 Esecuzione Script Ispezione Parametri CLAP ---"
 
-# 🎯 CORREZIONE CHIAVE: Lancio dello script da /app/clap_inspector_script.py
+# Lancio dello script da /app/clap_inspector_script.py
 singularity exec \
     --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" \
     --bind "$(pwd)":/app \
