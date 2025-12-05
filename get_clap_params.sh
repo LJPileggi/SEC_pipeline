@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Script CORRETTO FINALMENTE. Forza la CWD a /app per risolvere l'errore di percorso.
+# Script CORRETTO FINALMENTE. Forza la CWD a /app con --pwd /app per risolvere l'errore di percorso.
 
 # ----------------------------------------------------------------------
 # ⚠️ CONFIGURAZIONE NECESSARIA (Verifica i percorsi)
@@ -25,26 +25,28 @@ from src.utils import get_config_from_yaml
 # --------------------------------------------------------------------
 try:
     if len(sys.argv) < 3:
+        print("ERRORE: Argomenti mancanti.")
         sys.exit(1)
         
     CLAP_PATH = sys.argv[1]
     CONFIG_NAME = sys.argv[2]
     
-    # 🎯 CORREZIONE CHIAVE: Cambia la CWD alla radice del progetto montato
-    # Questo assicura che get_config_from_yaml trovi 'configs/config0.yaml'
-    os.chdir("/app")
+    # Stampa di debug per verificare la CWD
+    print(f"CWD attesa (dovrebbe essere /app): {os.getcwd()}")
+    print(f"Percorso config cercato: {os.path.join('configs', CONFIG_NAME)}")
 
     # 1. Caricamento della configurazione e del modello
     config = get_config_from_yaml(CONFIG_NAME)
     
     # Check di sicurezza per il config nullo (che genera l'errore precedente)
     if config is None or not isinstance(config, dict) or not config:
-        print("❌ ERRORE CRITICO: Configurazione nulla dopo il tentativo di correzione CWD.")
+        # Se siamo qui, il file configs/config0.yaml non esiste o non è leggibile
+        print("❌ ERRORE CRITICO: Configurazione nulla. Il file configs/config0.yaml non è accessibile dalla CWD.")
         sys.exit(1)
 
     # 2. Inizializzazione del modello (firma a 2 argomenti)
     clap_model, audio_embedding, _, _, _, sr = CLAP_initializer(
-        CLAP_PATH, config
+        'cpu', False
     )
 
     # 3. Ispezione dell'encoder audio
@@ -82,14 +84,16 @@ except Exception as e:
 # --------------------------------------------------------------------
 EOF
 
-# --- 3. ESECUZIONE DEL CONTAINER ---
+# --- 3. ESECUZIONE DEL CONTAINER (LA CORREZIONE È QUI) ---
 
 echo "--- 🔍 Esecuzione Script Ispezione Parametri CLAP ---"
 
+# 🎯 CORREZIONE: Uso di --pwd /app per forzare la CWD all'interno del container
 singularity exec \
     --bind "$(pwd)":/app \
+    --pwd /app \
     "$SIF_FILE" \
-    python3 /app/"$TEMP_PYTHON_SCRIPT" "$CLAP_WEIGHTS_PATH" "$CONFIG_FILE"
+    python3 "$TEMP_PYTHON_SCRIPT" "$CLAP_WEIGHTS_PATH" "$CONFIG_FILE"
 
 # --- 4. PULIZIA ---
 echo "Pulizia script temporaneo..."
