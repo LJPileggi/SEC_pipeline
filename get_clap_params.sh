@@ -16,6 +16,8 @@ TEMP_SCRIPT_NAME="clap_inspector_$$.py"
 cat << EOF > "$TEMP_SCRIPT_NAME"
 import sys
 import os
+import logging
+import traceback
 from src.models import CLAP_initializer 
 
 # --------------------------------------------------------------------
@@ -63,6 +65,7 @@ try:
         print("❌ FALLIMENTO: Parametri Mel Spectrogram non trovati sull'encoder CLAP.")
 
 except Exception as e:
+    logging.error(f"{traceback.format_exc()}")
     print(f"❌ ERRORE CRITICO DURANTE L'INIZIALIZZAZIONE: {e}")
 
 # --------------------------------------------------------------------
