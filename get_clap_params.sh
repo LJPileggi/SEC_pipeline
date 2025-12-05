@@ -17,6 +17,7 @@ TEMP_SCRIPT_NAME="clap_inspector_$$.py"
 cat << EOF > "$TEMP_SCRIPT_NAME"
 import sys
 import os
+sys.path.append('.')
 from src.models import CLAP_initializer 
 from src.utils import get_config_from_yaml 
 
@@ -41,7 +42,7 @@ try:
 
     # 2. Inizializzazione del modello (firma a 2 argomenti)
     clap_model, audio_embedding, _, _, _, sr = CLAP_initializer(
-        CLAP_PATH, config
+        'cpu', False
     )
 
     # 3. Ispezione dell'encoder audio
