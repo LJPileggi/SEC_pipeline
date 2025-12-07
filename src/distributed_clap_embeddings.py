@@ -200,32 +200,16 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                     spec_n_o = spectrogram_n_octaveband_generator(new_audio, sr, integration_seconds=0.1,
                                                     n_octave=n_octave, center_freqs=center_freqs, ref=ref)
 
+                    x = torch.tensor(new_audio, dtype=torch.float32).to(device)
+                    x = x.unsqueeze(0).unsqueeze(0)
+
+                    with torch.no_grad():
+                       embedding = audio_embedding(x)[0][0]
+
                     # preprocessed_audio = clap_model.preprocess_audio([new_audio])
                     # ----------------------------------------------------------------------------------------
                     # PATCH FINALE: Calcolo Spettrogramma Log-Mel con Librosa (Valori Fissi CLAP)
                     # ----------------------------------------------------------------------------------------
-
-                    # PARAMETRI UFFICIALI DEL MODELLO CLAP
-                    N_FFT = 1024
-                    HOP_LENGTH = 480
-                    N_MELS = 64
-                    # La Frequenza di campionamento (sr) è 48000 Hz, ma devi usare il 'sr' 
-                    # che hai già nel tuo loop (presumo sia 48000 o 44100 a seconda del tuo audio). 
-                    # Se il tuo audio è già risampolato a 48kHz, usa quel valore.
-
-                    # 1. Calcola lo spettrogramma Mel di potenza (in-memory)
-                    S_mel = librosa.feature.melspectrogram(
-                        y=new_audio, # L'audio già caricato e risampolato
-                        sr=sr,       # Usa il Sample Rate corretto (dovrebbe essere 48000)
-                        n_fft=N_FFT, 
-                        hop_length=HOP_LENGTH, 
-                        n_mels=N_MELS
-                    )
-                    S_db = librosa.power_to_db(S_mel, ref=ref)
-                    S_db_tensor = torch.tensor(S_db, dtype=torch.float32)
-                    # Devi ripristinare i due unsqueeze (Batch e Canale)
-                    print(S_db_tensor.shape)
-                    preprocessed_audio = S_db_tensor.unsqueeze(0).unsqueeze(0).to(device) # -> [1, 1, 64, 218]
 
                     # Prova a chiamare l'encoder più in profondità per saltare la pre-elaborazione automatica
                     # try:
@@ -241,22 +225,6 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                     # with torch.no_grad():
                     #    embedding = audio_embedding(preprocessed_audio)[0][0]
 
-                    # CON QUESTO TENTATIVO (Metodo comune in HTSAT/PANN):
-                    try:
-                        x = audio_embedding.forward_mel(preprocessed_audio)
-                        print(f"DEBUG: Forma del tensore in input a audio_embedding: {preprocessed_audio.shape}")
-                        embedding = audio_embedding(preprocessed_audio.float())[0][0]
-
-                    except AttributeError:
-                        # Se l'accesso è più diretto (cioè se audio_embedding è già l'HTSAT):
-                        # embedding = audio_embedding.forward_mel(preprocessed_audio)
-    
-                        # Dato che l'errore è un NotImplementedError, la funzione forward_mel potrebbe non esistere.
-                        # L'unica cosa che possiamo fare è *riprovare* il tuo codice originale con i due unsqueeze,
-                        # assicurandoci che il tensore sia 4D.
-    
-                        print("❌ ERRORE CRITICO: La struttura interna del modello CLAP (audio_embedding) non permette di saltare il pre-processing.")
-                        print("Devi usare l'audio grezzo, oppure trovare la funzione interna corretta (es. forward_mel).")
 
                     split_emb_dataset_manager.add_to_data_buffer(embedding, spec_n_o, emb_pkey,
                                 metadata['track_name'], class_to_process, metadata['subclass'])
