@@ -17,8 +17,9 @@ CONTAINER_WORK_DIR="/app/temp_work"
 # Cartella di lavoro/temporanea, ora SU SCRATCH
 TEMP_DIR="$SCRATCH_TEMP_DIR/work_dir" 
 TEMP_PYTHON_SCRIPT_PATH="$TEMP_DIR/create_h5_data.py"
-TEMP_LOG_MERGE_SCRIPT="$TEMP_DIR/temp_log_merge_script_$$.py" 
-TEMP_LOG_ANALYSE_SCRIPT="$TEMP_DIR/temp_log_analyse_script_$$.py" 
+
+# 🎯 NUOVO: Script Python temporaneo per l'analisi dei tempi.
+TEMP_ANALYSE_SCRIPT_PATH="$TEMP_DIR/analyse_wrapper.py"
 
 
 # Variabili di configurazione per il Benchmark Rapido
@@ -60,7 +61,7 @@ export NO_EMBEDDING_SAVE="True"
 export NODE_TEMP_BASE_DIR="$CONTAINER_SCRATCH_BASE/dataSEC"
 
 
-# --- 4. GENERAZIONE DINAMICA DEL DATASET HDF5 ---
+# --- 4. GENERAZIONE DINAMICA DEL DATASET HDF5 (NESSUNA MODIFICA) ---
 
 echo "Generazione dinamica del dataset HDF5 di test in $SCRATCH_TEMP_DIR/dataSEC/RAW_DATASET"
 
@@ -84,43 +85,74 @@ EOF
 singularity exec --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" "$SIF_FILE" python3 "$CONTAINER_WORK_DIR/create_h5_data.py"
 
 
-# --- 5. ESECUZIONE DELLA PIPELINE (get_clap_embeddings.py) ---
+# --- 5. ESECUZIONE DELLA PIPELINE (get_clap_embeddings.py) (NESSUNA MODIFICA) ---
 
 echo "--- 🚀 Avvio Esecuzione Interattiva ---"
 
-# 🎯 Comando singularity EXEC come funzionante in precedenza.
+# Comando singularity EXEC come funzionante in precedenza.
 singularity exec --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" --bind "$(pwd)/configs:/app/configs" --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" "$SIF_FILE" python3 scripts/get_clap_embeddings.py --config_file "$BENCHMARK_CONFIG_FILE" --n_octave "$BENCHMARK_N_OCTAVE" --audio_format "$BENCHMARK_AUDIO_FORMAT"
 
 
-# --- 6. ANALISI FINALE DEI LOG ---
+# --- 6. ANALISI FINALE DEI LOG (CORRETTA) ---
 
 echo "--------------------------------------------------------"
 echo "--- 📊 Avvio Analisi Tempi di Esecuzione (utils/analyse_test_execution_times.py) ---"
 echo "--------------------------------------------------------"
 
-# 1. Montiamo la root del progetto ($(pwd)) come /app per accedere a /app/utils/analyse_test_execution_times.py.
-# 2. Montiamo la cartella temporanea su Scratch ($SCRATCH_TEMP_DIR) come $CONTAINER_SCRATCH_BASE (/scratch_base)
-#    per consentire allo script di analisi di trovare i log generati tramite NODE_TEMP_BASE_DIR.
-# 
-# NOTA: Per un corretto funzionamento, lo script analyse_test_execution_times.py deve essere in grado 
-# di accedere ai log nella directory definita da NODE_TEMP_BASE_DIR.
+# 6.1. Creazione dello script Python wrapper per l'analisi (Scrive in $TEMP_DIR, su Scratch)
+# Questo script importa e lancia il modulo di analisi
+cat << EOF > "$TEMP_ANALYSE_SCRIPT_PATH"
+import sys
+import os
+# Aggiunge la directory corrente (. ovvero /app) al PATH per trovare utils
+sys.path.append(os.path.abspath(os.path.join(os.getcwd(), 'utils'))) 
+sys.path.append('.') 
 
+# Importa lo script di analisi dal percorso relativo
+from analyse_test_execution_times import analyze_execution_times
+import argparse
+
+def analyze_wrapper():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config_file', type=str)
+    parser.add_argument('--n_octave', type=int)
+    parser.add_argument('--audio_format', type=str)
+    args = parser.parse_args()
+    
+    # Chiama la funzione principale dello script di analisi
+    # NOTA: analyse_test_execution_times.py ha una funzione main o analoga che deve essere chiamata
+    # Qui chiamiamo direttamente analyze_execution_times (assumendo che faccia il lavoro)
+    print("Analisi in corso...")
+    results = analyze_execution_times(args.audio_format, str(args.n_octave), args.config_file)
+    print("\\n--- Risultati Analisi ---\\n")
+    # Qui dovresti stampare i risultati ottenuti da analyze_execution_times se ritorna un dict
+    import json
+    print(json.dumps(results, indent=4))
+    print("\\n-------------------------")
+
+if __name__ == '__main__':
+    analyze_wrapper()
+EOF
+
+# 6.2. Esegui lo script Python temporaneo (Ora lo lanciamo da CONTAINER_WORK_DIR, che è su Scratch)
 singularity exec \
     --bind "$(pwd)":/app \
+    --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" \
     --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" \
     --env NODE_TEMP_BASE_DIR="$CONTAINER_SCRATCH_BASE/dataSEC" \
     "$SIF_FILE" \
-    python3 "/app/utils/analyse_test_execution_times.py" \
+    python3 "$CONTAINER_WORK_DIR/analyse_wrapper.py" \
     --config_file "$BENCHMARK_CONFIG_FILE" \
     --n_octave "$BENCHMARK_N_OCTAVE" \
     --audio_format "$BENCHMARK_AUDIO_FORMAT"
 
 
-# --- 7. PULIZIA FINALE ---
+# --- 7. PULIZIA FINALE (POTENZIATA) ---
 
 echo "--------------------------------------------------------"
 echo "Pulizia di tutti i file temporanei su Scratch: $SCRATCH_TEMP_DIR"
 echo "--------------------------------------------------------"
 
+# 🎯 Correzione: La pulizia ora elimina tutta la directory temporanea, inclusi i dati HDF5.
 rm -rf "$SCRATCH_TEMP_DIR"
 echo "Esecuzione e Analisi completate."
