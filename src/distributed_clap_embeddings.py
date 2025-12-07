@@ -243,7 +243,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
 
                     # CON QUESTO TENTATIVO (Metodo comune in HTSAT/PANN):
                     try:
-                        x = audio_embedding.base.htsat.forward_mel(preprocessed_audio)
+                        x = audio_embedding.forward_mel(preprocessed_audio)
                         print(f"DEBUG: Forma del tensore in input a audio_embedding: {preprocessed_audio.shape}")
                         embedding = audio_embedding(preprocessed_audio.float())[0][0]
 
