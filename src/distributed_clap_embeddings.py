@@ -221,21 +221,21 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                         hop_length=HOP_LENGTH, 
                         n_mels=N_MELS
                     )
-                    S_db = librosa.power_to_db(S_mel, ref=1.0)
+                    S_db = librosa.power_to_db(S_mel, ref=ref)
                     S_db_tensor = torch.tensor(S_db, dtype=torch.float32)
                     # Devi ripristinare i due unsqueeze (Batch e Canale)
                     preprocessed_audio = S_db_tensor.unsqueeze(0).unsqueeze(0).to(device) # -> [1, 1, 64, 218]
 
                     # Prova a chiamare l'encoder più in profondità per saltare la pre-elaborazione automatica
-                    try:
-                        x = preprocessed_audio # Il tensore 4D corretto
-                        embedding = audio_embedding(x)[0][0] # <--- QUI STA IL PROBLEMA
+                    # try:
+                    #     x = preprocessed_audio
+                    #     embedding = audio_embedding(x)[0][0]
     
-                    except AttributeError:
+                    # except AttributeError:
                         # Se non è possibile accedere direttamente, devi fare un'ulteriore ispezione
-                        print("Tentativo di chiamata diretta fallito. Riprova con la chiamata originale.")
+                    #     print("Tentativo di chiamata diretta fallito. Riprova con la chiamata originale.")
 
-                    preprocessed_audio = S_db_tensor.unsqueeze(0).unsqueeze(0).to(device)
+                    # preprocessed_audio = S_db_tensor.unsqueeze(0).unsqueeze(0).to(device)
 
                     with torch.no_grad():
                         embedding = audio_embedding(preprocessed_audio)[0][0]
