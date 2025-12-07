@@ -52,7 +52,7 @@ export NO_EMBEDDING_SAVE="True"
 export NODE_TEMP_BASE_DIR="$CONTAINER_SCRATCH_BASE/dataSEC"
 
 
-# --- 4. GENERAZIONE DINAMICA DEL DATASET HDF5 (INVARIATO) ---
+# --- 4. GENERAZIONE DINAMICA DEL DATASET HDF5 (INVARIANTE) ---
 
 echo "Generazione dinamica del dataset HDF5 di test in $SCRATCH_TEMP_DIR/dataSEC/RAW_DATASET"
 
@@ -60,11 +60,13 @@ echo "Generazione dinamica del dataset HDF5 di test in $SCRATCH_TEMP_DIR/dataSEC
 cat << EOF > "$TEMP_PYTHON_SCRIPT_PATH"
 import sys
 import os
+# MODELLO COERENTE: sys.path.append('.')
 sys.path.append('.')
 
-# Questo import funziona perché la root del progetto è nel PATH tramite bind.
+# Path COERENTE per l'importazione dei moduli di utility/test
 from tests.utils.create_fake_raw_audio_h5 import create_fake_raw_audio_h5 
 
+# Path interno al container per il dataset RAW. Legge NODE_TEMP_BASE_DIR.
 TARGET_DIR = os.path.join(os.getenv('NODE_TEMP_BASE_DIR'), 'RAW_DATASET') 
 
 if __name__ == '__main__':
@@ -72,43 +74,37 @@ if __name__ == '__main__':
     create_fake_raw_audio_h5(TARGET_DIR)
 EOF
 
-# 4.2. Esegui lo script Python temporaneo.
+# 4.2. Esegui lo script Python temporaneo. BIND COERENTE.
 singularity exec --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" "$SIF_FILE" python3 "$CONTAINER_WORK_DIR/create_h5_data.py"
 
 
-# --- 5. ESECUZIONE DELLA PIPELINE (get_clap_embeddings.py) (INVARIATO) ---
+# --- 5. ESECUZIONE DELLA PIPELINE (get_clap_embeddings.py) (INVARIANTE) ---
 
-echo "--- 🚀 Avvio Esecuzione Interattiva ---"
+echo "--- 🚀 Avvio Esecuzione Interattiva ---\n"
 
 singularity exec --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" --bind "$(pwd)/configs:/app/configs" --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" "$SIF_FILE" python3 scripts/get_clap_embeddings.py --config_file "$BENCHMARK_CONFIG_FILE" --n_octave "$BENCHMARK_N_OCTAVE" --audio_format "$BENCHMARK_AUDIO_FORMAT"
 
 
-# --- 6. ANALISI FINALE DEI LOG (CORRETTA IMPLEMENTAZIONE DEL MAIN WRAPPER) ---
+# --- 6. ANALISI FINALE DEI LOG (CORRETTA COERENZA DEI PATH) ---
 
 echo "--------------------------------------------------------"
 echo "--- 📊 Avvio Analisi Tempi di Esecuzione (analysis_main_wrapper.py) ---"
 echo "--------------------------------------------------------"
 
-# 6.1. Creazione dello script Python wrapper, che funge da main per le funzioni di analisi
+# 6.1. Creazione dello script Python wrapper
 cat << EOF > "$TEMP_ANALYSE_WRAPPER_PATH"
 import os
 import sys
 import argparse
-import json
 
-# Aggiunge la root del progetto (/app) al path per importare utils/
-sys.path.append('/app') 
+# 🎯 MODELLO COERENTE: sys.path.append('.')
+sys.path.append('.') 
 
-# Importazione del modulo
-try:
-    from utils import analyse_test_execution_times
-except ImportError:
-    # Questo fallback è poco probabile dato il bind, ma è una sicurezza
-    sys.path.append('/app/utils') 
-    import analyse_test_execution_times
+# Importiamo il modulo completo con il path COERENTE: tests.utils.nome_file come richiesto
+import tests.utils.analyse_test_execution_times as analysis_module
 
-# 🎯 Reindirizziamo la cartella di base per i log al percorso su Scratch nel container
-analyse_test_execution_times.config_test_folder = os.path.join(os.getenv('NODE_TEMP_BASE_DIR')) 
+# Reindirizziamo la variabile globale nel modulo importato per puntare alla cartella temporanea
+analysis_module.config_test_folder = os.path.join(os.getenv('NODE_TEMP_BASE_DIR')) 
 
 
 def main():
@@ -120,16 +116,16 @@ def main():
     
     print("Avvio analisi dei tempi di esecuzione...")
     
-    # 🎯 1. Chiamata a analyze_execution_times per ottenere i risultati
-    results = analyse_test_execution_times.analyze_execution_times(
+    # 1. Chiamata a analyze_execution_times (usando il modulo importato)
+    results = analysis_module.analyze_execution_times(
         audio_format=args.audio_format, 
         n_octave=args.n_octave, 
         config_file=args.config_file
     )
     
-    # 🎯 2. Chiamata a print_analysis_results per stampare i risultati
+    # 2. Chiamata a print_analysis_results (usando il modulo importato)
     print("\n--- Risultati Analisi ---\n")
-    analyse_test_execution_times.print_analysis_results(results)
+    analysis_module.print_analysis_results(results)
     print("\n-------------------------\n")
 
 
@@ -137,9 +133,8 @@ if __name__ == '__main__':
     main()
 EOF
 
-# 6.2. Esegui lo script Python wrapper.
+# 6.2. Esegui lo script Python wrapper. BIND COERENTE.
 singularity exec \
-    --bind "$(pwd)":/app \
     --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" \
     --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" \
     --env NODE_TEMP_BASE_DIR="$CONTAINER_SCRATCH_BASE/dataSEC" \
