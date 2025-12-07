@@ -7,7 +7,7 @@
 SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/clap_pipeline.sif"
 CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
 
-# 🎯 NUOVO: Definiamo la directory di base TEMPORANEA sul tuo SCRATCH permanente.
+# 🎯 Definiamo la directory di base TEMPORANEA sul tuo SCRATCH permanente.
 SCRATCH_TEMP_DIR="/leonardo_scratch/large/userexternal/$USER/tmp_data_pipeline_$$"
 # Questo è il percorso nel container dove monteremo la base Scratch
 CONTAINER_SCRATCH_BASE="/scratch_base" 
@@ -18,8 +18,8 @@ CONTAINER_WORK_DIR="/app/temp_work"
 TEMP_DIR="$SCRATCH_TEMP_DIR/work_dir" 
 TEMP_PYTHON_SCRIPT_PATH="$TEMP_DIR/create_h5_data.py"
 
-# 🎯 NUOVO: Script Python temporaneo per l'analisi dei tempi.
-TEMP_ANALYSE_SCRIPT_PATH="$TEMP_DIR/analyse_wrapper.py"
+# 🎯 Script Python wrapper per l'analisi (il main richiesto)
+TEMP_ANALYSE_WRAPPER_PATH="$TEMP_DIR/analysis_main_wrapper.py"
 
 
 # Variabili di configurazione per il Benchmark Rapido
@@ -33,39 +33,29 @@ BENCHMARK_N_OCTAVE="1"
 echo "--- 🛠️ Preparazione Dati Temporanei su Scratch ($SCRATCH_TEMP_DIR) ---"
 
 # 2.1. Creazione della cartella temporanea e della sua struttura interna
-# Creiamo la struttura necessaria su Scratch
-mkdir -p "$TEMP_DIR" # Cartella di lavoro per script/log
-mkdir -p "$SCRATCH_TEMP_DIR/dataSEC/RAW_DATASET" # Cartella per i dati HDF5
+mkdir -p "$TEMP_DIR" 
+mkdir -p "$SCRATCH_TEMP_DIR/dataSEC/RAW_DATASET" 
 
-# 2.2. Copia dei pesi CLAP (Ora scrivono su $TEMP_DIR, che è su Scratch)
+# 2.2. Copia dei pesi CLAP
 echo "Copia dei pesi CLAP su Scratch temporanea ($TEMP_DIR)..."
 CLAP_LOCAL_WEIGHTS="$TEMP_DIR/CLAP_weights_2023.pth"
-# Questa operazione ora è sicura perché $TEMP_DIR è su Scratch
 cp "$CLAP_SCRATCH_WEIGHTS" "$CLAP_LOCAL_WEIGHTS" 
-
 
 # --- 3. CONFIGURAZIONE ESECUTIVA (Variabili d'Ambiente) ---
 
 echo "--- ⚙️ Configurazione Ambiente di Esecuzione ---"
 
-# Queste variabili d'ambiente sono usate dal tuo models.py:
 export CLAP_TEXT_ENCODER_PATH="/usr/local/clap_cache/tokenizer_model/" 
-
-# Il percorso dei pesi CLAP DEVE essere il PERCORSO INTERNO AL CONTAINER.
 export LOCAL_CLAP_WEIGHTS_PATH="$CONTAINER_WORK_DIR/CLAP_weights_2023.pth"
-
-# Variabile per evitare il salvataggio degli embeddings in un test rapido
 export NO_EMBEDDING_SAVE="True" 
-
-# Reindirizziamo basedir su Scratch
 export NODE_TEMP_BASE_DIR="$CONTAINER_SCRATCH_BASE/dataSEC"
 
 
-# --- 4. GENERAZIONE DINAMICA DEL DATASET HDF5 (NESSUNA MODIFICA) ---
+# --- 4. GENERAZIONE DINAMICA DEL DATASET HDF5 (INVARIATO) ---
 
 echo "Generazione dinamica del dataset HDF5 di test in $SCRATCH_TEMP_DIR/dataSEC/RAW_DATASET"
 
-# 4.1. Creazione dello script Python temporaneo per la generazione (Scrive in $TEMP_DIR, su Scratch)
+# 4.1. Creazione dello script Python temporaneo per la generazione
 cat << EOF > "$TEMP_PYTHON_SCRIPT_PATH"
 import sys
 import os
@@ -73,7 +63,6 @@ sys.path.append('.')
 
 from tests.utils.create_fake_raw_audio_h5 import create_fake_raw_audio_h5 
 
-# Path interno al container per il dataset RAW. Legge NODE_TEMP_BASE_DIR.
 TARGET_DIR = os.path.join(os.getenv('NODE_TEMP_BASE_DIR'), 'RAW_DATASET') 
 
 if __name__ == '__main__':
@@ -81,78 +70,98 @@ if __name__ == '__main__':
     create_fake_raw_audio_h5(TARGET_DIR)
 EOF
 
-# 4.2. Esegui lo script Python temporaneo. Bind mount puliti.
+# 4.2. Esegui lo script Python temporaneo.
 singularity exec --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" "$SIF_FILE" python3 "$CONTAINER_WORK_DIR/create_h5_data.py"
 
 
-# --- 5. ESECUZIONE DELLA PIPELINE (get_clap_embeddings.py) (NESSUNA MODIFICA) ---
+# --- 5. ESECUZIONE DELLA PIPELINE (get_clap_embeddings.py) (INVARIATO) ---
 
 echo "--- 🚀 Avvio Esecuzione Interattiva ---"
 
-# Comando singularity EXEC come funzionante in precedenza.
 singularity exec --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" --bind "$(pwd)/configs:/app/configs" --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" "$SIF_FILE" python3 scripts/get_clap_embeddings.py --config_file "$BENCHMARK_CONFIG_FILE" --n_octave "$BENCHMARK_N_OCTAVE" --audio_format "$BENCHMARK_AUDIO_FORMAT"
 
 
-# --- 6. ANALISI FINALE DEI LOG (CORRETTA) ---
+# --- 6. ANALISI FINALE DEI LOG (CORRETTA IMPLEMENTAZIONE DEL MAIN WRAPPER) ---
 
 echo "--------------------------------------------------------"
-echo "--- 📊 Avvio Analisi Tempi di Esecuzione (utils/analyse_test_execution_times.py) ---"
+echo "--- 📊 Avvio Analisi Tempi di Esecuzione (analysis_main_wrapper.py) ---"
 echo "--------------------------------------------------------"
 
-# 6.1. Creazione dello script Python wrapper per l'analisi (Scrive in $TEMP_DIR, su Scratch)
-# Questo script importa e lancia il modulo di analisi
-cat << EOF > "$TEMP_ANALYSE_SCRIPT_PATH"
-import sys
+# 6.1. Creazione dello script Python wrapper richiesto (Scrive in $TEMP_DIR, su Scratch)
+cat << EOF > "$TEMP_ANALYSE_WRAPPER_PATH"
 import os
-# Aggiunge la directory corrente (. ovvero /app) al PATH per trovare utils
-sys.path.append(os.path.abspath(os.path.join(os.getcwd(), 'utils'))) 
-sys.path.append('.') 
-
-# Importa lo script di analisi dal percorso relativo
-from analyse_test_execution_times import analyze_execution_times
+import sys
 import argparse
+import json
 
-def analyze_wrapper():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--config_file', type=str)
-    parser.add_argument('--n_octave', type=int)
-    parser.add_argument('--audio_format', type=str)
+# 1. Configurazione del PYTHONPATH per importare moduli dalla root del progetto (/app)
+sys.path.append('/app') 
+sys.path.append('/app/utils') 
+
+# 2. Importazione del modulo di analisi
+try:
+    from utils import analyse_test_execution_times
+except ImportError:
+    print("WARNING: Tentativo di fallback per importazione diretta del modulo.")
+    import analyse_test_execution_times
+
+# 3. Sovrascriviamo il percorso di base interno dello script di analisi
+# Puntiamo a /scratch_base/dataSEC che contiene i log
+analyse_test_execution_times.config_test_folder = os.path.join(os.getenv('NODE_TEMP_BASE_DIR')) 
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Wrapper per l\'analisi dei tempi di esecuzione CLAP.')
+    parser.add_argument('--config_file', type=str, required=True)
+    parser.add_argument('--n_octave', type=str, required=True)
+    parser.add_argument('--audio_format', type=str, required=True)
     args = parser.parse_args()
     
-    # Chiama la funzione principale dello script di analisi
-    # NOTA: analyse_test_execution_times.py ha una funzione main o analoga che deve essere chiamata
-    # Qui chiamiamo direttamente analyze_execution_times (assumendo che faccia il lavoro)
-    print("Analisi in corso...")
-    results = analyze_execution_times(args.audio_format, str(args.n_octave), args.config_file)
-    print("\\n--- Risultati Analisi ---\\n")
-    # Qui dovresti stampare i risultati ottenuti da analyze_execution_times se ritorna un dict
-    import json
-    print(json.dumps(results, indent=4))
-    print("\\n-------------------------")
+    print("Avvio analisi dei tempi di esecuzione...")
+    
+    # 🎯 1. Chiamata a analyze_execution_times per ottenere i risultati
+    results = analyse_test_execution_times.analyze_execution_times(
+        audio_format=args.audio_format, 
+        n_octave=args.n_octave, 
+        config_file=args.config_file
+    )
+    
+    # 🎯 2. Chiamata a print_analysis_results per stampare i risultati, come richiesto
+    print("\n--- Risultati Analisi ---\n")
+    try:
+        analyse_test_execution_times.print_analysis_results(results)
+    except AttributeError:
+        # Fallback nel caso in cui la funzione non sia visibile, ma almeno stampiamo il risultato
+        print("ATTENZIONE: print_analysis_results non trovata nel modulo. Stampo il JSON grezzo.")
+        print(json.dumps(results, indent=4))
+
+    print("\n-------------------------\n")
+
 
 if __name__ == '__main__':
-    analyze_wrapper()
+    main()
 EOF
 
-# 6.2. Esegui lo script Python temporaneo (Ora lo lanciamo da CONTAINER_WORK_DIR, che è su Scratch)
+# 6.2. Esegui lo script Python wrapper. Montiamo la root del progetto ($(pwd)) come /app per l'importazione.
 singularity exec \
     --bind "$(pwd)":/app \
     --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" \
     --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" \
     --env NODE_TEMP_BASE_DIR="$CONTAINER_SCRATCH_BASE/dataSEC" \
     "$SIF_FILE" \
-    python3 "$CONTAINER_WORK_DIR/analyse_wrapper.py" \
+    python3 "$CONTAINER_WORK_DIR/analysis_main_wrapper.py" \
     --config_file "$BENCHMARK_CONFIG_FILE" \
     --n_octave "$BENCHMARK_N_OCTAVE" \
     --audio_format "$BENCHMARK_AUDIO_FORMAT"
 
 
-# --- 7. PULIZIA FINALE (POTENZIATA) ---
+# --- 7. PULIZIA FINALE (COMPLETA) ---
 
 echo "--------------------------------------------------------"
 echo "Pulizia di tutti i file temporanei su Scratch: $SCRATCH_TEMP_DIR"
+echo "(Rimuove: Dataset HDF5, Log, Embeddings e Pesi temporanei)"
 echo "--------------------------------------------------------"
 
-# 🎯 Correzione: La pulizia ora elimina tutta la directory temporanea, inclusi i dati HDF5.
+# Elimina ricorsivamente tutta la cartella temporanea, pulendo completamente.
 rm -rf "$SCRATCH_TEMP_DIR"
 echo "Esecuzione e Analisi completate."
