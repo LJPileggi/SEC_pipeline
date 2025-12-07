@@ -200,6 +200,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                     spec_n_o = spectrogram_n_octaveband_generator(new_audio, sr, integration_seconds=0.1,
                                                     n_octave=n_octave, center_freqs=center_freqs, ref=ref)
 
+                    print(new_audio.shape)
                     x = torch.tensor(new_audio, dtype=torch.float32).to(device)
                     x = x.unsqueeze(0).unsqueeze(0)
 
