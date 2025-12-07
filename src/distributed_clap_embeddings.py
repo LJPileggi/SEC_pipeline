@@ -224,6 +224,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                     S_db = librosa.power_to_db(S_mel, ref=ref)
                     S_db_tensor = torch.tensor(S_db, dtype=torch.float32)
                     # Devi ripristinare i due unsqueeze (Batch e Canale)
+                    print(S_db_tensor.shape)
                     preprocessed_audio = S_db_tensor.unsqueeze(0).unsqueeze(0).to(device) # -> [1, 1, 64, 218]
 
                     # Prova a chiamare l'encoder più in profondità per saltare la pre-elaborazione automatica
@@ -237,13 +238,25 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
 
                     # preprocessed_audio = S_db_tensor.unsqueeze(0).unsqueeze(0).to(device)
 
-                    with torch.no_grad():
-                        embedding = audio_embedding(preprocessed_audio)[0][0]
-                    # preprocessed_audio = S_db_tensor.unsqueeze(0).unsqueeze(0).to(device)
-                    # preprocessed_audio = preprocessed_audio.reshape(preprocessed_audio.shape[0], preprocessed_audio.shape[2])
-                    # x = preprocessed_audio.to(device)
                     # with torch.no_grad():
-                    #     embedding = audio_embedding(x)[0][0]
+                    #    embedding = audio_embedding(preprocessed_audio)[0][0]
+
+                    # CON QUESTO TENTATIVO (Metodo comune in HTSAT/PANN):
+                    try:
+                        x = audio_embedding.base.htsat.forward_mel(preprocessed_audio)
+                        print(f"DEBUG: Forma del tensore in input a audio_embedding: {preprocessed_audio.shape}")
+                        embedding = audio_embedding(preprocessed_audio.float())[0][0]
+
+                    except AttributeError:
+                        # Se l'accesso è più diretto (cioè se audio_embedding è già l'HTSAT):
+                        # embedding = audio_embedding.forward_mel(preprocessed_audio)
+    
+                        # Dato che l'errore è un NotImplementedError, la funzione forward_mel potrebbe non esistere.
+                        # L'unica cosa che possiamo fare è *riprovare* il tuo codice originale con i due unsqueeze,
+                        # assicurandoci che il tensore sia 4D.
+    
+                        print("❌ ERRORE CRITICO: La struttura interna del modello CLAP (audio_embedding) non permette di saltare il pre-processing.")
+                        print("Devi usare l'audio grezzo, oppure trovare la funzione interna corretta (es. forward_mel).")
 
                     split_emb_dataset_manager.add_to_data_buffer(embedding, spec_n_o, emb_pkey,
                                 metadata['track_name'], class_to_process, metadata['subclass'])
