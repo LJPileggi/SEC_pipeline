@@ -201,8 +201,8 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                                                     n_octave=n_octave, center_freqs=center_freqs, ref=ref)
 
                     print(new_audio.shape)
-                    x = torch.tensor(new_audio, dtype=torch.float16).to(device)
-                    x = x.unsqueeze(0).unsqueeze(0)
+                    x = torch.tensor(new_audio, dtype=torch.float32).to(device)
+                    x = x.unsqueeze(0)
 
                     with torch.no_grad():
                        embedding = audio_embedding(x)[0][0]
