@@ -41,6 +41,7 @@ echo "Copia dei pesi CLAP su Scratch temporanea ($TEMP_DIR)..."
 CLAP_LOCAL_WEIGHTS="$TEMP_DIR/CLAP_weights_2023.pth"
 cp "$CLAP_SCRATCH_WEIGHTS" "$CLAP_LOCAL_WEIGHTS" 
 
+
 # --- 3. CONFIGURAZIONE ESECUTIVA (Variabili d'Ambiente) ---
 
 echo "--- ⚙️ Configurazione Ambiente di Esecuzione ---"
@@ -61,6 +62,7 @@ import sys
 import os
 sys.path.append('.')
 
+# Questo import funziona perché la root del progetto è nel PATH tramite bind.
 from tests.utils.create_fake_raw_audio_h5 import create_fake_raw_audio_h5 
 
 TARGET_DIR = os.path.join(os.getenv('NODE_TEMP_BASE_DIR'), 'RAW_DATASET') 
@@ -87,26 +89,25 @@ echo "--------------------------------------------------------"
 echo "--- 📊 Avvio Analisi Tempi di Esecuzione (analysis_main_wrapper.py) ---"
 echo "--------------------------------------------------------"
 
-# 6.1. Creazione dello script Python wrapper richiesto (Scrive in $TEMP_DIR, su Scratch)
+# 6.1. Creazione dello script Python wrapper, che funge da main per le funzioni di analisi
 cat << EOF > "$TEMP_ANALYSE_WRAPPER_PATH"
 import os
 import sys
 import argparse
 import json
 
-# 1. Configurazione del PYTHONPATH per importare moduli dalla root del progetto (/app)
+# Aggiunge la root del progetto (/app) al path per importare utils/
 sys.path.append('/app') 
-sys.path.append('/app/utils') 
 
-# 2. Importazione del modulo di analisi
+# Importazione del modulo
 try:
     from utils import analyse_test_execution_times
 except ImportError:
-    print("WARNING: Tentativo di fallback per importazione diretta del modulo.")
+    # Questo fallback è poco probabile dato il bind, ma è una sicurezza
+    sys.path.append('/app/utils') 
     import analyse_test_execution_times
 
-# 3. Sovrascriviamo il percorso di base interno dello script di analisi
-# Puntiamo a /scratch_base/dataSEC che contiene i log
+# 🎯 Reindirizziamo la cartella di base per i log al percorso su Scratch nel container
 analyse_test_execution_times.config_test_folder = os.path.join(os.getenv('NODE_TEMP_BASE_DIR')) 
 
 
@@ -126,15 +127,9 @@ def main():
         config_file=args.config_file
     )
     
-    # 🎯 2. Chiamata a print_analysis_results per stampare i risultati, come richiesto
+    # 🎯 2. Chiamata a print_analysis_results per stampare i risultati
     print("\n--- Risultati Analisi ---\n")
-    try:
-        analyse_test_execution_times.print_analysis_results(results)
-    except AttributeError:
-        # Fallback nel caso in cui la funzione non sia visibile, ma almeno stampiamo il risultato
-        print("ATTENZIONE: print_analysis_results non trovata nel modulo. Stampo il JSON grezzo.")
-        print(json.dumps(results, indent=4))
-
+    analyse_test_execution_times.print_analysis_results(results)
     print("\n-------------------------\n")
 
 
@@ -142,7 +137,7 @@ if __name__ == '__main__':
     main()
 EOF
 
-# 6.2. Esegui lo script Python wrapper. Montiamo la root del progetto ($(pwd)) come /app per l'importazione.
+# 6.2. Esegui lo script Python wrapper.
 singularity exec \
     --bind "$(pwd)":/app \
     --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" \
