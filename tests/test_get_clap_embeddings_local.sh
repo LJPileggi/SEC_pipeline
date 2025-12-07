@@ -81,7 +81,6 @@ if __name__ == '__main__':
 EOF
 
 # 4.2. Esegui lo script Python temporaneo. Bind mount puliti.
-# 🎯 CORREZIONE: Comando singularity EXEC su un'UNICA RIGA per evitare interruzioni.
 singularity exec --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" "$SIF_FILE" python3 "$CONTAINER_WORK_DIR/create_h5_data.py"
 
 
@@ -89,13 +88,32 @@ singularity exec --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" --bind "$SCRATCH_TEMP_DI
 
 echo "--- 🚀 Avvio Esecuzione Interattiva ---"
 
-# 🎯 CORREZIONE: Comando singularity EXEC su un'UNICA RIGA.
+# 🎯 Comando singularity EXEC come funzionante in precedenza.
 singularity exec --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" --bind "$(pwd)/configs:/app/configs" --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" "$SIF_FILE" python3 scripts/get_clap_embeddings.py --config_file "$BENCHMARK_CONFIG_FILE" --n_octave "$BENCHMARK_N_OCTAVE" --audio_format "$BENCHMARK_AUDIO_FORMAT"
 
 
-# --- 6. ANALISI FINALE DEI LOG (DOPO LA MERGE) ---
-# ... (Inserisci qui la sezione 6 se è necessaria. Non ho file di log di merge/analisi, 
-# ma assicurati che anche quel blocco usi la sintassi corretta di Singularity e i percorsi interni) ...
+# --- 6. ANALISI FINALE DEI LOG ---
+
+echo "--------------------------------------------------------"
+echo "--- 📊 Avvio Analisi Tempi di Esecuzione (utils/analyse_test_execution_times.py) ---"
+echo "--------------------------------------------------------"
+
+# 1. Montiamo la root del progetto ($(pwd)) come /app per accedere a /app/utils/analyse_test_execution_times.py.
+# 2. Montiamo la cartella temporanea su Scratch ($SCRATCH_TEMP_DIR) come $CONTAINER_SCRATCH_BASE (/scratch_base)
+#    per consentire allo script di analisi di trovare i log generati tramite NODE_TEMP_BASE_DIR.
+# 
+# NOTA: Per un corretto funzionamento, lo script analyse_test_execution_times.py deve essere in grado 
+# di accedere ai log nella directory definita da NODE_TEMP_BASE_DIR.
+
+singularity exec \
+    --bind "$(pwd)":/app \
+    --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" \
+    --env NODE_TEMP_BASE_DIR="$CONTAINER_SCRATCH_BASE/dataSEC" \
+    "$SIF_FILE" \
+    python3 "/app/utils/analyse_test_execution_times.py" \
+    --config_file "$BENCHMARK_CONFIG_FILE" \
+    --n_octave "$BENCHMARK_N_OCTAVE" \
+    --audio_format "$BENCHMARK_AUDIO_FORMAT"
 
 
 # --- 7. PULIZIA FINALE ---
@@ -105,4 +123,4 @@ echo "Pulizia di tutti i file temporanei su Scratch: $SCRATCH_TEMP_DIR"
 echo "--------------------------------------------------------"
 
 rm -rf "$SCRATCH_TEMP_DIR"
-echo "Pulizia completata."
+echo "Esecuzione e Analisi completate."
