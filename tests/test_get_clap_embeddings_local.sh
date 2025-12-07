@@ -52,7 +52,7 @@ export NO_EMBEDDING_SAVE="True"
 export NODE_TEMP_BASE_DIR="$CONTAINER_SCRATCH_BASE/dataSEC"
 
 
-# --- 4. GENERAZIONE DINAMICA DEL DATASET HDF5 (INVARIANTE) ---
+# --- 4. GENERAZIONE DINAMICA DEL DATASET HDF5 (MODELLO COERENTE) ---
 
 echo "Generazione dinamica del dataset HDF5 di test in $SCRATCH_TEMP_DIR/dataSEC/RAW_DATASET"
 
@@ -63,7 +63,7 @@ import os
 # MODELLO COERENTE: sys.path.append('.')
 sys.path.append('.')
 
-# Path COERENTE per l'importazione dei moduli di utility/test
+# PATH COERENTE: tests.utils.nome_file
 from tests.utils.create_fake_raw_audio_h5 import create_fake_raw_audio_h5 
 
 # Path interno al container per il dataset RAW. Legge NODE_TEMP_BASE_DIR.
@@ -100,11 +100,14 @@ import argparse
 # 🎯 MODELLO COERENTE: sys.path.append('.')
 sys.path.append('.') 
 
-# Importiamo il modulo completo con il path COERENTE: tests.utils.nome_file come richiesto
+# Importiamo il modulo completo con il path COERENTE: tests.utils.nome_file
 import tests.utils.analyse_test_execution_times as analysis_module
 
-# Reindirizziamo la variabile globale nel modulo importato per puntare alla cartella temporanea
-analysis_module.config_test_folder = os.path.join(os.getenv('NODE_TEMP_BASE_DIR')) 
+# 🎯 CORREZIONE: Includiamo la sottocartella PREPROCESSED_DATASET che probabilmente ospita il log.json
+PREPROCESSED_SUBDIR = 'PREPROCESSED_DATASET'
+
+# Reindirizziamo la variabile globale config_test_folder nel modulo importato per puntare alla cartella temporanea
+analysis_module.config_test_folder = os.path.join(os.getenv('NODE_TEMP_BASE_DIR'), PREPROCESSED_SUBDIR) 
 
 
 def main():
@@ -116,14 +119,14 @@ def main():
     
     print("Avvio analisi dei tempi di esecuzione...")
     
-    # 1. Chiamata a analyze_execution_times (usando il modulo importato)
+    # 1. Chiamata a analyze_execution_times
     results = analysis_module.analyze_execution_times(
         audio_format=args.audio_format, 
         n_octave=args.n_octave, 
         config_file=args.config_file
     )
     
-    # 2. Chiamata a print_analysis_results (usando il modulo importato)
+    # 2. Chiamata a print_analysis_results
     print("\n--- Risultati Analisi ---\n")
     analysis_module.print_analysis_results(results)
     print("\n-------------------------\n")
