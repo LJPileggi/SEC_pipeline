@@ -397,7 +397,7 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
         logging.error(f"Errore critico nel processo principale: {e}")
         raise e
     finally:
-        join_logs(log_path)
+        # join_logs(log_path)
 
         # Assicurati che il rank 0 chiuda la pbar dopo che tutti hanno finito
         if rank == 0 and pbar:
@@ -507,5 +507,5 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
         # 7. Finalize & join_logs
         # join_logs viene chiamato in ogni caso (successo, eccezione nel padre)
         # Il log si aggiornerà con tutti i task completati fino a quel punto
-        join_logs(log_path)
+        # join_logs(log_path)
 

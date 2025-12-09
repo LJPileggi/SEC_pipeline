@@ -20,6 +20,8 @@ TEMP_PYTHON_SCRIPT_PATH="$TEMP_DIR/create_h5_data.py"
 
 # 🎯 Script Python wrapper per l'analisi (il main richiesto)
 TEMP_ANALYSE_WRAPPER_PATH="$TEMP_DIR/analysis_main_wrapper.py"
+# 🎯 NUOVO: Script Python wrapper per la fusione dei log
+TEMP_JOIN_LOGS_PATH="$TEMP_DIR/join_logs_wrapper.py"
 
 
 # Variabili di configurazione per il Benchmark Rapido
@@ -52,7 +54,7 @@ export NO_EMBEDDING_SAVE="True"
 export NODE_TEMP_BASE_DIR="$CONTAINER_SCRATCH_BASE/dataSEC"
 
 
-# --- 4. GENERAZIONE DINAMICA DEL DATASET HDF5 (MODELLO COERENTE) ---
+# --- 4. GENERAZIONE DINAMICA DEL DATASET HDF5 (INVARIATO) ---
 
 echo "Generazione dinamica del dataset HDF5 di test in $SCRATCH_TEMP_DIR/dataSEC/RAW_DATASET"
 
@@ -85,6 +87,56 @@ echo "--- 🚀 Avvio Esecuzione Interattiva ---\n"
 singularity exec --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" --bind "$(pwd)/configs:/app/configs" --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" "$SIF_FILE" python3 scripts/get_clap_embeddings.py --config_file "$BENCHMARK_CONFIG_FILE" --n_octave "$BENCHMARK_N_OCTAVE" --audio_format "$BENCHMARK_AUDIO_FORMAT"
 
 
+# --- 5.5. 🎯 NUOVO: UNIONE SEQUENZIALE DEI LOG (join_logs) ---
+
+echo "--- 🔗 Esecuzione Sequenziale di join_logs ---"
+
+# 5.5.1. Creazione dello script Python wrapper per join_logs
+cat << EOF > "$TEMP_JOIN_LOGS_PATH"
+import sys
+import os
+# MODELLO COERENTE: sys.path.append('.')
+sys.path.append('.')
+
+from src.utils import join_logs
+# Usiamo basedir_preprocessed che è dove i log dovrebbero essere stati scritti
+from src.dirs_config import basedir_preprocessed 
+import argparse
+import logging
+# Disattiviamo il logging che può interferire
+logging.basicConfig(level=logging.CRITICAL)
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--audio_format', type=str, required=True)
+    parser.add_argument('--n_octave', type=str, required=True)
+    args = parser.parse_args()
+
+    # Costruisci il percorso log_dir che i worker hanno usato
+    log_dir = os.path.join(basedir_preprocessed, args.audio_format, f'{args.n_octave}_octave')
+    
+    print(f"Unione dei log da: {log_dir}")
+    try:
+        join_logs(log_dir)
+        print("Log uniti con successo in log.json.")
+    except Exception as e:
+        print(f"ERRORE CRITICO nell'unione dei log: {e}")
+        sys.exit(1)
+
+if __name__ == '__main__':
+    main()
+EOF
+
+# 5.5.2. Esegui il wrapper di join_logs.
+singularity exec \
+    --bind "$TEMP_DIR:$CONTAINER_WORK_DIR" \
+    --bind "$SCRATCH_TEMP_DIR:$CONTAINER_SCRATCH_BASE" \
+    "$SIF_FILE" \
+    python3 "$CONTAINER_WORK_DIR/join_logs_wrapper.py" \
+    --audio_format "$BENCHMARK_AUDIO_FORMAT" \
+    --n_octave "$BENCHMARK_N_OCTAVE"
+
+
 # --- 6. ANALISI FINALE DEI LOG (CORRETTA COERENZA DEI PATH) ---
 
 echo "--------------------------------------------------------"
@@ -103,11 +155,8 @@ sys.path.append('.')
 # Importiamo il modulo completo con il path COERENTE: tests.utils.nome_file
 import tests.utils.analyse_test_execution_times as analysis_module
 
-# 🎯 CORREZIONE: Includiamo la sottocartella PREPROCESSED_DATASET che probabilmente ospita il log.json
-PREPROCESSED_SUBDIR = 'PREPROCESSED_DATASET'
-
 # Reindirizziamo la variabile globale config_test_folder nel modulo importato per puntare alla cartella temporanea
-analysis_module.config_test_folder = os.path.join(os.getenv('NODE_TEMP_BASE_DIR'), PREPROCESSED_SUBDIR) 
+analysis_module.config_test_folder = os.path.join(os.getenv('NODE_TEMP_BASE_DIR'), 'PREPROCESSED_DATASET')
 
 
 def main():
