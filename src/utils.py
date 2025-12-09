@@ -120,28 +120,56 @@ def write_log(log_path, new_cut_secs_class, process_time, n_embeddings_per_run, 
 
 def join_logs(log_dir):
     """
-    Joins logs relative to different processes at the end of each execution.
+    Joins logs relative to different processes at the end of each execution,
+    ensuring correct merging of task metrics.
 
     args:
      - log_dir: directory containing the logs.
     """
-    final_log = {}
+    final_log = {"config": {}}
     final_log_file = os.path.join(log_dir, "log.json")
     pattern = os.path.join(log_dir, f"log_rank_*.json")
     log_files = glob.glob(pattern)
+    
+    # 1. Se non trova file, scrive un log vuoto e ritorna. (Stesso comportamento)
     if not log_files:
         with open(final_log_file, 'w') as f:
-            json.dump(final_log, f)
+            json.dump({}, f)
         return
+
+    # 2. Fusione dei log (FIX: Gestione corretta delle chiavi duplicate)
     for log_file in log_files:
         try:
             with open(log_file, 'r') as f:
                 log = json.load(f)
-                final_log.update(log)
+                
+                # Itera sulle chiavi nel log del rank
+                for key, data in log.items():
+                    if key == "config":
+                        # Merge config solo se la configurazione globale è ancora vuota
+                        if not final_log["config"]:
+                            final_log["config"].update(data)
+                        continue
+
+                    if key in final_log:
+                        # Task già presente: Estendi le liste
+                        for list_key in ["process_time", "n_embeddings_per_run", "rank"]:
+                            final_log[key][list_key].extend(data[list_key])
+                        # Aggiorna completed solo se tutti i sub-task sono completed
+                        final_log[key]["completed"] = final_log[key]["completed"] and data["completed"]
+                    else:
+                        # Nuovo task: Aggiungi i dati completi
+                        final_log[key] = data
+                        
         except Exception as e:
-            raise Exception("{e}")
+            # Stampa l'errore e continua, non bloccare l'unione di altri file
+            print(f"Errore durante la lettura o l'unione del log {log_file}: {e}", file=sys.stderr)
+            
+    # 3. Scrivi il file finale
     with open(final_log_file, 'w') as f:
         json.dump(final_log, f, indent=4)
+        
+    # 4. Cleanup
     for log_file in log_files:
         os.remove(log_file)
 
