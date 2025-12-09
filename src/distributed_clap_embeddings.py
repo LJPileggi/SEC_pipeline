@@ -152,9 +152,9 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                     emb_pkey = f"{audio_dataset_manager.hf.attrs['class_idx']}_{track_idx}_{b}_{round_}_{results}"
 
                     # --- Check di esistenza (Usa __contains__) ---
-                    if emb_pkey in split_emb_dataset_manager:
-                        results += 1
-                        continue
+                    # if emb_pkey in split_emb_dataset_manager:
+                    #     results += 1
+                    #     continue
 
                     start = b * window_size + offset
                     end = start + window_size
