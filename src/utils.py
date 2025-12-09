@@ -170,8 +170,8 @@ def join_logs(log_dir):
         json.dump(final_log, f, indent=4)
         
     # 4. Cleanup
-    for log_file in log_files:
-        os.remove(log_file)
+    # for log_file in log_files:
+    #     os.remove(log_file)
 
 ### hdf5 raw dataset class ###
 
@@ -193,9 +193,9 @@ class HDF5DatasetManager:
             # Apri il file in modalità di sola lettura
             self.hf = h5py.File(self.h5_file_path, 'r')
             self._load_metadata()
-            logging.info(f"HDF5 Dataset Manager pronto. Formato: {audio_format}")
+            logging.info(f"HDF5 Dataset Manager di {os.path.split(self.h5_file_path)[1]} pronto. Formato: {audio_format}")
         except Exception as e:
-            logging.error(f"Errore nell'apertura o caricamento metadati HDF5: {e}")
+            logging.error(f"Errore nell'apertura o caricamento metadati HDF5 di {os.path.split(self.h5_file_path)[1]}: {e}")
             raise Exception
 
     def __getitem__(self, hdf5_index: int) -> np.ndarray:
@@ -250,7 +250,7 @@ class HDF5DatasetManager:
         if self.hf:
             try:
                 self.hf.close()
-                print(f"HDF5 Dataset Manager chiuso.")
+                print(f"HDF5 Dataset Manager per {os.path.split(self.h5_file_path)[1]} chiuso.")
             except ValueError:
                 pass
             self.hf = None
@@ -474,7 +474,7 @@ class HDF5EmbeddingDatasetsManager(Dataset):
         if self.hf:
             try:
                 self.hf.close()
-                print(f"HDF5 Dataset Manager chiuso.")
+                print(f"HDF5 Dataset Manager per {os.path.split(self.h5_path)[1]} chiuso.")
             except ValueError:
                 pass
             self.hf = None
