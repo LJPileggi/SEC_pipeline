@@ -5,6 +5,7 @@ import time
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
+from tqdm_multiprocess.tqdm_multiprocess import MultiProcessTqdm
 import numpy as np
 import logging
 import traceback
