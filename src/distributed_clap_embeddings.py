@@ -215,9 +215,13 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
     device = setup_distributed_environment(rank, world_size, False)
     clap_model, audio_embedding, _ = CLAP_initializer(device, use_cuda=True)
     
-    config['rank'] = rank
     config['dirs']['root_source'] = os.path.join(basedir_raw, f'{audio_format}')
     config['dirs']['root_target'] = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave')
+    if not os.path.exists(config['dirs']['root_target']):
+        os.makedirs(config['dirs']['root_target'])
+    config['audio']['audio_format'] = audio_format
+    config['audio']['n_octave'] = n_octave
+    config['device'] = str(device)
 
     my_tasks.sort(key=lambda x: x[1]) 
 
