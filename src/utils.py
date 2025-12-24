@@ -278,9 +278,9 @@ class HDF5EmbeddingDatasetsManager(Dataset):
                     raw_ids = self.hf['embedding_dataset']['ID'][:]
                     self.existing_keys = {k.decode('utf-8') if isinstance(k, bytes) else k for k in raw_ids}
             
-            # 🎯 Latenza 3: Pre-allocazione memoria (Buffer NumPy)
-            if self.mode == 'a':
-                self.buffer_array = np.empty(self.buffer_size, dtype=self.dt)
+                # 🎯 Latenza 3: Pre-allocazione memoria (Buffer NumPy)
+                if self.mode == 'a':
+                    self.buffer_array = np.empty(self.buffer_size, dtype=self.dt)
         else:
             raise IOError(f"Impossibile aprire il file: {h5_path}")
 
