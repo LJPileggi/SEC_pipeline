@@ -205,5 +205,5 @@ echo "(Rimuove: Dataset HDF5, Log, Embeddings e Pesi temporanei)"
 echo "--------------------------------------------------------"
 
 # Elimina ricorsivamente tutta la cartella temporanea, pulendo completamente.
-# rm -rf "$SCRATCH_TEMP_DIR"
+rm -rf "$SCRATCH_TEMP_DIR"
 echo "Esecuzione e Analisi completate."
