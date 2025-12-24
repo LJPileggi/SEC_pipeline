@@ -2,6 +2,8 @@ import argparse
 import sys
 import os
 import logging
+import torch # Aggiunto per rilevamento GPU locale
+
 sys.path.append('.')
 
 from src.dirs_config import basedir_preprocessed
@@ -24,21 +26,21 @@ def parsing():
 
 def main():
     args = parsing()
-    world_size = 4
-    embed_folder = os.path.join(basedir_preprocessed, f'{args.audio_format}', f'{args.n_octave}_octave')
-    if not os.path.exists(embed_folder):
-        os.makedirs(embed_folder)
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s',
-                                             handlers=[logging.StreamHandler(),
-                   logging.FileHandler(os.path.join(embed_folder, "log.txt"))])
+    
+    # Rileva automaticamente quante GPU usare in locale, altrimenti default a 4
+    if torch.cuda.is_available():
+        world_size = torch.cuda.device_count()
+    else:
+        world_size = 4
 
     # Rileva l'ambiente di esecuzione
     if "SLURM_PROCID" in os.environ:
-        print("Ambiente SLURM rilevato. Avvio in modalità distribuita...")
+        # In ambiente SLURM, il logging e il setup del rank sono gestiti internamente
+        print(f"Ambiente SLURM rilevato. Avvio in modalità distribuita...")
         run_distributed_slurm(args.config_file, args.audio_format, args.n_octave)
     else:
         # Ambiente locale o altro non-SLURM
-        print("Ambiente locale rilevato. Avvio in modalità multi-processo...")
+        print(f"Ambiente locale rilevato. Avvio con {world_size} processi...")
         run_local_multiprocess(args.config_file, args.audio_format, args.n_octave, world_size)
 
 if __name__ == "__main__":

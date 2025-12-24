@@ -213,21 +213,17 @@ class HDF5DatasetManager:
         return self.metadata_df[self.metadata_df['hdf5_index'] == hdf5_index]
   
     def _load_metadata(self):
-        """Carica il dataset strutturato dei metadati in un DataFrame Pandas."""
+        """Carica il dataset strutturato dei metadati in modo ottimizzato."""
         if self.metadata_dset_name not in self.hf:
-            raise KeyError(f"Dataset metadati '{self.metadata_dset_name}' non trovato nel file HDF5.")
+            raise KeyError(f"Dataset metadati '{self.metadata_dset_name}' non trovato.")
             
-        # Carica l'intero dataset strutturato come un array NumPy
-        metadata_array = self.hf[self.metadata_dset_name][:]
-        
-        # Converti in DataFrame. L'indice di Pandas è l'indice HDF5 implicito.
-        self.metadata_df = pd.DataFrame(metadata_array)
-        
-        # Rinominare l'indice Pandas per chiarezza (anche se non usato)
-        self.metadata_df.index.name = 'hdf5_index'
-        
-        # Aggiungi una colonna esplicita per l'indice HDF5, utile per il debug e i check
-        self.metadata_df['hdf5_index'] = self.metadata_df.index
+        # Carichiamo i dati. 
+        # Usare il DataFrame direttamente dall'array HDF5 è efficiente.
+        self.metadata_df = pd.DataFrame(self.hf[self.metadata_dset_name][:])
+    
+        # Assicuriamoci che l'indice HDF5 sia esplicito e coerente
+        if 'hdf5_index' not in self.metadata_df.columns:
+            self.metadata_df['hdf5_index'] = self.metadata_df.index
 
     def get_reproducible_permutation(self, seed: int) -> pd.DataFrame:
         """
@@ -259,39 +255,34 @@ class HDF5DatasetManager:
         self.close()
 
 class HDF5EmbeddingDatasetsManager(Dataset):
-    def __init__(self, h5_path, mode='r', partitions=set(('classes', 'splits'))):
-        """
-        Container to handle the hdf5 files for the embedding dataset.
-        The dataset is designed as a set of materialised partitions for the
-        combination (classes, splits) and (splits,).
-
-        args:
-         - h5_path: path to a .h5 file; has to be of the 2 types of partitions specified above;
-         - partitions: tuple or set for the types of supported partitions (either (classes, splits) or (splits,)).
-        """
+    def __init__(self, h5_path, mode='r', partitions=set(('classes', 'splits')), buffer_size=500):
         super().__init__()
         self.h5_path = h5_path
         self.partitions = set(partitions)
-        if not ((self.partitions == set(('splits',))) or (self.partitions == set(('classes', 'splits')))):
-            raise ValueError("ValueError: incorrect view type.")
         self.mode = mode
         self.hf = None
+        self.buffer_size = buffer_size
+        self.buffer_count = 0
+        self.existing_keys = set() # Latenza 1: Lookup O(1)
+        
         try:
             self.hf = h5py.File(self.h5_path, self.mode)
-        except Exception as e:
+        except Exception:
             pass
-        if self.hf is not None and 'embedding_dataset' in self.hf:
-            self.dt = self._set_dataset_format(self.hf.attrs['embedding_dim'], self.hf.attrs['spec_shape'])
-        elif self.hf is None:
-            raise IOError(f"HDF5EmbeddingDatasetsManager non è riuscito ad aprire/creare il file: {h5_path}")
-        if self.mode == 'a':
-            self.embeddings_buffer = []
-            self.spectrograms_buffer = []
-            self.hash_keys_buffer = []
-            self.track_names_buffer = []
-            if self.partitions == set(('splits',)):
-                self.classes_buffer = []
-            self.subclasses_buffer = []
+
+        if self.hf is not None:
+            if 'embedding_dataset' in self.hf:
+                self.dt = self._set_dataset_format(self.hf.attrs['embedding_dim'], self.hf.attrs['spec_shape'])
+                # Caricamento rapido delle chiavi per la resumability
+                if self.hf['embedding_dataset'].shape[0] > 0:
+                    raw_ids = self.hf['embedding_dataset']['ID'][:]
+                    self.existing_keys = {k.decode('utf-8') if isinstance(k, bytes) else k for k in raw_ids}
+            
+            # 🎯 Latenza 3: Pre-allocazione memoria (Buffer NumPy)
+            if self.mode == 'a':
+                self.buffer_array = np.empty(self.buffer_size, dtype=self.dt)
+        else:
+            raise IOError(f"Impossibile aprire il file: {h5_path}")
 
     def __len__(self):
         if 'embedding_dataset' in self.hf:
@@ -300,26 +291,10 @@ class HDF5EmbeddingDatasetsManager(Dataset):
 
     def __contains__(self, emb_pkey: str) -> bool:
         """
-        Verifica se un embedding con la chiave primaria (emb_pkey) esiste già nel dataset HDF5.
+        Verifica se un embedding esiste già usando il lookup O(1) in memoria.
         """
-        try:
-            if 'embedding_dataset' in self.hf:
-                # Carica tutte le chiavi dal campo 'emb_pkey' del dataset strutturato.
-                # Questo può essere lento con dataset molto grandi, ma è il metodo diretto.
-                keys = self.hf['embedding_dataset']['ID'][:]
-            
-                # Controlla l'esistenza della chiave
-                return emb_pkey in keys
-        
-            return False
-        
-        except KeyError:
-            # Se il campo 'emb_pkey' non esiste nel dtype, la chiave non è stata salvata.
-            return False
-        except Exception as e:
-            # Gestione errori I/O o HDF5
-            logging.error(f"Errore durante la ricerca della chiave HDF5 {emb_pkey}: {e}")
-            return False
+        # 🎯 Lookup istantaneo: nessuna lettura da disco
+        return emb_pkey in self.existing_keys
 
     def __getitem__(self, idx):
         """
@@ -390,92 +365,101 @@ class HDF5EmbeddingDatasetsManager(Dataset):
 
     def add_to_data_buffer(self, embedding, spectrogram, hash_keys, track_name, class_=None, subclass=None):
         """
-        Extends internal buffers to be then flushed to hdf5 file.
+        Scrive i dati direttamente nella memoria contigua del buffer NumPy.
         """
-        self.embeddings_buffer.append(embedding)
-        self.spectrograms_buffer.append(spectrogram)
-        self.hash_keys_buffer.append(hash_keys)
-        self.track_names_buffer.append(track_name)
-        if 'classes' not in self.partitions:
-            if class_:
-                self.classes_buffer.append(class_)
-            else:
-                self.classes_buffer = self.classes_buffer + [None] * len(embedding)
-        if subclass:
-            self.subclasses_buffer.append(subclass)
+        idx = self.buffer_count
+        
+        # Inserimento diretto per campo (elimina zip e tuple creation)
+        self.buffer_array[idx]['ID'] = hash_keys.encode('utf-8')
+        
+        # Gestione sicura tensor -> numpy
+        if torch.is_tensor(embedding):
+            self.buffer_array[idx]['embeddings'] = embedding.detach().cpu().numpy()
         else:
-            self.subclasses_buffer = self.subclasses_buffer + [None] * len(embedding)
+            self.buffer_array[idx]['embeddings'] = embedding
+            
+        self.buffer_array[idx]['spectrograms'] = spectrogram
+        self.buffer_array[idx]['track_names'] = track_name.encode('utf-8')
+        
+        if 'classes' not in self.partitions:
+            self.buffer_array[idx]['classes'] = class_.encode('utf-8') if class_ else b''
+        
+        self.buffer_array[idx]['subclasses'] = subclass.encode('utf-8') if subclass else b''
+        
+        self.buffer_count += 1
+        
+        # Auto-flush se il buffer è pieno per non perdere dati
+        if self.buffer_count >= self.buffer_size:
+            self.flush_buffers()
 
     def flush_buffers(self):
         """
-        Flushes buffers to hdf5 file.
+        Trasferisce i dati dal buffer pre-allocato al dataset HDF5 su disco.
         """
-        if os.getenv('NO_EMBEDDING_SAVE', 'False').lower() in ('false', '0', 'f'):
-            data_buffer = list(zip(
-                        self.hash_keys_buffer,
-                        self.embeddings_buffer,
-                        self.spectrograms_buffer,
-                        [s.encode('utf-8') for s in self.track_names_buffer],
-                        [s.encode('utf-8') if isinstance(s, str) else None for s in self.subclasses_buffer]
-                )) if 'classes' in self.partitions else list(zip(
-                        self.hash_keys_buffer,
-                        self.embeddings_buffer,
-                        self.spectrograms_buffer,
-                        [s.encode('utf-8') for s in self.track_names_buffer],
-                        [s.encode('utf-8') for s in self.classes_buffer],
-                        [s.encode('utf-8') if isinstance(s, str) else None for s in self.subclasses_buffer]
-                ))
-            data_buffer = np.array(data_buffer, dtype=self.dt)
+        if self.buffer_count == 0:
+            return
 
+        # Scrive solo se la variabile d'ambiente permette il salvataggio
+        if os.getenv('NO_EMBEDDING_SAVE', 'False').lower() in ('false', '0', 'f'):
             dataset = self.hf['embedding_dataset']
             current_size = dataset.shape[0]
-            new_size = current_size + len(data_buffer)
+            new_size = current_size + self.buffer_count
+            
+            # Ridimensionamento veloce
             dataset.resize(new_size, axis=0)
-            dataset[current_size:] = data_buffer
+            
+            # Scrittura "slice" (estremamente efficiente in HDF5)
+            dataset[current_size:] = self.buffer_array[:self.buffer_count]
+            
+            # NON chiamiamo hf.flush() qui per non forzare i metadati su Lustre ogni volta
 
-        # Empty buffers
-        self.embeddings_buffer = []
-        self.spectrograms_buffer = []
-        self.hash_keys_buffer = []
-        self.track_names_buffer = []
-        if self.partitions == set(('splits',)):
-            self.classes_buffer = []
-        self.subclasses_buffer = []
+        # Reset del puntatore (nessun cleanup di liste richiesto)
+        self.buffer_count = 0
 
     def extend_dataset(self, new_data):
         """
-        Extends dataset content directly without going through the buffers.
-        Data has to be compatible with the native dtype of the dataset.
+        Estende il dataset direttamente bypassando i buffer. 
+        Aggiorna il set delle chiavi per mantenere la coerenza della Latenza 1.
         """
         if isinstance(new_data, dict):
             if 'ID' not in new_data:
-                 raise ValueError("ValueError: Missing 'ID' key in dictionary data.")
+                 raise ValueError("Missing 'ID' key in dictionary data.")
             num_new_elements = len(new_data['ID'])
 
+            # Pre-allocazione temporanea per la conversione del dizionario
             new_data_array = np.empty(num_new_elements, dtype=self.dt)
 
             for name in self.dt.names:
                 if name in new_data:
                     new_data_array[name] = new_data[name]
                 else:
-                    raise TypeError(f"TypeError: missing {name} in to-be-added data.")
+                    raise TypeError(f"Missing {name} in to-be-added data.")
             new_data = new_data_array
 
         if new_data.dtype != self.dt:
-            raise TypeError(f"TypeError: new data dtype {new_data.dtype} is "
+            raise TypeError(f"New data dtype {new_data.dtype} is "
                             f"incompatible with native dataset dtype {self.dt}")
+        
+        # --- Scrittura su HDF5 ---
         dataset = self.hf['embedding_dataset']
         current_size = dataset.shape[0]
         new_size = current_size + len(new_data)
+        
         dataset.resize(new_size, axis=0)
-        dataset[current_size:] = new_data
+        dataset[current_size:] = new_data # Scrittura efficiente per blocchi
+        
+        # --- 🎯 AGGIORNAMENTO LATENZA 1 ---
+        # Decodifichiamo e aggiungiamo le nuove chiavi al set in memoria
+        new_ids = new_data['ID']
+        self.existing_keys.update(k.decode('utf-8') if isinstance(k, bytes) else k for k in new_ids)
 
     def close(self):
+        """Assicura l'ultimo scarico dati prima della chiusura."""
         if self.hf:
+            self.flush_buffers() 
             try:
                 self.hf.close()
-                print(f"HDF5 Dataset Manager per {os.path.split(self.h5_path)[1]} chiuso.")
-            except ValueError:
+            except Exception:
                 pass
             self.hf = None
 
