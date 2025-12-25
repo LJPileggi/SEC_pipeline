@@ -139,64 +139,61 @@ import os
 import sys
 import argparse
 
-# 🎯 MODELLO COERENTE: sys.path.append('.')
 sys.path.append('.') 
-
-# Importiamo il modulo completo con il path COERENTE
 import tests.utils.analyse_test_execution_times as analysis_module
 
-# Reindirizziamo la variabile globale config_test_folder
-analysis_module.config_test_folder = os.path.join(os.getenv('NODE_TEMP_BASE_DIR'), 'PREPROCESSED_DATASET')
-
+# Salviamo il percorso base reale
+REAL_BASE_DIR = os.path.join(os.getenv('NODE_TEMP_BASE_DIR'), 'PREPROCESSED_DATASET')
 
 def main():
-    parser = argparse.ArgumentParser(description='Wrapper per l\'analisi dei tempi di esecuzione CLAP.')
+    parser = argparse.ArgumentParser()
     parser.add_argument('--config_file', type=str, required=True)
     parser.add_argument('--n_octave', type=str, required=True)
     parser.add_argument('--audio_format', type=str, required=True)
     args = parser.parse_args()
     
-    print("Avvio analisi dei tempi di esecuzione per ogni cut_secs...")
-    
-    # 🎯 NUOVA LOGICA: Aggregazione dei risultati da ogni sottocartella cut_secs
-    base_dir = os.path.join(analysis_module.config_test_folder, args.audio_format, f"{args.n_octave}_octave")
+    # Percorso dove si trovano le cartelle 1_secs, 2_secs, etc.
+    search_path = os.path.join(REAL_BASE_DIR, args.audio_format, f"{args.n_octave}_octave")
     all_combined_results = {}
 
-    if not os.path.exists(base_dir):
-        print(f"ERRORE: Percorso base non trovato: {base_dir}")
+    if not os.path.exists(search_path):
+        print(f"ERRORE: Percorso non trovato: {search_path}")
         sys.exit(1)
 
-    # Iteriamo sulle cartelle X_secs per raccogliere i log sparsi
-    found_logs = False
-    for entry in os.listdir(base_dir):
-        cut_dir = os.path.join(base_dir, entry)
+    found_any = False
+    for entry in sorted(os.listdir(search_path)):
+        cut_dir = os.path.join(search_path, entry)
         log_file = os.path.join(cut_dir, 'log.json')
         
         if os.path.isdir(cut_dir) and "_secs" in entry and os.path.exists(log_file):
-            print(f"Analisi log trovato in: {entry}")
-            # Chiamata alla funzione originale puntando temporaneamente alla sottocartella
-            # Nota: a seconda di come è scritto analysis_module, potrebbe essere necessario 
-            # passare parametri extra o gestire il merge manualmente.
-            # Qui assumiamo di unire i dizionari dei risultati.
+            print(f"Analisi in corso per: {entry}...")
             
-            res = analysis_module.analyze_execution_times(
-                audio_format=args.audio_format, 
-                n_octave=args.n_octave, 
-                config_file=args.config_file
-            )
-            if res:
-                all_combined_results.update(res)
-                found_logs = True
+            # 🎯 IL TRUCCO: Puntiamo la variabile globale del modulo alla sottocartella specifica
+            # In questo modo analyze_execution_times cercherà il log.json DENTRO cut_dir
+            analysis_module.config_test_folder = cut_dir
+            
+            try:
+                # Chiamiamo l'analisi. Passiamo parametri vuoti o dummy per audio_format/n_octave 
+                # se la funzione li usa per costruire il path, altrimenti fallirà di nuovo.
+                # Se la funzione originale concatena paths, dobbiamo passare "." come sottocartelle.
+                res = analysis_module.analyze_execution_times(
+                    audio_format="", 
+                    n_octave="", 
+                    config_file=args.config_file
+                )
+                
+                if res:
+                    all_combined_results.update(res)
+                    found_any = True
+            except Exception as e:
+                print(f"Avviso: Errore durante l'analisi di {entry}: {e}")
 
-    if not found_logs:
-        print(f"ERRORE Analisi Tempi: Nessun log.json trovato nelle sottocartelle di {base_dir}")
+    if not found_any:
+        print(f"ERRORE: Nessun log.json valido trovato in {search_path}")
         sys.exit(1)
     
-    # 2. Chiamata a print_analysis_results con i dati aggregati
-    print("\n--- Risultati Analisi (Tutti i cut_secs) ---\n")
+    print("\n--- Risultati Analisi Aggregati ---")
     analysis_module.print_analysis_results(all_combined_results)
-    print("\n-------------------------\n")
-
 
 if __name__ == '__main__':
     main()
