@@ -402,6 +402,7 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
         for rank in range(world_size):
             # Ogni processo locale riceve la sua fetta di task pre-ordinata
             my_tasks = all_tasks[rank::world_size]
+            print(f"rank {rank}, tasks {my_tasks}")
             p = mp.Process(target=local_worker_process, 
                            args=(audio_format, n_octave, config, rank, world_size, my_tasks, pbar))
             p.start()
