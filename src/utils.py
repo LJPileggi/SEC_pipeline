@@ -140,8 +140,8 @@ def join_logs(log_dir):
         json.dump(final_log, f, indent=4)
         
     # Cleanup
-    for log_file in log_files:
-        os.remove(log_file)
+    # for log_file in log_files:
+    #     os.remove(log_file)
 
 ### hdf5 raw dataset class ###
 
