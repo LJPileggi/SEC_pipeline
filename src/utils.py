@@ -263,27 +263,33 @@ class HDF5EmbeddingDatasetsManager(Dataset):
         self.hf = None
         self.buffer_size = buffer_size
         self.buffer_count = 0
-        self.existing_keys = set() # Latenza 1: Lookup O(1)
+        self.existing_keys = set()
+        self.dt = None           # Inizializziamo esplicitamente a None
+        self.buffer_array = None # Inizializziamo esplicitamente a None
         
         try:
             self.hf = h5py.File(self.h5_path, self.mode)
-        except Exception:
-            pass
+        except Exception as e:
+            logging.error(f"Impossibile aprire il file {h5_path}: {e}")
+            raise
 
-        if self.hf is not None:
-            if 'embedding_dataset' in self.hf:
-                self.dt = self._set_dataset_format(self.hf.attrs['embedding_dim'], self.hf.attrs['spec_shape'])
-                # Caricamento rapido delle chiavi per la resumability
+        # Se il dataset esiste già (file pre-esistente)
+        if self.hf is not None and 'embedding_dataset' in self.hf:
+            # Recuperiamo i parametri dagli attributi del file
+            emb_dim = self.hf.attrs.get('embedding_dim')
+            spec_sh = self.hf.attrs.get('spec_shape')
+            
+            if emb_dim is not None and spec_sh is not None:
+                self.dt = self._set_dataset_format(emb_dim, spec_sh)
+                
+                # Popoliamo il set delle chiavi per la resumability
                 if self.hf['embedding_dataset'].shape[0] > 0:
                     raw_ids = self.hf['embedding_dataset']['ID'][:]
                     self.existing_keys = {k.decode('utf-8') if isinstance(k, bytes) else k for k in raw_ids}
-            
-                # 🎯 Latenza 3: Pre-allocazione memoria (Buffer NumPy)
+                
+                # Inizializziamo il buffer NumPy se siamo in scrittura
                 if self.mode == 'a':
                     self.buffer_array = np.empty(self.buffer_size, dtype=self.dt)
-        else:
-            raise IOError(f"Impossibile aprire il file: {h5_path}")
-
     def __len__(self):
         if 'embedding_dataset' in self.hf:
             return self.hf['embedding_dataset'].shape[0]
@@ -329,19 +335,12 @@ class HDF5EmbeddingDatasetsManager(Dataset):
         return dt
 
     def initialize_hdf5(self, embedding_dim, spec_shape, audio_format, cut_secs, n_octave, \
-                                    sample_rate, seed, noise_perc, split, class_name=None):
+                        sample_rate, seed, noise_perc, split, class_name=None):
         """
-        Creates HDF5 file with resizable embedding and spectrogram datasets.
-        Must provide split and class name according to the selected partition.
-
-        args:
-         - embedding_dim: dimension of single embedding;
-         - spec_shape: shape of single spectrogram;
-         - audio_format: format of the original audio;
-         - split: dataset split the embedding belongs to;
-         - class_name: class the embedding belongs to.
+        Inizializza il file HDF5 e configura i buffer necessari per l'append.
         """
         if self.mode == 'a':
+            # Setup attributi
             self.hf.attrs['audio_format'] = audio_format
             self.hf.attrs['cut_secs'] = cut_secs
             self.hf.attrs['n_octave'] = n_octave
@@ -351,17 +350,23 @@ class HDF5EmbeddingDatasetsManager(Dataset):
             self.hf.attrs['split'] = split
             self.hf.attrs['embedding_dim'] = embedding_dim
             self.hf.attrs['spec_shape'] = spec_shape
+            
+            # 🎯 CONFIGURAZIONE FORMATO E BUFFER
             self.dt = self._set_dataset_format(embedding_dim, spec_shape)
+            self.buffer_array = np.empty(self.buffer_size, dtype=self.dt)
+            
             if 'classes' in self.partitions:
                 self.hf.attrs['class'] = class_name
-            self.hf.create_dataset('embedding_dataset', 
-                                    shape=(0,),
-                                    maxshape=(None,),
-                                    dtype=self.dt,
-                                    chunks=True
-                                    )
+            
+            # Creazione dataset fisico
+            if 'embedding_dataset' not in self.hf:
+                self.hf.create_dataset('embedding_dataset', 
+                                        shape=(0,),
+                                        maxshape=(None,),
+                                        dtype=self.dt,
+                                        chunks=True)
         else:
-            raise Exception(f'Invalid privileges for {self.h5_path}.')
+            raise Exception(f'Permessi non validi per la scrittura su {self.h5_path}.')
 
     def add_to_data_buffer(self, embedding, spectrogram, hash_keys, track_name, class_=None, subclass=None):
         """
