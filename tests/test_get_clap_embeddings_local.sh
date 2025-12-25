@@ -142,10 +142,10 @@ import argparse
 # 🎯 MODELLO COERENTE: sys.path.append('.')
 sys.path.append('.') 
 
-# Importiamo il modulo completo con il path COERENTE: tests.utils.nome_file
+# Importiamo il modulo completo con il path COERENTE
 import tests.utils.analyse_test_execution_times as analysis_module
 
-# Reindirizziamo la variabile globale config_test_folder nel modulo importato per puntare alla cartella temporanea
+# Reindirizziamo la variabile globale config_test_folder
 analysis_module.config_test_folder = os.path.join(os.getenv('NODE_TEMP_BASE_DIR'), 'PREPROCESSED_DATASET')
 
 
@@ -156,18 +156,45 @@ def main():
     parser.add_argument('--audio_format', type=str, required=True)
     args = parser.parse_args()
     
-    print("Avvio analisi dei tempi di esecuzione...")
+    print("Avvio analisi dei tempi di esecuzione per ogni cut_secs...")
     
-    # 1. Chiamata a analyze_execution_times
-    results = analysis_module.analyze_execution_times(
-        audio_format=args.audio_format, 
-        n_octave=args.n_octave, 
-        config_file=args.config_file
-    )
+    # 🎯 NUOVA LOGICA: Aggregazione dei risultati da ogni sottocartella cut_secs
+    base_dir = os.path.join(analysis_module.config_test_folder, args.audio_format, f"{args.n_octave}_octave")
+    all_combined_results = {}
+
+    if not os.path.exists(base_dir):
+        print(f"ERRORE: Percorso base non trovato: {base_dir}")
+        sys.exit(1)
+
+    # Iteriamo sulle cartelle X_secs per raccogliere i log sparsi
+    found_logs = False
+    for entry in os.listdir(base_dir):
+        cut_dir = os.path.join(base_dir, entry)
+        log_file = os.path.join(cut_dir, 'log.json')
+        
+        if os.path.isdir(cut_dir) and "_secs" in entry and os.path.exists(log_file):
+            print(f"Analisi log trovato in: {entry}")
+            # Chiamata alla funzione originale puntando temporaneamente alla sottocartella
+            # Nota: a seconda di come è scritto analysis_module, potrebbe essere necessario 
+            # passare parametri extra o gestire il merge manualmente.
+            # Qui assumiamo di unire i dizionari dei risultati.
+            
+            res = analysis_module.analyze_execution_times(
+                audio_format=args.audio_format, 
+                n_octave=args.n_octave, 
+                config_file=args.config_file
+            )
+            if res:
+                all_combined_results.update(res)
+                found_logs = True
+
+    if not found_logs:
+        print(f"ERRORE Analisi Tempi: Nessun log.json trovato nelle sottocartelle di {base_dir}")
+        sys.exit(1)
     
-    # 2. Chiamata a print_analysis_results
-    print("\n--- Risultati Analisi ---\n")
-    analysis_module.print_analysis_results(results)
+    # 2. Chiamata a print_analysis_results con i dati aggregati
+    print("\n--- Risultati Analisi (Tutti i cut_secs) ---\n")
+    analysis_module.print_analysis_results(all_combined_results)
     print("\n-------------------------\n")
 
 
