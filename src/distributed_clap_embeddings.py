@@ -205,8 +205,6 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
             config, 
             audio_dataset_manager=current_audio_manager
         )
-        if rank == 0:
-            print("{class_name} {cut_secs} completati con successo.")
 
         target_log_dir = os.path.join(config['dirs']['root_target'], f'{cut_secs}_secs')
         process_time = time.time() - start_time
@@ -263,6 +261,8 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
                 clap_model, audio_embedding, class_name, cut_secs, 
                 n_octave, config, audio_dataset_manager=current_audio_manager
             )
+            if rank == 0:
+                print("{class_name} {cut_secs} completati con successo.")
         
             target_log_dir = os.path.join(config['dirs']['root_target'], f'{cut_secs}_secs')
             process_time = time.time() - start_time
