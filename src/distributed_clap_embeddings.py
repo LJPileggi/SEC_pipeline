@@ -142,7 +142,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
 
     except Exception as e:
         # 🎯 PUNTO 5: Gestione Errori con Flush di sicurezza
-        diag_print(e)
+        diag_print("here")
         if split_emb_dataset_manager:
             split_emb_dataset_manager.flush_buffers()
             split_emb_dataset_manager.close()
