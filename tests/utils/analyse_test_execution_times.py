@@ -28,43 +28,48 @@ def parse_task_key(key: str) -> Optional[Tuple[int, str]]:
 
 def analyze_execution_times(audio_format: str, n_octave: str, config_file: str) -> Dict[str, Any]:
     """
-    Analizza il file log.json e calcola il tempo totale per task e il tempo medio per embedding.
+    Versione aggiornata: scansiona tutte le sottocartelle X_secs e aggrega i log.
     """
-    # 1. Determina il percorso del file di log unificato
-    embed_folder = os.path.join(config_test_folder, f'{audio_format}', f'{n_octave}_octave')
-    log_file_path = os.path.join(embed_folder, "log.json") 
+    # 1. Percorso base dove cercare le sottocartelle dei cut_secs
+    base_folder = os.path.join(config_test_folder, f'{audio_format}', f'{n_octave}_octave')
     
-    if not os.path.exists(log_file_path):
-        return {"error": f"Log file non trovato: {log_file_path}"}
+    if not os.path.exists(base_folder):
+        return {"error": f"Cartella base non trovata: {base_folder}"}
 
-    try:
-        # 2. Carica l'intero oggetto JSON
-        with open(log_file_path, 'r') as f:
-            log_data = json.load(f)
-    except json.JSONDecodeError:
-        return {"error": f"Errore: Il file {log_file_path} non è un JSON valido."}
-    except Exception as e:
-        return {"error": f"Errore nella lettura del log: {e}"}
+    # Inizializziamo contenitori per l'aggregazione
+    all_log_data = {}
+    
+    # 2. Scansione ricorsiva per trovare tutti i log.json unificati
+    found_logs = False
+    for root, dirs, files in os.walk(base_folder):
+        if "log.json" in files:
+            log_file_path = os.path.join(root, "log.json")
+            try:
+                with open(log_file_path, 'r') as f:
+                    data = json.load(f)
+                    # Aggreghiamo i task saltando la chiave 'config'
+                    for k, v in data.items():
+                        if k != "config":
+                            all_log_data[k] = v
+                    found_logs = True
+            except Exception as e:
+                print(f"Avviso: Errore nella lettura di {log_file_path}: {e}", file=sys.stderr)
 
+    if not found_logs:
+        return {"error": f"Nessun file log.json trovato nelle sottocartelle di: {base_folder}"}
+
+    # --- Da qui in poi la logica di calcolo rimane identica alla tua ---
     results: Dict[str, Dict[str, float]] = {}
     total_pipeline_time: float = 0.0
     
-    # 3. Itera su tutte le chiavi (task) nel log (escludendo la chiave 'config')
-    for task_key, data in log_data.items():
-        if task_key == "config":
-            continue
-            
+    for task_key, data in all_log_data.items():
         parsed_key = parse_task_key(task_key)
         if not parsed_key:
-            print(f"Attenzione: chiave log non standard trovata e ignorata: {task_key}", file=sys.stderr)
             continue
             
-        cut_secs, class_name = parsed_key
-        
         process_times = data.get("process_time", [])
         n_embeddings = data.get("n_embeddings_per_run", [])
         
-        # Calcolo delle metriche
         total_time_task = sum(process_times)
         total_embeddings = sum(n_embeddings)
         
@@ -72,33 +77,29 @@ def analyze_execution_times(audio_format: str, n_octave: str, config_file: str) 
         if total_embeddings > 0:
             avg_time_per_embedding = total_time_task / total_embeddings
         
-        # Aggiorna il tempo totale (cumulativo di tutti i worker)
         total_pipeline_time += total_time_task
-
-        # Salva i risultati
         results[task_key] = {
             "total_time_seconds": total_time_task,
             "total_embeddings": total_embeddings,
             "avg_time_per_embedding_seconds": avg_time_per_embedding
         }
 
-    # 4. Compila il dizionario dei risultati
     analysis_results: Dict[str, Any] = {
         'Total_Cumulative_Worker_Time_seconds': total_pipeline_time,
         'Task_Metrics': results,
         'Cut_Secs_Groups': {}
     }
     
-    # 5. Raggruppa per cut_secs per una visualizzazione migliore
     for task_key, metrics in results.items():
-        cut_secs, class_name = parse_task_key(task_key) # Già verificato sopra
+        parsed = parse_task_key(task_key)
+        if not parsed: continue
+        cut_secs, class_name = parsed
         
         if cut_secs not in analysis_results['Cut_Secs_Groups']:
             analysis_results['Cut_Secs_Groups'][cut_secs] = []
             
         analysis_results['Cut_Secs_Groups'][cut_secs].append({
-            "class": class_name,
-            "metrics": metrics
+            "class": class_name, "metrics": metrics
         })
             
     return analysis_results
