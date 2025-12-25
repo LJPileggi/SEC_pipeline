@@ -370,30 +370,35 @@ class HDF5EmbeddingDatasetsManager(Dataset):
 
     def add_to_data_buffer(self, embedding, spectrogram, hash_keys, track_name, class_=None, subclass=None):
         """
-        Scrive i dati direttamente nella memoria contigua del buffer NumPy.
+        Scrive i dati nel buffer NumPy gestendo correttamente la codifica delle stringhe.
         """
         idx = self.buffer_count
         
-        # Inserimento diretto per campo (elimina zip e tuple creation)
-        self.buffer_array[idx]['ID'] = hash_keys.encode('utf-8')
+        # Funzione helper interna per codificare solo se necessario
+        def to_bytes(s):
+            if isinstance(s, str):
+                return s.encode('utf-8')
+            return s # È già bytes o None
+
+        # Inserimento con controllo del tipo
+        self.buffer_array[idx]['ID'] = to_bytes(hash_keys)
         
-        # Gestione sicura tensor -> numpy
         if torch.is_tensor(embedding):
             self.buffer_array[idx]['embeddings'] = embedding.detach().cpu().numpy()
         else:
             self.buffer_array[idx]['embeddings'] = embedding
             
         self.buffer_array[idx]['spectrograms'] = spectrogram
-        self.buffer_array[idx]['track_names'] = track_name.encode('utf-8')
+        self.buffer_array[idx]['track_names'] = to_bytes(track_name)
         
         if 'classes' not in self.partitions:
-            self.buffer_array[idx]['classes'] = class_.encode('utf-8') if class_ else b''
+            self.buffer_array[idx]['classes'] = to_bytes(class_) if class_ else b''
         
-        self.buffer_array[idx]['subclasses'] = subclass.encode('utf-8') if subclass else b''
+        self.buffer_array[idx]['subclasses'] = to_bytes(subclass) if subclass else b''
         
         self.buffer_count += 1
+        self.existing_keys.add(hash_keys if isinstance(hash_keys, str) else hash_keys.decode('utf-8'))
         
-        # Auto-flush se il buffer è pieno per non perdere dati
         if self.buffer_count >= self.buffer_size:
             self.flush_buffers()
 
