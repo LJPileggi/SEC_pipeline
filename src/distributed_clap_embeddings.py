@@ -40,6 +40,8 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
 
     division_names = [d[0] for d in config['data']['divisions_xc_sizes_names']]
     target_counts_list = np.cumsum([d[1] for d in config['data']['divisions_xc_sizes_names']])
+    if rank == 0:
+        print(division_names)
 
     # Manager Sorgente (Raw Audio)
     own_manager = False
@@ -118,7 +120,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                             sample_rate=sr, seed=seed, noise_perc=noise_perc, 
                             split=division_names[di], class_name=class_to_process
                         )
-                        diag_print(f"Manager pronto: {division_names[di]} (Shape: {temp_spec.shape})")
+                        diag_print(f"Manager pronto: {division_names[di]} {di} {results} {class_to_process} (Shape: {temp_spec.shape})")
 
                     # 🎯 4. CONTROLLO ESISTENZA (Resumability basata su HDF5)
                     # Questo permette di saltare il calcolo se il dato è già presente
