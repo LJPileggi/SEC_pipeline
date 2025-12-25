@@ -241,31 +241,34 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
 
     # 🎯 Rimosso il try/finally generale del worker per permettere crash espliciti
     for cut_secs, class_name in my_tasks:
-        if rank == 0:
-            print(f"\n[RANK 0] >>> PROCESSO TASK: {class_name} | {cut_secs}s", flush=True)
-
-        if class_name != last_class_name:
-            if current_audio_manager is not None:
-                current_audio_manager.close()
+        try:
+            if rank == 0:
+                print(f"\n[RANK 0] >>> PROCESSO TASK: {class_name} | {cut_secs}s", flush=True)
+    
+            if class_name != last_class_name:
+                if current_audio_manager is not None:
+                    current_audio_manager.close()
             
-            h5_path = os.path.join(config['dirs']['root_source'], class_name, f'{class_name}_{audio_format}_dataset.h5')
-            current_audio_manager = HDF5DatasetManager(h5_path, audio_format)
-            last_class_name = class_name
+                h5_path = os.path.join(config['dirs']['root_source'], class_name, f'{class_name}_{audio_format}_dataset.h5')
+                current_audio_manager = HDF5DatasetManager(h5_path, audio_format)
+                last_class_name = class_name
 
-        start_time = time.time()
+            start_time = time.time()
         
-        # Chiamata alla funzione di elaborazione
-        n_embeddings_per_run, completed = process_class_with_cut_secs(
-            clap_model, audio_embedding, class_name, cut_secs, 
-            n_octave, config, audio_dataset_manager=current_audio_manager
-        )
+            # Chiamata alla funzione di elaborazione
+            n_embeddings_per_run, completed = process_class_with_cut_secs(
+                clap_model, audio_embedding, class_name, cut_secs, 
+                n_octave, config, audio_dataset_manager=current_audio_manager
+            )
         
-        target_log_dir = os.path.join(config['dirs']['root_target'], f'{cut_secs}_secs')
-        process_time = time.time() - start_time
-        write_log(target_log_dir, (cut_secs, class_name), process_time, n_embeddings_per_run, rank, completed, **config)
+            target_log_dir = os.path.join(config['dirs']['root_target'], f'{cut_secs}_secs')
+            process_time = time.time() - start_time
+            write_log(target_log_dir, (cut_secs, class_name), process_time, n_embeddings_per_run, rank, completed, **config)
         
-        if pbar_instance:
-            pbar_instance.update(1)
+            if pbar_instance:
+                pbar_instance.update(1)
+        except Exception as e:
+            logging.error(f"{traceback.format_exc()}")
 
     # Chiusura finale (eseguita solo se il loop termina correttamente)
     if current_audio_manager:
