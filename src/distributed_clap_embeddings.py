@@ -331,6 +331,7 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
 
     # Distribuzione dei task al rank corrente
     my_tasks = all_possible_tasks[rank::world_size]
+    print(f"rank {rank}, tasks {my_tasks}")
     
     # Progress bar solo sul Rank 0
     manager = mp.Manager()
