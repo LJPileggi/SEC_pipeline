@@ -142,6 +142,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
 
     except Exception as e:
         # 🎯 PUNTO 5: Gestione Errori con Flush di sicurezza
+        diag_print(e)
         if split_emb_dataset_manager:
             split_emb_dataset_manager.flush_buffers()
             split_emb_dataset_manager.close()
@@ -204,6 +205,8 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
             config, 
             audio_dataset_manager=current_audio_manager
         )
+        if rank == 0:
+            print("{class_name} {cut_secs} completati con successo.")
 
         target_log_dir = os.path.join(config['dirs']['root_target'], f'{cut_secs}_secs')
         process_time = time.time() - start_time
