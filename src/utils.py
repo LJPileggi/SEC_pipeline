@@ -66,112 +66,82 @@ def get_config_from_yaml(config_file="config0.yaml"):
 ### Log file functions for embedding calculation ###
 
 def write_log(log_path, new_cut_secs_class, process_time, n_embeddings_per_run, rank, completed, **kwargs):
-    """
-    Generates or updates json log file after each process_class_with_cut_secs completion.
-    Saves completion time, rank plus general config information.
-
-    args:
-     - log_path (str): path to the log folder;
-     - new_cut_secs_class (tuple): couple (cut_secs, class) used as key in the json log
-       for O(1) time lookup;
-     - process_time (float): processing time in seconds for the process_class_with_cut_secs
-       instance;
-     - n_embeddings_per_run (int): number of embeddings created per class and cut_secs in
-       a single run, excluded the ones already present in previous ones;
-     - rank (int): rank of the process of the execution;
-     - completed (bool): whether the execution was completed or not;
-     - **kwargs (dict): dictionary containing all the general config information for all
-       runs.
-    """
+    os.makedirs(log_path, exist_ok=True) #
+    
     new_cut_secs_class = str(new_cut_secs_class)
-    logfile = os.path.join(log_path, f"log_rank_{rank}.json")
+    logfile = os.path.join(log_path, f"log_rank_{rank}.json") #
+    
+    log = {"config": {}}
     if os.path.exists(logfile):
         try:
-            with open(logfile, 'r+') as f:
+            with open(logfile, 'r') as f:
                 log = json.load(f)
-        except json.JSONDecodeError:
-            log = {"config": {}}
-        except Exception as e:
-            raise
-    else:
-        log = {"config": {}}
-    if log["config"] == {}: 
+        except (json.JSONDecodeError, Exception):
+            pass
+
+    if not log.get("config"): 
         log["config"].update(kwargs)
-    if log.get(new_cut_secs_class):
-        log[new_cut_secs_class]["process_time"].append(process_time)
-        log[new_cut_secs_class]["n_embeddings_per_run"].append(n_embeddings_per_run)
-        log[new_cut_secs_class]["rank"].append(rank)
-        log[new_cut_secs_class]["completed"] = completed
-    else:
-        log[new_cut_secs_class] = {
-            "process_time": [],
-            "n_embeddings_per_run": [],
-            "rank": []
-            }
-        log[new_cut_secs_class]["process_time"].append(process_time)
-        log[new_cut_secs_class]["n_embeddings_per_run"].append(n_embeddings_per_run)
-        log[new_cut_secs_class]["rank"].append(rank)
-        log[new_cut_secs_class]["completed"] = completed
-    try:
-        with open(logfile, 'w') as f:
-            json.dump(log, f, indent=4)
-    except Exception as e:
-        raise # Rilancia l'errore se la scrittura finale fallisce.
+
+    # Poiché ora il file log_rank_X.json accoglie più classi, 
+    # usiamo la tupla come chiave per non sovrascrivere i dati
+    if new_cut_secs_class not in log:
+        log[new_cut_secs_class] = {"process_time": [], "n_embeddings_per_run": [], "rank": []}
+        
+    log[new_cut_secs_class]["process_time"].append(process_time)
+    log[new_cut_secs_class]["n_embeddings_per_run"].append(n_embeddings_per_run)
+    log[new_cut_secs_class]["rank"].append(rank)
+    log[new_cut_secs_class]["completed"] = completed
+
+    with open(logfile, 'w') as f:
+        json.dump(log, f, indent=4)
 
 def join_logs(log_dir):
     """
-    Joins logs relative to different processes at the end of each execution,
-    ensuring correct merging of task metrics.
-
-    args:
-     - log_dir: directory containing the logs.
+    Unisce i log dei vari rank presenti in una cartella di cut_secs,
+    preservando i dati di tutte le classi processate.
     """
     final_log = {"config": {}}
     final_log_file = os.path.join(log_dir, "log.json")
-    pattern = os.path.join(log_dir, f"log_rank_*.json")
+    pattern = os.path.join(log_dir, "log_rank_*.json")
     log_files = glob.glob(pattern)
     
-    # 1. Se non trova file, scrive un log vuoto e ritorna. (Stesso comportamento)
     if not log_files:
-        with open(final_log_file, 'w') as f:
-            json.dump({}, f)
         return
 
-    # 2. Fusione dei log (FIX: Gestione corretta delle chiavi duplicate)
     for log_file in log_files:
         try:
             with open(log_file, 'r') as f:
-                log = json.load(f)
+                current_rank_log = json.load(f)
                 
-                # Itera sulle chiavi nel log del rank
-                for key, data in log.items():
+                for key, data in current_rank_log.items():
                     if key == "config":
-                        # Merge config solo se la configurazione globale è ancora vuota
                         if not final_log["config"]:
                             final_log["config"].update(data)
                         continue
 
+                    # 🎯 LOGICA DI MERGE ROBUSTA
+                    # Se la chiave (es. "(1, 'Birds')") esiste già, estendiamo le liste.
+                    # Questo è fondamentale se più rank hanno lavorato sulla stessa classe.
                     if key in final_log:
-                        # Task già presente: Estendi le liste
-                        for list_key in ["process_time", "n_embeddings_per_run", "rank"]:
-                            final_log[key][list_key].extend(data[list_key])
-                        # Aggiorna completed solo se tutti i sub-task sono completed
-                        final_log[key]["completed"] = final_log[key]["completed"] and data["completed"]
+                        for field in ["process_time", "n_embeddings_per_run", "rank"]:
+                            if field in data:
+                                final_log[key][field].extend(data[field])
+                        # Il task è completato solo se lo sono tutti i segmenti
+                        final_log[key]["completed"] = final_log[key].get("completed", True) and data.get("completed", False)
                     else:
-                        # Nuovo task: Aggiungi i dati completi
+                        # Se è una nuova classe per questo cut_secs, la aggiungiamo interamente
                         final_log[key] = data
                         
         except Exception as e:
-            # Stampa l'errore e continua, non bloccare l'unione di altri file
-            print(f"Errore durante la lettura o l'unione del log {log_file}: {e}", file=sys.stderr)
-            
-    # 3. Scrivi il file finale
+            print(f"Errore durante l'unione del log {log_file}: {e}")
+
+    # Scrittura del file unificato finale per il cut_secs corrente
     with open(final_log_file, 'w') as f:
         json.dump(final_log, f, indent=4)
         
-    # 4. Cleanup
-    # for log_file in log_files:
-    #     os.remove(log_file)
+    # Cleanup
+    for log_file in log_files:
+        os.remove(log_file)
 
 ### hdf5 raw dataset class ###
 

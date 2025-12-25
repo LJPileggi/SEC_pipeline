@@ -205,11 +205,12 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
             config, 
             audio_dataset_manager=current_audio_manager
         )
-        
+
+        target_log_dir = os.path.join(config['dirs']['root_target'], f'{cut_secs}_secs')
         process_time = time.time() - start_time
         
         # Scrittura del log (rank-specific)
-        write_log(config['dirs']['root_target'], (cut_secs, class_name), process_time, n_embeddings_per_run, rank, completed, **config)
+        write_log(target_log_dir, (cut_secs, class_name), process_time, n_embeddings_per_run, rank, completed, **config)
 
         if pbar_instance:
             pbar_instance.update(1)
@@ -259,8 +260,9 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
             n_octave, config, audio_dataset_manager=current_audio_manager
         )
         
+        target_log_dir = os.path.join(config['dirs']['root_target'], f'{cut_secs}_secs')
         process_time = time.time() - start_time
-        write_log(config['dirs']['root_target'], (cut_secs, class_name), process_time, n_embeddings_per_run, rank, completed, **config)
+        write_log(target_log_dir, (cut_secs, class_name), process_time, n_embeddings_per_run, rank, completed, **config)
         
         if pbar_instance:
             pbar_instance.update(1)

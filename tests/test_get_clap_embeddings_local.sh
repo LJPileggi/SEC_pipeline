@@ -95,33 +95,23 @@ echo "--- 🔗 Esecuzione Sequenziale di join_logs ---"
 cat << EOF > "$TEMP_JOIN_LOGS_PATH"
 import sys
 import os
-# MODELLO COERENTE: sys.path.append('.')
 sys.path.append('.')
-
 from src.utils import join_logs
-# Usiamo basedir_preprocessed che è dove i log dovrebbero essere stati scritti
-from src.dirs_config import basedir_preprocessed 
-import argparse
-import logging
-# Disattiviamo il logging che può interferire
-logging.basicConfig(level=logging.CRITICAL)
+from src.dirs_config import basedir_preprocessed
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--audio_format', type=str, required=True)
-    parser.add_argument('--n_octave', type=str, required=True)
-    args = parser.parse_args()
-
-    # Costruisci il percorso log_dir che i worker hanno usato
-    log_dir = os.path.join(basedir_preprocessed, args.audio_format, f'{args.n_octave}_octave')
+    # Percorso base: /scratch_base/dataSEC/PREPROCESSED_DATASET/wav/1_octave
+    base_path = os.path.join(basedir_preprocessed, "$BENCHMARK_AUDIO_FORMAT", "${BENCHMARK_N_OCTAVE}_octave")
     
-    print(f"Unione dei log da: {log_dir}")
-    try:
-        join_logs(log_dir)
-        print("Log uniti con successo in log.json.")
-    except Exception as e:
-        print(f"ERRORE CRITICO nell'unione dei log: {e}")
-        sys.exit(1)
+    if not os.path.exists(base_path):
+        return
+
+    # Cerchiamo le cartelle che finiscono per _secs
+    for entry in os.listdir(base_path):
+        target_dir = os.path.join(base_path, entry)
+        if os.path.isdir(target_dir) and entry.endswith("_secs"):
+            print(f"Unione log per durata: {entry}")
+            join_logs(target_dir) #
 
 if __name__ == '__main__':
     main()
