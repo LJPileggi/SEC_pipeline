@@ -228,6 +228,9 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
     """
     Esecuzione locale compartimentalizzata per classe per evitare deadlock HDF5.
     """
+    import faulthandler
+    faulthandler.enable()
+
     device = setup_distributed_environment(rank, world_size, False)
     clap_model, audio_embedding, _ = CLAP_initializer(device, use_cuda=True)
     
@@ -496,6 +499,12 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
             
         for p in processes:
             p.join()
+            if p.exitcode != 0:
+                logging.error(f"⚠️ PROCESSO CRASHATO! Rank: {processes.index(p)}, Exit Code: {p.exitcode}")
+                if p.exitcode == -11:
+                    logging.error("Diagnosi: Segmentation Fault (SIGSEGV)")
+                elif p.exitcode == -9:
+                    logging.error("Diagnosi: Processo ucciso dal sistema (probabile OOM Killer)")
             
     except Exception as e:
         logging.error(f"Errore critico nel processo padre: {e}")
