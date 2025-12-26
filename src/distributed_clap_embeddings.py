@@ -313,27 +313,22 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
         try:
             with open(log_path, 'r') as f:
                 log_data = json.load(f)
-                logging.info(f"Rank {rank}: Ripresa da log esistente.")
         except Exception as e:
             logging.error(f"Errore lettura log: {e}")
 
     # 🎯 5. LOGICA DI DISTRIBUZIONE PER CLASSE (ROUND-ROBIN)
-    # Identifichiamo le classi che hanno ancora task da completare
     active_classes = []
     for class_name in classes_list:
         needs_work = False
         for cut_secs in cut_secs_list:
             log_key_str = str((cut_secs, class_name))
-            task_info = log_data.get(log_key_str)
-            if not task_info or not task_info.get('completed', False):
+            if log_key_str not in log_data or not log_data[log_key_str].get('completed', False):
                 needs_work = True
                 break
         if needs_work:
             active_classes.append(class_name)
 
     active_classes.sort()
-    
-    # Assegnazione classi al rank SLURM corrente
     my_assigned_classes = active_classes[rank::world_size]
     
     # 6. Costruzione lista task specifica per questo Rank
@@ -341,24 +336,20 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
     for class_name in my_assigned_classes:
         for cut_secs in cut_secs_list:
             log_key_str = str((cut_secs, class_name))
-            task_info = log_data.get(log_key_str)
-            if not task_info or not task_info.get('completed', False):
+            if log_key_str not in log_data or not log_data[log_key_str].get('completed', False):
                 my_tasks.append((cut_secs, class_name))
     
     logging.info(f"Rank {rank}: classi assegnate {my_assigned_classes}")
 
-    # 7. Setup Progress Bar (Solo Rank 0 coordina la barra globale)
     manager = mp.Manager()
     message_queue = manager.Queue() if world_size > 1 else None
     pbar = None
     if rank == 0:
-        # Nota: Rank 0 stima il totale dei task attivi di tutti i rank per la pbar
         total_active_tasks = sum(1 for c in active_classes for s in cut_secs_list 
                                  if not log_data.get(str((s, c)), {}).get('completed'))
         if total_active_tasks > 0:
             pbar = MultiProcessTqdm(message_queue, "main_pbar", desc="Progresso Totale", total=total_active_tasks)
 
-    # 8. Esecuzione
     try:
         worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_tasks, pbar)
     except Exception as e:
@@ -367,7 +358,6 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
     finally:
         if rank == 0 and pbar:
             pbar.close()
-        logging.info(f"Rank {rank}: Esecuzione terminata.")
 
 
 def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
