@@ -154,12 +154,13 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
 
 def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_tasks, pbar_instance=None):
     """
-    Worker process per ambiente SLURM ottimizzato (Latenza 2).
+    Worker process SLURM con isolamento per classe (Latenza 2 ottimizzata).
     """
-    device = setup_distributed_environment(rank, world_size)
+    # Setup ambiente distribuito PyTorch
+    device = setup_distributed_environment(rank, world_size, slurm=True)
     clap_model, audio_embedding, _ = CLAP_initializer(device, use_cuda=True)
 
-    # Configurazione path e parametri
+    # Configurazione worker
     config['rank'] = rank
     config['dirs']['root_source'] = os.path.join(basedir_raw, f'{audio_format}')
     config['dirs']['root_target'] = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave')
@@ -167,115 +168,112 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
     config['audio']['n_octave'] = n_octave
     config['device'] = str(device)
     
-    logging.info(f"Processo {rank} avviato su GPU {rank}.")
-
-    # 🎯 STEP 1: Ordinamento per classe per massimizzare il riutilizzo del Manager Raw
-    my_tasks.sort(key=lambda x: x[1]) 
-
-    current_audio_manager = None
-    last_class_name = None
-
-    # 🎯 Rimosso il try/finally: il worker crasha se incontra errori fuori da process_class_with_cut_secs
+    # 🎯 Raggruppamento task per classe per minimizzare I/O contesa
+    from collections import defaultdict
+    tasks_by_class = defaultdict(list)
     for cut_secs, class_name in my_tasks:
-        if rank == 0:
-            print(f"\n[RANK 0] Elaborando Classe: {class_name} | Cut: {cut_secs}s", flush=True)
+        tasks_by_class[class_name].append(cut_secs)
 
-        # 🎯 STEP 2: Gestione dinamica del Manager Raw (Latenza 2)
-        if class_name != last_class_name:
-            if current_audio_manager is not None:
-                if rank == 0: print(f"[RANK 0] Cambio classe. Chiudo manager per {last_class_name}", flush=True)
-                current_audio_manager.close()
-            
-            h5_path = os.path.join(config['dirs']['root_source'], class_name, f'{class_name}_{audio_format}_dataset.h5')
-            if rank == 0: print(f"[RANK 0] Apertura nuovo manager raw per: {class_name}", flush=True)
+    # Iterazione sulle classi assegnate a questo Rank
+    for class_name, assigned_cuts in tasks_by_class.items():
+        # Apertura manager RAW (Unica per classe)
+        h5_path = os.path.join(config['dirs']['root_source'], class_name, f'{class_name}_{audio_format}_dataset.h5')
+        
+        try:
             current_audio_manager = HDF5DatasetManager(h5_path, audio_format)
-            last_class_name = class_name
-        else:
-            if rank == 0: print(f"[RANK 0] RIUTILIZZO manager esistente per la classe: {class_name}", flush=True)
+            
+            for cut_secs in assigned_cuts:
+                if rank == 0:
+                    logging.info(f"\n[RANK 0] >>> PROCESSO: {class_name} | {cut_secs}s")
 
-        start_time = time.time()
-        
-        # Esegui la funzione di elaborazione degli embedding
-        n_embeddings_per_run, completed = process_class_with_cut_secs(
-            clap_model, 
-            audio_embedding, 
-            class_name, 
-            cut_secs, 
-            n_octave, 
-            config, 
-            audio_dataset_manager=current_audio_manager
-        )
+                start_time = time.time()
+                
+                # Calcolo embedding
+                n_embeddings_per_run, completed = process_class_with_cut_secs(
+                    clap_model, audio_embedding, class_name, cut_secs, 
+                    n_octave, config, audio_dataset_manager=current_audio_manager
+                )
+                
+                # Log rank-specific
+                target_log_dir = os.path.join(config['dirs']['root_target'], f'{cut_secs}_secs')
+                process_time = time.time() - start_time
+                write_log(target_log_dir, (cut_secs, class_name), process_time, n_embeddings_per_run, rank, completed, **config)
 
-        target_log_dir = os.path.join(config['dirs']['root_target'], f'{cut_secs}_secs')
-        process_time = time.time() - start_time
-        
-        # Scrittura del log (rank-specific)
-        write_log(target_log_dir, (cut_secs, class_name), process_time, n_embeddings_per_run, rank, completed, **config)
+                if pbar_instance:
+                    pbar_instance.update(1)
 
-        if pbar_instance:
-            pbar_instance.update(1)
+            # Chiusura manager RAW
+            current_audio_manager.close()
+            
+        except Exception as e:
+            logging.error(f"Errore Rank {rank} su classe {class_name}: {traceback.format_exc()}")
+            continue
 
-    # Chiusura finale (eseguita solo al completamento del loop)
-    if current_audio_manager:
-        current_audio_manager.close()
     cleanup_distributed_environment(rank)
 
 
 # Funzione Worker per l'ambiente locale (richiamata da mp.Process)
 def local_worker_process(audio_format, n_octave, config, rank, world_size, my_tasks, pbar_instance=None):
+    """
+    Esecuzione locale compartimentalizzata per classe per evitare deadlock HDF5.
+    """
     device = setup_distributed_environment(rank, world_size, False)
     clap_model, audio_embedding, _ = CLAP_initializer(device, use_cuda=True)
     
+    # 🎯 FIX CRUCIALE: Assicuriamo che il rank sia nel config per write_log
     config['rank'] = rank
     config['dirs']['root_source'] = os.path.join(basedir_raw, f'{audio_format}')
     config['dirs']['root_target'] = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave')
-    if not os.path.exists(config['dirs']['root_target']):
-        os.makedirs(config['dirs']['root_target'])
     config['audio']['audio_format'] = audio_format
     config['audio']['n_octave'] = n_octave
     config['device'] = str(device)
 
-    my_tasks.sort(key=lambda x: x[1]) 
-
-    current_audio_manager = None
-    last_class_name = None
-
-    # 🎯 Rimosso il try/finally generale del worker per permettere crash espliciti
+    # Raggruppiamo i task ricevuti per classe per gestire i manager in isolamento
+    from collections import defaultdict
+    tasks_by_class = defaultdict(list)
     for cut_secs, class_name in my_tasks:
+        tasks_by_class[class_name].append(cut_secs)
+
+    for class_name, assigned_cuts in tasks_by_class.items():
+        # 🎯 Apertura ESCLUSIVA del file RAW per questa classe
+        h5_path = os.path.join(config['dirs']['root_source'], class_name, f'{class_name}_{audio_format}_dataset.h5')
+        
         try:
-            if rank == 0:
-                print(f"\n[RANK 0] >>> PROCESSO TASK: {class_name} | {cut_secs}s", flush=True)
-    
-            if class_name != last_class_name:
-                if current_audio_manager is not None:
-                    current_audio_manager.close()
+            current_audio_manager = HDF5DatasetManager(h5_path, audio_format)
             
-                h5_path = os.path.join(config['dirs']['root_source'], class_name, f'{class_name}_{audio_format}_dataset.h5')
-                current_audio_manager = HDF5DatasetManager(h5_path, audio_format)
-                last_class_name = class_name
+            for cut_secs in assigned_cuts:
+                if rank == 0:
+                    print(f"\n[RANK 0] >>> PROCESSO TASK: {class_name} | {cut_secs}s", flush=True)
 
-            start_time = time.time()
+                start_time = time.time()
         
-            # Chiamata alla funzione di elaborazione
-            n_embeddings_per_run, completed = process_class_with_cut_secs(
-                clap_model, audio_embedding, class_name, cut_secs, 
-                n_octave, config, audio_dataset_manager=current_audio_manager
-            )
-            if rank == 0:
-                print("{class_name} {cut_secs} completati con successo.")
+                # Esecuzione del calcolo embedding
+                n_embeddings_per_run, completed = process_class_with_cut_secs(
+                    clap_model, 
+                    audio_embedding, 
+                    class_name, 
+                    cut_secs, 
+                    n_octave, 
+                    config, 
+                    audio_dataset_manager=current_audio_manager
+                )
         
-            target_log_dir = os.path.join(config['dirs']['root_target'], f'{cut_secs}_secs')
-            process_time = time.time() - start_time
-            write_log(target_log_dir, (cut_secs, class_name), process_time, n_embeddings_per_run, rank, completed, **config)
+                # Logging dei tempi e dei risultati (rank-specific)
+                target_log_dir = os.path.join(config['dirs']['root_target'], f'{cut_secs}_secs')
+                process_time = time.time() - start_time
+                write_log(target_log_dir, (cut_secs, class_name), process_time, n_embeddings_per_run, rank, completed, **config)
         
-            if pbar_instance:
-                pbar_instance.update(1)
+                if pbar_instance:
+                    pbar_instance.update(1)
+            
+            # 🎯 Chiusura esplicita dopo aver finito tutti i cut_secs della classe
+            current_audio_manager.close() 
+
         except Exception as e:
-            logging.error(f"{traceback.format_exc()}")
+            logging.error(f"Errore critico nel Rank {rank} sulla classe {class_name}: {traceback.format_exc()}")
+            # In caso di errore sulla classe, il manager viene chiuso nel blocco except se necessario
+            continue
 
-    # Chiusura finale (eseguita solo se il loop termina correttamente)
-    if current_audio_manager:
-        current_audio_manager.close()
     cleanup_distributed_environment(rank)
 
 
@@ -284,18 +282,19 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
 def run_distributed_slurm(config_file, audio_format, n_octave):
     """
     Lancia la pipeline distribuita su SLURM con raggruppamento per classe.
+    Ogni rank SLURM processa classi intere per evitare contese I/O.
     """
-    # Recupera rank e world_size dalle variabili d'ambiente di SLURM
+    # 1. Recupero rank e world_size dalle variabili d'ambiente di SLURM
     rank, world_size = setup_environ_vars(slurm=True)
 
-    # Setup logging e cartelle
+    # 2. Setup logging e cartelle
     embed_folder = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave')
     os.makedirs(embed_folder, exist_ok=True)
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s',
                         handlers=[logging.StreamHandler(),
                                   logging.FileHandler(filename=os.path.join(embed_folder, 'log.txt'))])
 
-    # Caricamento configurazione
+    # 3. Caricamento configurazione
     classes_list, _, _, _, sampling_rate, ref, noise_perc, seed, center_freqs, cut_secs_list, \
         divisions_xc_sizes_names = get_config_from_yaml(config_file)
 
@@ -307,46 +306,59 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
     config['spectrogram'].update({'sr': sampling_rate, 'ref': ref, 'center_freqs': center_freqs})
     config['audio'].update({'noise_perc': noise_perc, 'seed': seed})
 
-    # Caricamento log per resumability
+    # 4. Caricamento log per resumability
     log_data = {}
     log_path = os.path.join(embed_folder, 'log.json')
     if os.path.exists(log_path):
         try:
             with open(log_path, 'r') as f:
                 log_data = json.load(f)
-                logging.info(f"Ripresa da log esistente ({len(log_data)} task registrati).")
+                logging.info(f"Rank {rank}: Ripresa da log esistente.")
         except Exception as e:
             logging.error(f"Errore lettura log: {e}")
 
-    # 🎯 GENERAZIONE TASK OTTIMIZZATA
-    all_possible_tasks = []
-    # Invertiamo i loop: raggruppiamo prima per classe
+    # 🎯 5. LOGICA DI DISTRIBUZIONE PER CLASSE (ROUND-ROBIN)
+    # Identifichiamo le classi che hanno ancora task da completare
+    active_classes = []
     for class_name in classes_list:
+        needs_work = False
         for cut_secs in cut_secs_list:
             log_key_str = str((cut_secs, class_name))
-            
-            # Aggiungiamo il task solo se non è presente nel log o se non è 'completed'
             task_info = log_data.get(log_key_str)
             if not task_info or not task_info.get('completed', False):
-                all_possible_tasks.append((cut_secs, class_name))
-            else:
-                if rank == 0:
-                    logging.info(f"Skipping task: {log_key_str} (già completato)")
-    
-    # 🎯 ORDINAMENTO FINALE: Massimizza la contiguità delle classi per ogni worker
-    all_possible_tasks.sort(key=lambda x: x[1])
+                needs_work = True
+                break
+        if needs_work:
+            active_classes.append(class_name)
 
-    # Distribuzione dei task al rank corrente
-    my_tasks = all_possible_tasks[rank::world_size]
-    print(f"rank {rank}, tasks {my_tasks}")
+    active_classes.sort()
     
-    # Progress bar solo sul Rank 0
+    # Assegnazione classi al rank SLURM corrente
+    my_assigned_classes = active_classes[rank::world_size]
+    
+    # 6. Costruzione lista task specifica per questo Rank
+    my_tasks = []
+    for class_name in my_assigned_classes:
+        for cut_secs in cut_secs_list:
+            log_key_str = str((cut_secs, class_name))
+            task_info = log_data.get(log_key_str)
+            if not task_info or not task_info.get('completed', False):
+                my_tasks.append((cut_secs, class_name))
+    
+    logging.info(f"Rank {rank}: classi assegnate {my_assigned_classes}")
+
+    # 7. Setup Progress Bar (Solo Rank 0 coordina la barra globale)
     manager = mp.Manager()
     message_queue = manager.Queue() if world_size > 1 else None
     pbar = None
-    if rank == 0 and len(all_possible_tasks) > 0:
-        pbar = MultiProcessTqdm(message_queue, "main_pbar", desc="Progresso Totale", total=len(all_possible_tasks))
+    if rank == 0:
+        # Nota: Rank 0 stima il totale dei task attivi di tutti i rank per la pbar
+        total_active_tasks = sum(1 for c in active_classes for s in cut_secs_list 
+                                 if not log_data.get(str((s, c)), {}).get('completed'))
+        if total_active_tasks > 0:
+            pbar = MultiProcessTqdm(message_queue, "main_pbar", desc="Progresso Totale", total=total_active_tasks)
 
+    # 8. Esecuzione
     try:
         worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_tasks, pbar)
     except Exception as e:
@@ -355,13 +367,15 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
     finally:
         if rank == 0 and pbar:
             pbar.close()
-        logging.info(f"Rank {rank}: Task terminati.")
+        logging.info(f"Rank {rank}: Esecuzione terminata.")
 
 
 def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
     """
-    Lancia la pipeline in locale su più core/GPU con raggruppamento per classe.
+    Lancia la pipeline in locale su più core/GPU con raggruppamento per classe
+    per evitare contese di risorse sui file HDF5.
     """
+    # 1. Setup ambiente e logging
     setup_environ_vars(slurm=False)
 
     embed_folder = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave')
@@ -370,6 +384,7 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
                         handlers=[logging.StreamHandler(),
                                   logging.FileHandler(filename=os.path.join(embed_folder, 'log.txt'))])
 
+    # 2. Caricamento configurazione
     classes_list, _, _, _, sampling_rate, ref, noise_perc, seed, center_freqs, cut_secs_list, \
         divisions_xc_sizes_names = get_config_from_yaml(config_file)
 
@@ -381,46 +396,88 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
     config['spectrogram'].update({'sr': sampling_rate, 'ref': ref, 'center_freqs': center_freqs})
     config['audio'].update({'noise_perc': noise_perc, 'seed': seed})
 
-    # Caricamento log
+    # 3. Caricamento log per resumability
     log_data = {}
     log_path = os.path.join(embed_folder, 'log.json')
     if os.path.exists(log_path):
-        with open(log_path, 'r') as f:
-            log_data = json.load(f)
+        try:
+            with open(log_path, 'r') as f:
+                log_data = json.load(f)
+        except Exception as e:
+            logging.error(f"Errore lettura log: {e}")
 
-    # 🎯 GENERAZIONE E ORDINAMENTO TASK (Raggruppati per classe)
-    all_tasks = []
+    # 🎯 4. LOGICA DI COMPARTIMENTALIZZAZIONE: Identificazione classi attive
+    # Filtriamo solo le classi che hanno almeno un cut_secs non completato
+    active_classes = []
     for class_name in classes_list:
+        needs_work = False
         for cut_secs in cut_secs_list:
             log_key_str = str((cut_secs, class_name))
             task_info = log_data.get(log_key_str)
             if not task_info or not task_info.get('completed', False):
-                all_tasks.append((cut_secs, class_name))
+                needs_work = True
+                break
+        if needs_work:
+            active_classes.append(class_name)
 
-    # Ordiniamo per assicurarci che task della stessa classe siano vicini
-    all_tasks.sort(key=lambda x: x[1])
+    # Ordiniamo le classi per una distribuzione round-robin prevedibile
+    active_classes.sort()
 
+    # 5. Setup Multiprocessing
     processes = []
     manager = mp.Manager()
     message_queue = manager.Queue()
-    pbar = MultiProcessTqdm(message_queue, "main_pbar", desc="Progresso Totale", total=len(all_tasks))
+    
+    # Calcoliamo il totale dei task effettivi per la pbar
+    total_tasks_to_run = 0
+    tasks_distribution = [] # Debug per visibilità distribuzione
 
+    # 🎯 6. DISTRIBUZIONE TASK PER RANK
+    for rank in range(world_size):
+        # Ogni rank prende un blocco di classi (es. Rank 0 prende classe 0, 4, 8...)
+        my_assigned_classes = active_classes[rank::world_size]
+        
+        my_rank_tasks = []
+        for class_name in my_assigned_classes:
+            for cut_secs in cut_secs_list:
+                log_key_str = str((cut_secs, class_name))
+                task_info = log_data.get(log_key_str)
+                if not task_info or not task_info.get('completed', False):
+                    my_rank_tasks.append((cut_secs, class_name))
+        
+        tasks_distribution.append((rank, my_rank_tasks))
+        total_tasks_to_run += len(my_rank_tasks)
+
+    # 7. Avvio Progress Bar
+    pbar = None
+    if total_tasks_to_run > 0:
+        pbar = MultiProcessTqdm(message_queue, "main_pbar", desc="Progresso Totale", total=total_tasks_to_run)
+
+    # 8. Lancio dei Processi
     try:
-        for rank in range(world_size):
-            # Ogni processo locale riceve la sua fetta di task pre-ordinata
-            my_tasks = all_tasks[rank::world_size]
-            print(f"rank {rank}, tasks {my_tasks}")
-            p = mp.Process(target=local_worker_process, 
-                           args=(audio_format, n_octave, config, rank, world_size, my_tasks, pbar))
+        for rank, my_tasks in tasks_distribution:
+            if not my_tasks:
+                logging.info(f"Rank {rank} non ha task assegnati.")
+                continue
+                
+            print(f"Lancio Rank {rank}: classi assegnate {[t[1] for t in my_tasks]}")
+            
+            p = mp.Process(
+                target=local_worker_process, 
+                args=(audio_format, n_octave, config, rank, world_size, my_tasks, pbar)
+            )
             p.start()
             processes.append(p)
             
+        # Attesa completamento
         for p in processes:
             p.join()
             
     except Exception as e:
         logging.error(f"Errore critico nel processo padre: {e}")
+        traceback.print_exc()
         raise e
     finally:
         if pbar:
             pbar.close()
+        logging.info("Esecuzione locale terminata.")
