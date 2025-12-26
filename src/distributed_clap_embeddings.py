@@ -15,6 +15,12 @@ from .models import CLAP_initializer, spectrogram_n_octaveband_generator
 from .utils import *
 from .dirs_config import *
 
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, cut_secs, n_octave, config, audio_dataset_manager=None):
     # --- SETUP INIZIALE (Invariato) ---
     root_source = config['dirs']['root_source']

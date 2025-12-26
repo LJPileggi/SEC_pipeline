@@ -94,6 +94,8 @@ def write_log(log_path, new_cut_secs_class, process_time, n_embeddings_per_run, 
 
     with open(logfile, 'w') as f:
         json.dump(log, f, indent=4)
+        f.flush() # 🎯 Forza la scrittura fisica
+        os.fsync(f.fileno()) # 🎯 Sincronizza col sistema operativo
 
 def join_logs(log_dir):
     """
@@ -225,7 +227,7 @@ class HDF5DatasetManager:
         pass
 
 class HDF5EmbeddingDatasetsManager(Dataset):
-    def __init__(self, h5_path, mode='r', partitions=set(('classes', 'splits')), buffer_size=500):
+    def __init__(self, h5_path, mode='r', partitions=set(('classes', 'splits')), buffer_size=20):
         super().__init__()
         self.h5_path = h5_path
         self.partitions = set(partitions)
