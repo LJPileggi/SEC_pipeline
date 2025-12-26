@@ -281,10 +281,10 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
 
 def run_distributed_slurm(config_file, audio_format, n_octave):
     """
-    Lancia la pipeline distribuita su SLURM con raggruppamento per classe.
-    Ogni rank SLURM processa classi intere per evitare contese I/O.
+    Lancia la pipeline distribuita su SLURM adattando il world_size 
+    al numero di classi attive per evitare stalli nel rendezvous.
     """
-    # 1. Recupero rank e world_size dalle variabili d'ambiente di SLURM
+    # 1. Recupero parametri SLURM originali
     rank, world_size = setup_environ_vars(slurm=True)
 
     # 2. Setup logging e cartelle
@@ -316,57 +316,78 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
         except Exception as e:
             logging.error(f"Errore lettura log: {e}")
 
-    # 🎯 5. LOGICA DI DISTRIBUZIONE PER CLASSE (ROUND-ROBIN)
+    # 🎯 5. IDENTIFICAZIONE CLASSI ATTIVE
     active_classes = []
     for class_name in classes_list:
         needs_work = False
         for cut_secs in cut_secs_list:
             log_key_str = str((cut_secs, class_name))
-            if log_key_str not in log_data or not log_data[log_key_str].get('completed', False):
+            if not log_data.get(log_key_str, {}).get('completed', False):
                 needs_work = True
                 break
         if needs_work:
             active_classes.append(class_name)
 
     active_classes.sort()
-    my_assigned_classes = active_classes[rank::world_size]
-    
-    # 6. Costruzione lista task specifica per questo Rank
+
+    # 🎯 6. RIDIMENSIONAMENTO DINAMICO DEL WORLD SIZE PER SLURM
+    # Il world_size effettivo non può superare il numero di classi attive
+    actual_world_size = min(len(active_classes), world_size)
+
+    # Se il rank corrente è fuori dal nuovo world_size, esce subito
+    if rank >= actual_world_size:
+        logging.info(f"Rank {rank} inattivo: actual_world_size ridotto a {actual_world_size}. Uscita.")
+        return
+
+    if actual_world_size == 0:
+        if rank == 0: logging.info("Tutti i task completati.")
+        return
+
+    # 🎯 7. DISTRIBUZIONE TASK (Round-robin sul nuovo world_size)
+    my_assigned_classes = active_classes[rank::actual_world_size]
     my_tasks = []
     for class_name in my_assigned_classes:
         for cut_secs in cut_secs_list:
             log_key_str = str((cut_secs, class_name))
-            if log_key_str not in log_data or not log_data[log_key_str].get('completed', False):
+            if not log_data.get(log_key_str, {}).get('completed'):
                 my_tasks.append((cut_secs, class_name))
-    
-    logging.info(f"Rank {rank}: classi assegnate {my_assigned_classes}")
 
+    logging.info(f"Rank {rank}/{actual_world_size}: classi assegnate {my_assigned_classes}")
+
+    # 8. Setup Progress Bar (Solo Rank 0)
     manager = mp.Manager()
-    message_queue = manager.Queue() if world_size > 1 else None
+    message_queue = manager.Queue() if actual_world_size > 1 else None
     pbar = None
     if rank == 0:
         total_active_tasks = sum(1 for c in active_classes for s in cut_secs_list 
                                  if not log_data.get(str((s, c)), {}).get('completed'))
         if total_active_tasks > 0:
-            pbar = MultiProcessTqdm(message_queue, "main_pbar", desc="Progresso Totale", total=total_active_tasks)
+            pbar = MultiProcessTqdm(message_queue, "main_pbar", desc="Progresso Totale SLURM", total=total_active_tasks)
 
+    # 9. Esecuzione Worker
     try:
-        worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_tasks, pbar)
+        # Passiamo actual_world_size per il rendezvous corretto in setup_distributed_environment
+        worker_process_slurm(audio_format, n_octave, config, rank, actual_world_size, my_tasks, pbar)
     except Exception as e:
-        logging.error(f"Errore critico nel processo Rank {rank}: {e}")
+        logging.error(f"Errore critico Rank {rank}: {e}")
         raise e
     finally:
         if rank == 0 and pbar:
             pbar.close()
+        logging.info(f"Rank {rank}: Esecuzione terminata.")
 
 
 def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
     """
-    Lancia la pipeline in locale su più core/GPU con raggruppamento per classe
-    per evitare contese di risorse sui file HDF5.
+    Lancia la pipeline in locale adattando dinamicamente il numero di processi
+    al numero di classi attive per evitare deadlock nel rendezvous.
     """
-    # 1. Setup ambiente e logging
+    # 1. Setup ambiente e variabili
     setup_environ_vars(slurm=False)
+    
+    # 🎯 FIX 1: Porta dinamica per evitare "Address already in use"
+    import random
+    os.environ['MASTER_PORT'] = str(random.randint(29500, 29999))
 
     embed_folder = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave')
     os.makedirs(embed_folder, exist_ok=True)
@@ -397,69 +418,71 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
             logging.error(f"Errore lettura log: {e}")
 
     # 🎯 4. LOGICA DI COMPARTIMENTALIZZAZIONE: Identificazione classi attive
-    # Filtriamo solo le classi che hanno almeno un cut_secs non completato
+    # Filtriamo solo le classi che hanno almeno un task incompleto
     active_classes = []
     for class_name in classes_list:
         needs_work = False
         for cut_secs in cut_secs_list:
             log_key_str = str((cut_secs, class_name))
-            task_info = log_data.get(log_key_str)
-            if not task_info or not task_info.get('completed', False):
+            if not log_data.get(log_key_str, {}).get('completed', False):
                 needs_work = True
                 break
         if needs_work:
             active_classes.append(class_name)
 
-    # Ordiniamo le classi per una distribuzione round-robin prevedibile
     active_classes.sort()
 
-    # 5. Setup Multiprocessing
+    # 🎯 FIX 2: Ridimensionamento dinamico del World Size
+    # Usiamo il minimo tra le classi disponibili e i core/GPU richiesti
+    actual_world_size = min(len(active_classes), world_size)
+    
+    if actual_world_size == 0:
+        logging.info("Tutti i task risultano completati nel log.json.")
+        return
+
+    print(f"Ambiente locale rilevato: {len(active_classes)} classi attive. Avvio con {actual_world_size} processi.")
+
+    # 5. Distribuzione Task per Rank
     processes = []
     manager = mp.Manager()
     message_queue = manager.Queue()
     
-    # Calcoliamo il totale dei task effettivi per la pbar
+    tasks_distribution = []
     total_tasks_to_run = 0
-    tasks_distribution = [] # Debug per visibilità distribuzione
 
-    # 🎯 6. DISTRIBUZIONE TASK PER RANK
-    for rank in range(world_size):
-        # Ogni rank prende un blocco di classi (es. Rank 0 prende classe 0, 4, 8...)
-        my_assigned_classes = active_classes[rank::world_size]
+    for rank in range(actual_world_size):
+        # Distribuzione round-robin basata sul NUOVO world size
+        my_assigned_classes = active_classes[rank::actual_world_size]
         
         my_rank_tasks = []
         for class_name in my_assigned_classes:
             for cut_secs in cut_secs_list:
                 log_key_str = str((cut_secs, class_name))
-                task_info = log_data.get(log_key_str)
-                if not task_info or not task_info.get('completed', False):
+                if not log_data.get(log_key_str, {}).get('completed'):
                     my_rank_tasks.append((cut_secs, class_name))
         
-        tasks_distribution.append((rank, my_rank_tasks))
-        total_tasks_to_run += len(my_rank_tasks)
+        if my_rank_tasks:
+            tasks_distribution.append((rank, my_rank_tasks))
+            total_tasks_to_run += len(my_rank_tasks)
 
-    # 7. Avvio Progress Bar
+    # 6. Progress Bar
     pbar = None
     if total_tasks_to_run > 0:
         pbar = MultiProcessTqdm(message_queue, "main_pbar", desc="Progresso Totale", total=total_tasks_to_run)
 
-    # 8. Lancio dei Processi
+    # 7. Lancio dei Processi
     try:
         for rank, my_tasks in tasks_distribution:
-            if not my_tasks:
-                logging.info(f"Rank {rank} non ha task assegnati.")
-                continue
-                
             print(f"Lancio Rank {rank}: classi assegnate {[t[1] for t in my_tasks]}")
             
+            # Passiamo actual_world_size per garantire il rendezvous corretto
             p = mp.Process(
                 target=local_worker_process, 
-                args=(audio_format, n_octave, config, rank, world_size, my_tasks, pbar)
+                args=(audio_format, n_octave, config, rank, actual_world_size, my_tasks, pbar)
             )
             p.start()
             processes.append(p)
             
-        # Attesa completamento
         for p in processes:
             p.join()
             
@@ -470,4 +493,4 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
     finally:
         if pbar:
             pbar.close()
-        logging.info("Esecuzione locale terminata.")
+        logging.info("Esecuzione locale completata.")
