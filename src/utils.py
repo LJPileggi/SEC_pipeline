@@ -621,7 +621,7 @@ def setup_environ_vars(slurm=True):
         return rank, world_size
     else:
         os.environ['MASTER_ADDR'] = 'localhost'
-        os.environ['MASTER_PORT'] = str(random.randint(29500, 29999))
+        os.environ['MASTER_PORT'] = str(np.random.randint(29500, 29999))
 
 def setup_distributed_environment(rank, world_size, slurm=True):
     """
