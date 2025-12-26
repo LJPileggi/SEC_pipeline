@@ -90,6 +90,10 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                             split_emb_dataset_manager.flush_buffers() # Manteniamo il tuo flush
                             split_emb_dataset_manager.close()
                             split_emb_dataset_manager = None # Forza la creazione del nuovo file
+
+                            # 🎯 FIX CRUCIALE: Piccola pausa per stabilizzare il File System
+                            # Evita che il prossimo open() avvenga mentre il kernel sta ancora chiudendo il precedente
+                            time.sleep(0.5)
                         
                         di += 1
                         if di >= len(division_names):

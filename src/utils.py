@@ -227,7 +227,8 @@ class HDF5DatasetManager:
         pass
 
 class HDF5EmbeddingDatasetsManager(Dataset):
-    def __init__(self, h5_path, mode='r', partitions=set(('classes', 'splits')), buffer_size=20):
+    class HDF5EmbeddingDatasetsManager(Dataset):
+    def __init__(self, h5_path, mode='r', partitions=set(('classes', 'splits')), buffer_size=500):
         super().__init__()
         self.h5_path = h5_path
         self.partitions = set(partitions)
@@ -236,32 +237,41 @@ class HDF5EmbeddingDatasetsManager(Dataset):
         self.buffer_size = buffer_size
         self.buffer_count = 0
         self.existing_keys = set()
-        self.dt = None           # Inizializziamo esplicitamente a None
-        self.buffer_array = None # Inizializziamo esplicitamente a None
+        self.dt = None           
+        self.buffer_array = None 
         
         try:
+            # Apertura del file con retry logica interna di h5py se possibile
             self.hf = h5py.File(self.h5_path, self.mode)
         except Exception as e:
             logging.error(f"Impossibile aprire il file {h5_path}: {e}")
             raise
 
-        # Se il dataset esiste già (file pre-esistente)
+        # 🎯 RECUPERO METADATI E CHIAVI (Fondamentale per la Resumability)
         if self.hf is not None and 'embedding_dataset' in self.hf:
-            # Recuperiamo i parametri dagli attributi del file
-            emb_dim = self.hf.attrs.get('embedding_dim')
-            spec_sh = self.hf.attrs.get('spec_shape')
-            
-            if emb_dim is not None and spec_sh is not None:
-                self.dt = self._set_dataset_format(emb_dim, spec_sh)
+            try:
+                # 1. Recuperiamo i parametri strutturali dagli attributi del file
+                emb_dim = self.hf.attrs.get('embedding_dim')
+                spec_sh = self.hf.attrs.get('spec_shape')
                 
-                # Popoliamo il set delle chiavi per la resumability
-                if self.hf['embedding_dataset'].shape[0] > 0:
-                    raw_ids = self.hf['embedding_dataset']['ID'][:]
-                    self.existing_keys = {k.decode('utf-8') if isinstance(k, bytes) else k for k in raw_ids}
-                
-                # Inizializziamo il buffer NumPy se siamo in scrittura
-                if self.mode == 'a':
-                    self.buffer_array = np.empty(self.buffer_size, dtype=self.dt)
+                if emb_dim is not None and spec_sh is not None:
+                    # Ricostruiamo il formato del dataset (dtype)
+                    self.dt = self._set_dataset_format(emb_dim, spec_sh)
+                    
+                    # 2. Caricamento sicuro delle chiavi ID per il check O(1)
+                    dset = self.hf['embedding_dataset']
+                    if dset.shape[0] > 0:
+                        # Leggiamo gli ID. Usiamo una slice [:] per caricare in memoria
+                        raw_ids = dset['ID'][:]
+                        self.existing_keys = {k.decode('utf-8') if isinstance(k, bytes) else k for k in raw_ids}
+                    
+                    # 3. Inizializziamo il buffer NumPy solo se siamo in modalità append
+                    if self.mode == 'a':
+                        self.buffer_array = np.empty(self.buffer_size, dtype=self.dt)
+            except Exception as e:
+                # Se il file è corrotto o incompleto, logghiamo ma non crashiamo il worker
+                logging.warning(f"Manager: Errore durante il caricamento dei metadati da {h5_path}: {e}")
+
     def __len__(self):
         if 'embedding_dataset' in self.hf:
             return self.hf['embedding_dataset'].shape[0]
@@ -306,13 +316,14 @@ class HDF5EmbeddingDatasetsManager(Dataset):
                 ])
         return dt
 
-    def initialize_hdf5(self, embedding_dim, spec_shape, audio_format, cut_secs, n_octave, \
+    def initialize_hdf5(self, embedding_dim, spec_shape, audio_format, cut_secs, n_octave, 
                         sample_rate, seed, noise_perc, split, class_name=None):
         """
         Inizializza il file HDF5 e configura i buffer necessari per l'append.
+        Salva i metadati come attributi per permettere all'__init__ di ricaricarli in caso di resume.
         """
         if self.mode == 'a':
-            # Setup attributi
+            # 🎯 SALVATAGGIO ATTRIBUTI (Metadati strutturali)
             self.hf.attrs['audio_format'] = audio_format
             self.hf.attrs['cut_secs'] = cut_secs
             self.hf.attrs['n_octave'] = n_octave
@@ -321,22 +332,27 @@ class HDF5EmbeddingDatasetsManager(Dataset):
             self.hf.attrs['seed'] = seed
             self.hf.attrs['split'] = split
             self.hf.attrs['embedding_dim'] = embedding_dim
-            self.hf.attrs['spec_shape'] = spec_shape
+            self.hf.attrs['spec_shape'] = spec_shape # Fondamentale per ricostruire il buffer NumPy
             
-            # 🎯 CONFIGURAZIONE FORMATO E BUFFER
+            # Setup formato dataset e buffer pre-allocato
             self.dt = self._set_dataset_format(embedding_dim, spec_shape)
             self.buffer_array = np.empty(self.buffer_size, dtype=self.dt)
             
             if 'classes' in self.partitions:
                 self.hf.attrs['class'] = class_name
             
-            # Creazione dataset fisico
+            # Creazione fisica del dataset se non esiste
             if 'embedding_dataset' not in self.hf:
+                # Usiamo chunks=True per permettere il ridimensionamento dinamico
                 self.hf.create_dataset('embedding_dataset', 
                                         shape=(0,),
                                         maxshape=(None,),
                                         dtype=self.dt,
                                         chunks=True)
+            
+            # 🎯 FORZA SCRITTURA METADATI
+            # Questo assicura che se il processo crasha subito dopo, l'__init__ troverà almeno gli attributi
+            self.hf.flush()
         else:
             raise Exception(f'Permessi non validi per la scrittura su {self.h5_path}.')
 
