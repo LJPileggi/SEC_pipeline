@@ -65,11 +65,11 @@ def get_config_from_yaml(config_file="config0.yaml"):
    
 ### Log file functions for embedding calculation ###
 
-def write_log(log_path, new_cut_secs_class, process_time, n_embeddings_per_run, rank, completed, **kwargs):
+def write_log(log_path, new_cut_secs_class, process_time, n_embeddings_per_run, completed, **kwargs):
     os.makedirs(log_path, exist_ok=True) #
     
     new_cut_secs_class = str(new_cut_secs_class)
-    logfile = os.path.join(log_path, f"log_rank_{rank}.json") #
+    logfile = os.path.join(log_path, f"log_rank_{kwargs['rank']}.json") #
     
     log = {"config": {}}
     if os.path.exists(logfile):
@@ -89,7 +89,7 @@ def write_log(log_path, new_cut_secs_class, process_time, n_embeddings_per_run, 
         
     log[new_cut_secs_class]["process_time"].append(process_time)
     log[new_cut_secs_class]["n_embeddings_per_run"].append(n_embeddings_per_run)
-    log[new_cut_secs_class]["rank"].append(rank)
+    log[new_cut_secs_class]["rank"].append(kwargs["rank"])
     log[new_cut_secs_class]["completed"] = completed
 
     with open(logfile, 'w') as f:
