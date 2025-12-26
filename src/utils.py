@@ -227,7 +227,6 @@ class HDF5DatasetManager:
         pass
 
 class HDF5EmbeddingDatasetsManager(Dataset):
-    class HDF5EmbeddingDatasetsManager(Dataset):
     def __init__(self, h5_path, mode='r', partitions=set(('classes', 'splits')), buffer_size=500):
         super().__init__()
         self.h5_path = h5_path
