@@ -32,7 +32,8 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
     rank = config.get('rank', 0)
 
     def diag_print(msg):
-        if rank == 0: print(f"[RANK 0 - DIAG] {msg}", flush=True)
+        # if rank == 0:
+        print(f"[RANK {rank} - DIAG] {msg}", flush=True)
 
     class_seed = seed + hash(class_to_process) % 10000000
     offset_rng = np.random.default_rng(class_seed)
@@ -242,8 +243,8 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
             current_audio_manager = HDF5DatasetManager(h5_path, audio_format)
             
             for cut_secs in assigned_cuts:
-                if rank == 0:
-                    print(f"\n[RANK 0] >>> PROCESSO TASK: {class_name} | {cut_secs}s", flush=True)
+                # if rank == 0:
+                print(f"\n[RANK 0] >>> PROCESSO TASK: {class_name} | {cut_secs}s", flush=True)
 
                 start_time = time.time()
         
