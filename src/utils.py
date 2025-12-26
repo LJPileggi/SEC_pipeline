@@ -222,7 +222,7 @@ class HDF5DatasetManager:
             self.hf = None
             
     def __del__(self):
-        self.close()
+        pass
 
 class HDF5EmbeddingDatasetsManager(Dataset):
     def __init__(self, h5_path, mode='r', partitions=set(('classes', 'splits')), buffer_size=500):
@@ -444,7 +444,7 @@ class HDF5EmbeddingDatasetsManager(Dataset):
             self.hf = None
 
     def __del__(self):
-        self.close()
+        pass
 
 def combine_hdf5_files(root_dir, cut_secs_list, embedding_dim, spec_shape, audio_format, cut_secs, n_octave, 
                                              sample_rate, seed, noise_perc, splits_list):
