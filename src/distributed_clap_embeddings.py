@@ -83,7 +83,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
 
                 for b in range(n_buckets):
                     # 🎯 PUNTO 2: Logica di Cambio Split (Tua originale con FLUSH)
-                    diag_print(f"{class_to_process} {cut_secs} {results} {di}")
+                    diag_print(f"{class_to_process}, {cut_secs} s: created {results}/{target_counts_list[di]} embeddings for split '{division_names[di]}'")
                     if results >= target_counts_list[di]:
                         logging.info(f"Split '{division_names[di]}' per {class_to_process} completato. Avvio flush...")
                         
