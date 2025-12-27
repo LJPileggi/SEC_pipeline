@@ -457,7 +457,7 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
 
     # 🎯 FIX 2: Ridimensionamento dinamico del World Size
     # Usiamo il minimo tra le classi disponibili e i core/GPU richiesti
-    actual_world_size = 1# min(len(active_classes), world_size)
+    actual_world_size = min(len(active_classes), world_size)
     
     if actual_world_size == 0:
         logging.info("Tutti i task risultano completati nel log.json.")
