@@ -67,6 +67,16 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
     round_ = 0
     n_embeddings_per_run = 0
 
+    # 🎯 1. Recupera l'indice classe UNA VOLTA fuori dal loop
+    class_idx_attr = audio_dataset_manager.hf.attrs.get('class_idx', 0)
+    
+    # 🎯 2. BUFFER ADATTIVO: Più lungo è il segmento, più piccolo è il buffer in RAM
+    # Se cut_secs = 30, buffer_size = 3. Se cut_secs = 1, buffer_size = 100.
+    adaptive_buffer_size = max(1, int(100 / cut_secs))
+    
+    # 🎯 3. Ottimizzazione Threading (una sola volta)
+    torch.set_num_threads(1)
+
     try:
         # 🎯 Otteniamo array di indici invece di DataFrame
         permuted_indices = audio_dataset_manager.get_reproducible_permutation(class_seed)
@@ -105,7 +115,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                             logging.info(f"Classe '{class_to_process}' elaborata. Totale: {results}")
                             return n_embeddings_per_run, True
 
-                    emb_pkey = f"{audio_dataset_manager.hf.attrs.get('class_idx', 0)}_{track_idx}_{b}_{round_}_{results}"
+                    emb_pkey = f"{class_idx_attr}_{track_idx}_{b}_{round_}_{results}"
 
                     # Preparazione Audio
                     start = b * window_size + offset
@@ -123,7 +133,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
 
                     if split_emb_dataset_manager is None:
                         h5_path = os.path.join(target_class_dir, f'{class_to_process}_{division_names[di]}_{audio_format}_emb.h5')
-                        split_emb_dataset_manager = HDF5EmbeddingDatasetsManager(h5_path, 'a')
+                        split_emb_dataset_manager = HDF5EmbeddingDatasetsManager(h5_path, 'a', buffer_size=adaptive_buffer_size)
                         split_emb_dataset_manager.initialize_hdf5(
                             1024, spec_n_o.shape, audio_format, cut_secs, n_octave, 
                             sr, seed, noise_perc, division_names[di], class_to_process
@@ -154,7 +164,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                 
                 # 🎯 Pulizia dopo ogni traccia
                 del track, metadata
-                if results % 10 == 0:
+                if results % 5 == 0:
                     gc.collect()
                     trim_memory()
 

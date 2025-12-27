@@ -372,8 +372,9 @@ class HDF5EmbeddingDatasetsManager(Dataset):
             dataset.resize(current_size + self.buffer_count, axis=0)
             dataset[current_size:] = self.buffer_array[:self.buffer_count]
 
-        # 🎯 PULIZIA REALE: fill(0) rompe i riferimenti NumPy agli oggetti pesanti
-        self.buffer_array.fill(0) 
+        # 🎯 TRUCCO FINALE: Invece di fill(0), azzeriamo il riferimento
+        # Questo costringe NumPy a rilasciare il grosso blocco di memoria C
+        self.buffer_array = np.empty(self.buffer_size, dtype=self.dt)
         self.buffer_count = 0
         gc.collect()
 
