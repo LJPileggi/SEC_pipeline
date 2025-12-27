@@ -83,14 +83,16 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
 
                 for b in range(n_buckets):
                     # 🎯 PUNTO 2: Logica di Cambio Split (Tua originale con FLUSH)
-                    diag_print(f"{class_to_process}, {cut_secs} s: created {results}/{target_counts_list[di]} embeddings for split '{division_names[di]}'")
+                    diag_print(f"{class_to_process}, {cut_secs} s: created {results}/{target_counts_list[di]} embeddings; split '{division_names[di]}'")
                     if results >= target_counts_list[di]:
                         logging.info(f"Split '{division_names[di]}' per {class_to_process} completato. Avvio flush...")
                         
                         if split_emb_dataset_manager:
                             split_emb_dataset_manager.flush_buffers() # Manteniamo il tuo flush
                             split_emb_dataset_manager.close()
+                            del split_emb_dataset_manager
                             split_emb_dataset_manager = None # Forza la creazione del nuovo file
+                            gc.collect()
 
                             # 🎯 FIX CRUCIALE: Piccola pausa per stabilizzare il File System
                             # Evita che il prossimo open() avvenga mentre il kernel sta ancora chiudendo il precedente
@@ -221,6 +223,7 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
                     clap_model, audio_embedding, class_name, cut_secs, 
                     n_octave, config, audio_dataset_manager=current_audio_manager
                 )
+                gc.collect()
                 
                 # Log rank-specific
                 target_log_dir = os.path.join(config['dirs']['root_target'], f'{cut_secs}_secs')
@@ -232,6 +235,8 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
 
             # Chiusura manager RAW
             current_audio_manager.close()
+            del current_audio_manager
+            gc.collect()
             
         except Exception as e:
             logging.error(f"Errore Rank {rank} su classe {class_name}: {traceback.format_exc()}")
@@ -288,6 +293,7 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
                     config, 
                     audio_dataset_manager=current_audio_manager
                 )
+                gc.collect()
         
                 # Logging dei tempi e dei risultati (rank-specific)
                 target_log_dir = os.path.join(config['dirs']['root_target'], f'{cut_secs}_secs')
@@ -299,6 +305,8 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
             
             # 🎯 Chiusura esplicita dopo aver finito tutti i cut_secs della classe
             current_audio_manager.close() 
+            del current_audio_manager
+            gc.collect()
 
         except Exception as e:
             logging.error(f"Errore critico nel Rank {rank} sulla classe {class_name}: {traceback.format_exc()}")

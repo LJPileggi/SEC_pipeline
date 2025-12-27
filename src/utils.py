@@ -455,6 +455,7 @@ class HDF5EmbeddingDatasetsManager(Dataset):
             except Exception:
                 pass
             self.hf = None
+        self.buffer_array = None
 
     def __del__(self):
         pass
