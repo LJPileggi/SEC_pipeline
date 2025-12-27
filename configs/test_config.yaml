@@ -9,7 +9,7 @@ sampling_rate: 52100
 ref: 2.e-05
 noise_perc: 0.3
 seed: 1
-valid_cut_secs: [1, 2, 3, 7, 15]
+valid_cut_secs: [15, 20, 30]
 train_size: 150
 es_size: 50
 valid_size: 50
