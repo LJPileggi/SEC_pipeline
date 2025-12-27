@@ -231,7 +231,7 @@ class HDF5DatasetManager:
         pass
 
 class HDF5EmbeddingDatasetsManager(Dataset):
-    def __init__(self, h5_path, mode='r', partitions=set(('classes', 'splits')), buffer_size=500):
+    def __init__(self, h5_path, mode='r', partitions=set(('classes', 'splits')), buffer_size=5):
         super().__init__()
         self.h5_path = h5_path
         self.partitions = set(partitions)
@@ -394,28 +394,20 @@ class HDF5EmbeddingDatasetsManager(Dataset):
             self.flush_buffers()
 
     def flush_buffers(self):
-        """
-        Trasferisce i dati dal buffer pre-allocato al dataset HDF5 su disco.
-        """
         if self.buffer_count == 0:
             return
 
-        # Scrive solo se la variabile d'ambiente permette il salvataggio
         if os.getenv('NO_EMBEDDING_SAVE', 'False').lower() in ('false', '0', 'f'):
             dataset = self.hf['embedding_dataset']
             current_size = dataset.shape[0]
-            new_size = current_size + self.buffer_count
-            
-            # Ridimensionamento veloce
-            dataset.resize(new_size, axis=0)
-            
-            # Scrittura "slice" (estremamente efficiente in HDF5)
+            dataset.resize(current_size + self.buffer_count, axis=0)
             dataset[current_size:] = self.buffer_array[:self.buffer_count]
-            
-            # NON chiamiamo hf.flush() qui per non forzare i metadati su Lustre ogni volta
 
-        # Reset del puntatore (nessun cleanup di liste richiesto)
+        # 🎯 FIX DI EFFICIENZA:
+        # Sovrascriviamo il buffer con zeri o svuotiamolo per rompere i riferimenti agli oggetti precedenti
+        self.buffer_array.fill(0) # Opzione 1: resetta i valori
         self.buffer_count = 0
+        gc.collect() # Forza la pulizia post-scrittura
 
     def extend_dataset(self, new_data):
         """
@@ -669,8 +661,10 @@ def setup_distributed_environment(rank, world_size, slurm=True):
     return device
 
 def cleanup_distributed_environment(rank):
-    """Cleanup the distributed environment."""
-    dist.barrier()
-    dist.destroy_process_group()
+    """Cleanup con gestione errori per evitare crash a catena."""
+    try:
+        # Riduciamo il timeout del barrier o mettiamolo in un try
+        dist.destroy_process_group()
+    except Exception as e:
+        logging.warning(f"Rank {rank}: Errore durante il cleanup dist: {e}")
     logging.info(f"Processo {rank} ha terminato il suo lavoro.")
-
