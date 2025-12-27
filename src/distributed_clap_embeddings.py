@@ -85,7 +85,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                     # 🎯 PUNTO 2: Logica di Cambio Split (Tua originale con FLUSH)
                     diag_print(f"{class_to_process} {cut_secs} {results} {di}")
                     if results >= target_counts_list[di]:
-                        logging.info(f"Split '{division_names[di]}' completato. Avvio flush...")
+                        logging.info(f"Split '{division_names[di]}' per {class_to_process} completato. Avvio flush...")
                         
                         if split_emb_dataset_manager:
                             split_emb_dataset_manager.flush_buffers() # Manteniamo il tuo flush
@@ -133,7 +133,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                             noise_perc=noise_perc, split=division_names[di], 
                             class_name=class_to_process
                         )
-                        diag_print(f"Manager inizializzato per {division_names[di]} con shape {spec_n_o.shape}")
+                        diag_print(f"Manager inizializzato per {class_to_process}, {division_names[di]} con shape {spec_n_o.shape}")
 
                     # Check esistenza
                     if emb_pkey in split_emb_dataset_manager:
@@ -274,7 +274,7 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
             
             for cut_secs in assigned_cuts:
                 # if rank == 0:
-                print(f"\n[RANK 0] >>> PROCESSO TASK: {class_name} | {cut_secs}s", flush=True)
+                print(f"\n[RANK {rank}] >>> PROCESSO TASK: {class_name} | {cut_secs}s", flush=True)
 
                 start_time = time.time()
         
