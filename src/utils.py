@@ -3,6 +3,7 @@ import json
 import yaml
 import glob
 import logging
+import gc
 import h5py
 import numpy as np
 import pandas as pd
@@ -222,6 +223,9 @@ class HDF5DatasetManager:
             except ValueError:
                 pass
             self.hf = None
+        # Libera il DataFrame dei metadati se molto grande
+        self.metadata_df = None 
+        gc.collect()
             
     def __del__(self):
         pass

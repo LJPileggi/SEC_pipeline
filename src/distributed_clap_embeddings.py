@@ -2,6 +2,7 @@ import os
 import sys
 import math
 import time
+import gc
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -147,7 +148,23 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                     # 🎯 PUNTO 4: Aggiunta al buffer
                     split_emb_dataset_manager.add_to_data_buffer(embedding, spec_n_o, emb_pkey,
                                 metadata['track_name'], class_to_process, metadata['subclass'])
-                        
+
+                    # 🎯 2. PULIZIA MANUALE IMMEDIATA
+                    # Eliminiamo i riferimenti agli oggetti pesanti per liberare la RAM
+                    del x
+                    del embedding
+                    del spec_n_o
+                    del new_audio
+                    del cut_data
+
+                    # 🎯 3. CHIAMATA AL GARBAGE COLLECTOR
+                    # Inseriamo un controllo ogni N iterazioni (es. ogni 5 tracce) o ad ogni traccia se la RAM è pochissima
+                    gc.collect() 
+
+                    # 🎯 4. PULIZIA CACHE GPU (Se presente)
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+
                     results += 1
                     n_embeddings_per_run += 1
 
