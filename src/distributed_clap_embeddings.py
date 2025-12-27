@@ -134,16 +134,19 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
 
                     # Inferenza
                     x = torch.tensor(new_audio, dtype=torch.float32).to(device).unsqueeze(0)
-                    with torch.no_grad():
+                    with torch.inference_mode():
                        embedding = audio_embedding(x)[0][0]
+                    embedding_cpu = embedding.detach().cpu().numpy()
+                    del x, embedding
 
-                    split_emb_dataset_manager.add_to_data_buffer(embedding, spec_n_o, emb_pkey,
-                                metadata['track_name'], class_to_process, metadata['subclass'])
+                    split_emb_dataset_manager.add_to_data_buffer(embedding_cpu, spec_n_o, emb_pkey,
+                                    metadata['track_name'], class_to_process, metadata['subclass'])
 
                     # 🎯 PULIZIA TOTALE
-                    del x, embedding, spec_n_o, new_audio, cut_data
+                    del embedding_cpu, spec_n_o, new_audio, cut_data
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
+                    torch.set_num_threads(1)
                     
                     results += 1
                     n_embeddings_per_run += 1
