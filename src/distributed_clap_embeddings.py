@@ -3,6 +3,7 @@ import sys
 import math
 import time
 import gc
+import ctypes
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -40,6 +41,12 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
 
     def diag_print(msg):
         print(f"[RANK {rank} - DIAG] {msg}", flush=True)
+
+    def trim_memory():
+        try:
+            ctypes.CDLL('libc.so.6').malloc_trim(0)
+        except Exception:
+            pass
 
     class_seed = seed + hash(class_to_process) % 10000000
     offset_rng = np.random.default_rng(class_seed)
@@ -145,6 +152,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                 del track, metadata
                 if results % 10 == 0:
                     gc.collect()
+                    trim_memory()
 
     except Exception:
         if split_emb_dataset_manager:

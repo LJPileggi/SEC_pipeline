@@ -163,7 +163,7 @@ class HDF5DatasetManager:
         self.n_records = 0 # 🎯 Gestione lazy
         
         try:
-            self.hf = h5py.File(self.h5_file_path, 'r')
+            self.hf = h5py.File(self.h5_file_path, 'r', rdcc_nbytes=0)
             self.n_records = self.hf[self.metadata_dset_name].shape[0]
             logging.info(f"HDF5 Manager pronto: {self.n_records} tracce rilevate.")
         except Exception as e:
@@ -212,7 +212,7 @@ class HDF5EmbeddingDatasetsManager(Dataset):
         
         try:
             # Apertura del file con retry logica interna di h5py se possibile
-            self.hf = h5py.File(self.h5_path, self.mode)
+            self.hf = h5py.File(self.h5_path, self.mode, rdcc_nbytes=0)
         except Exception as e:
             logging.error(f"Impossibile aprire il file {h5_path}: {e}")
             raise
