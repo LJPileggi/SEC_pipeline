@@ -158,77 +158,44 @@ class HDF5DatasetManager:
         self.h5_file_path = h5_file_path
         self.hf = None
         self.audio_format = audio_format
-        self.metadata_df = None
         self.metadata_dset_name = f'metadata_{self.audio_format}'
         self.audio_dset_name = f'audio_{self.audio_format}'
+        self.n_records = 0 # 🎯 Gestione lazy
         
         try:
-            # Apri il file in modalità di sola lettura
             self.hf = h5py.File(self.h5_file_path, 'r')
-            self._load_metadata()
-            logging.info(f"HDF5 Dataset Manager di {os.path.split(self.h5_file_path)[1]} pronto. Formato: {audio_format}")
+            self.n_records = self.hf[self.metadata_dset_name].shape[0]
+            logging.info(f"HDF5 Manager pronto: {self.n_records} tracce rilevate.")
         except Exception as e:
-            logging.error(f"Errore nell'apertura o caricamento metadati HDF5 di {os.path.split(self.h5_file_path)[1]}: {e}")
-            raise Exception
+            logging.error(f"Errore apertura {h5_file_path}: {e}")
+            raise
 
-    def __getitem__(self, hdf5_index: int) -> np.ndarray:
-        """
-        Accede rapidamente ai dati audio tramite l'indice HDF5.
-        Restituisce un array NumPy [samples,].
-        """
-        # Accede direttamente al dataset VLEN. L'indice di riga corrisponde all'indice HDF5
-        return self.hf[self.audio_dset_name][hdf5_index]
+    def get_audio_and_metadata(self, hdf5_index):
+        """🎯 Legge direttamente da HDF5 senza passare per Pandas."""
+        audio = self.hf[self.audio_dset_name][hdf5_index]
+        # Recupera la riga di metadati come numpy void object
+        raw_meta = self.hf[self.metadata_dset_name][hdf5_index]
+        # Converte in dizionario semplice per minimizzare l'overhead
+        meta_dict = {n: (raw_meta[n].decode('utf-8') if isinstance(raw_meta[n], bytes) else raw_meta[n]) 
+                     for n in raw_meta.dtype.names}
+        return audio, meta_dict
 
-    def get_audio_metadata(self, hdf5_index):
-        """
-        Restituisce i metadati di una data traccia.
-        """
-        return self.metadata_df[self.metadata_df['hdf5_index'] == hdf5_index]
-  
-    def _load_metadata(self):
-        """Carica il dataset strutturato dei metadati in modo ottimizzato."""
-        if self.metadata_dset_name not in self.hf:
-            raise KeyError(f"Dataset metadati '{self.metadata_dset_name}' non trovato.")
-            
-        # Carichiamo i dati. 
-        # Usare il DataFrame direttamente dall'array HDF5 è efficiente.
-        self.metadata_df = pd.DataFrame(self.hf[self.metadata_dset_name][:])
-    
-        # Assicuriamoci che l'indice HDF5 sia esplicito e coerente
-        if 'hdf5_index' not in self.metadata_df.columns:
-            self.metadata_df['hdf5_index'] = self.metadata_df.index
-
-    def get_reproducible_permutation(self, seed: int) -> pd.DataFrame:
-        """
-        Applica una permutazione fissa al DataFrame di una classe, 
-        basata su un seed univoco per quella classe.
-    
-        Args:
-            seed: Seed base per la permutazione (es. dal config file).
-        
-        Returns:
-            DataFrame con l'ordine delle tracce permutato.
-        """
-        # Permuta gli indici (non i valori originali)
-        # df.sample(frac=1, random_state=...) è il modo più pulito con Pandas
-        to_permute = self.metadata_df.copy()
-        return to_permute.sample(frac=1, random_state=seed)
+    def get_reproducible_permutation(self, seed: int):
+        """🎯 Permuta solo gli indici numerici, non gli oggetti."""
+        rng = np.random.default_rng(seed)
+        return rng.permutation(np.arange(self.n_records))
 
     def close(self):
-        """Chiude il file HDF5."""
         if self.hf:
-            try:
-                self.hf.close()
-                print(f"HDF5 Dataset Manager per {os.path.split(self.h5_file_path)[1]} chiuso.")
-            except ValueError:
-                pass
+            self.hf.close()
             self.hf = None
-        # Libera il DataFrame dei metadati se molto grande
-        self.metadata_df = None 
         gc.collect()
-            
+
     def __del__(self):
-        pass
+        """Ripristinato per sicurezza, ma l'azione reale è in close()."""
+        try:
+            if self.hf: self.hf.close()
+        except: pass
 
 class HDF5EmbeddingDatasetsManager(Dataset):
     def __init__(self, h5_path, mode='r', partitions=set(('classes', 'splits')), buffer_size=5):
@@ -394,20 +361,21 @@ class HDF5EmbeddingDatasetsManager(Dataset):
             self.flush_buffers()
 
     def flush_buffers(self):
+        """Scrive su disco e pulisce i riferimenti agli oggetti pesanti."""
         if self.buffer_count == 0:
             return
 
+        # 🎯 Ripristinata la logica della variabile d'ambiente
         if os.getenv('NO_EMBEDDING_SAVE', 'False').lower() in ('false', '0', 'f'):
             dataset = self.hf['embedding_dataset']
             current_size = dataset.shape[0]
             dataset.resize(current_size + self.buffer_count, axis=0)
             dataset[current_size:] = self.buffer_array[:self.buffer_count]
 
-        # 🎯 FIX DI EFFICIENZA:
-        # Sovrascriviamo il buffer con zeri o svuotiamolo per rompere i riferimenti agli oggetti precedenti
-        self.buffer_array.fill(0) # Opzione 1: resetta i valori
+        # 🎯 PULIZIA REALE: fill(0) rompe i riferimenti NumPy agli oggetti pesanti
+        self.buffer_array.fill(0) 
         self.buffer_count = 0
-        gc.collect() # Forza la pulizia post-scrittura
+        gc.collect()
 
     def extend_dataset(self, new_data):
         """

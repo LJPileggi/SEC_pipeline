@@ -39,7 +39,6 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
     rank = config.get('rank', 0)
 
     def diag_print(msg):
-        # if rank == 0:
         print(f"[RANK {rank} - DIAG] {msg}", flush=True)
 
     class_seed = seed + hash(class_to_process) % 10000000
@@ -49,14 +48,12 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
     division_names = [d[0] for d in config['data']['divisions_xc_sizes_names']]
     target_counts_list = np.cumsum([d[1] for d in config['data']['divisions_xc_sizes_names']])
 
-    # Gestione Manager Sorgente
     own_manager = False
     if audio_dataset_manager is None:
         audio_dataset_manager = HDF5DatasetManager(os.path.join(root_source, class_to_process,
                                                     f'{class_to_process}_{audio_format}_dataset.h5'))
         own_manager = True
 
-    # 🎯 PUNTO 1: Inizializzazione Manager di Output a None (per Lazy Init)
     split_emb_dataset_manager = None
     di = 0
     results = 0
@@ -64,16 +61,17 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
     n_embeddings_per_run = 0
 
     try:
-        perms_metadata = audio_dataset_manager.get_reproducible_permutation(class_seed)
-        n_records = len(perms_metadata)
+        # 🎯 Otteniamo array di indici invece di DataFrame
+        permuted_indices = audio_dataset_manager.get_reproducible_permutation(class_seed)
+        n_records = len(permuted_indices)
+        
         while True:
             round_ += 1
-            for i in range(n_records):
-                metadata = perms_metadata.iloc[i]
-                track_idx = metadata['hdf5_index']
-                track = audio_dataset_manager[track_idx]
-                window_size = int(cut_secs * sr)
+            for track_idx in permuted_indices:
+                # 🎯 Lettura atomica: traccia + metadati
+                track, metadata = audio_dataset_manager.get_audio_and_metadata(track_idx)
                 
+                window_size = int(cut_secs * sr)
                 offset = 0
                 if round_ > 1 and track.shape[0] > window_size:
                     max_offset = track.shape[0] - window_size
@@ -82,20 +80,15 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                 n_buckets = math.ceil((track.shape[0] - offset) / window_size)
 
                 for b in range(n_buckets):
-                    # 🎯 PUNTO 2: Logica di Cambio Split (Tua originale con FLUSH)
                     diag_print(f"{class_to_process}, {cut_secs} s: created {results}/{target_counts_list[di]} embeddings; split '{division_names[di]}'")
+                    
                     if results >= target_counts_list[di]:
                         logging.info(f"Split '{division_names[di]}' per {class_to_process} completato. Avvio flush...")
-                        
                         if split_emb_dataset_manager:
-                            split_emb_dataset_manager.flush_buffers() # Manteniamo il tuo flush
                             split_emb_dataset_manager.close()
                             del split_emb_dataset_manager
-                            split_emb_dataset_manager = None # Forza la creazione del nuovo file
+                            split_emb_dataset_manager = None
                             gc.collect()
-
-                            # 🎯 FIX CRUCIALE: Piccola pausa per stabilizzare il File System
-                            # Evita che il prossimo open() avvenga mentre il kernel sta ancora chiudendo il precedente
                             time.sleep(0.5)
                         
                         di += 1
@@ -104,10 +97,9 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                             logging.info(f"Classe '{class_to_process}' elaborata. Totale: {results}")
                             return n_embeddings_per_run, True
 
-                    # Identificazione chiave
-                    emb_pkey = f"{audio_dataset_manager.hf.attrs['class_idx']}_{track_idx}_{b}_{round_}_{results}"
+                    emb_pkey = f"{audio_dataset_manager.hf.attrs.get('class_idx', 0)}_{track_idx}_{b}_{round_}_{results}"
 
-                    # Preparazione Audio (Necessaria per determinare la shape dello spettrogramma)
+                    # Preparazione Audio
                     start = b * window_size + offset
                     end = start + window_size
                     cut_data = track[start:end]
@@ -118,65 +110,46 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
                     noise = noise_rng.uniform(-max_threshold, max_threshold, cut_data.shape)
                     new_audio = (1 - noise_perc) * cut_data + noise_perc * noise
                     
-                    # Generazione Spettrogramma (Shape Reale)
                     spec_n_o = spectrogram_n_octaveband_generator(new_audio, sr, integration_seconds=0.1,
                                                     n_octave=n_octave, center_freqs=center_freqs, ref=ref)
 
-                    # 🎯 PUNTO 3: Inizializzazione Manager se None (Lazy Init con Shape reale)
                     if split_emb_dataset_manager is None:
                         h5_path = os.path.join(target_class_dir, f'{class_to_process}_{division_names[di]}_{audio_format}_emb.h5')
                         split_emb_dataset_manager = HDF5EmbeddingDatasetsManager(h5_path, 'a')
-                        
-                        # Inizializziamo con la shape reale di spec_n_o
                         split_emb_dataset_manager.initialize_hdf5(
-                            embedding_dim=1024, spec_shape=spec_n_o.shape, 
-                            audio_format=audio_format, cut_secs=cut_secs, 
-                            n_octave=n_octave, sample_rate=sr, seed=seed, 
-                            noise_perc=noise_perc, split=division_names[di], 
-                            class_name=class_to_process
+                            1024, spec_n_o.shape, audio_format, cut_secs, n_octave, 
+                            sr, seed, noise_perc, division_names[di], class_to_process
                         )
-                        diag_print(f"Manager inizializzato per {class_to_process}, {division_names[di]} con shape {spec_n_o.shape}")
 
-                    # Check esistenza
                     if emb_pkey in split_emb_dataset_manager:
                         results += 1
                         continue
 
-                    # Calcolo Embedding
+                    # Inferenza
                     x = torch.tensor(new_audio, dtype=torch.float32).to(device).unsqueeze(0)
                     with torch.no_grad():
                        embedding = audio_embedding(x)[0][0]
 
-                    # 🎯 PUNTO 4: Aggiunta al buffer
                     split_emb_dataset_manager.add_to_data_buffer(embedding, spec_n_o, emb_pkey,
                                 metadata['track_name'], class_to_process, metadata['subclass'])
 
-                    # 🎯 2. PULIZIA MANUALE IMMEDIATA
-                    # Eliminiamo i riferimenti agli oggetti pesanti per liberare la RAM
-                    del x
-                    del embedding
-                    del spec_n_o
-                    del new_audio
-                    del cut_data
-
-                    # 🎯 3. CHIAMATA AL GARBAGE COLLECTOR
-                    # Inseriamo un controllo ogni N iterazioni (es. ogni 5 tracce) o ad ogni traccia se la RAM è pochissima
-                    gc.collect() 
-
-                    # 🎯 4. PULIZIA CACHE GPU (Se presente)
+                    # 🎯 PULIZIA TOTALE
+                    del x, embedding, spec_n_o, new_audio, cut_data
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
-
+                    
                     results += 1
                     n_embeddings_per_run += 1
+                
+                # 🎯 Pulizia dopo ogni traccia
+                del track, metadata
+                if results % 10 == 0:
+                    gc.collect()
 
-    except Exception as e:
-        # 🎯 PUNTO 5: Gestione Errori con Flush di sicurezza
-        diag_print("here")
+    except Exception:
         if split_emb_dataset_manager:
-            split_emb_dataset_manager.flush_buffers()
             split_emb_dataset_manager.close()
-        if audio_dataset_manager: audio_dataset_manager.close()
+        if own_manager: audio_dataset_manager.close()
         logging.error(f"{traceback.format_exc()}")
         return n_embeddings_per_run, False
 
