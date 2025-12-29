@@ -599,8 +599,32 @@ def reconstruct_tracks_from_embeddings(base_tracks_dir, hdf5_emb_path, idx_list)
 
 def setup_environ_vars(slurm=True):
     if slurm:
+        # 🎯 Recuperiamo Rank e World Size da SLURM
         rank = int(os.environ.get("SLURM_PROCID", 0))
         world_size = int(os.environ.get("SLURM_NTASKS", 4))
+        
+        # 🎯 RECUPERO DINAMICO DEL MASTER_ADDR (Cruciale per SLURM)
+        # Se non è impostato, lo ricaviamo dal primo nodo della lista allocata
+        if "MASTER_ADDR" not in os.environ:
+            import subprocess
+            try:
+                # Esegue 'scontrol show hostnames' per ottenere il nome del primo nodo
+                node_list = os.environ.get("SLURM_JOB_NODELIST")
+                if node_list:
+                    result = subprocess.check_output(
+                        ["scontrol", "show", "hostnames", node_list],
+                        universal_newlines=True
+                    )
+                    os.environ["MASTER_ADDR"] = result.splitlines()[0]
+                else:
+                    os.environ["MASTER_ADDR"] = "localhost"
+            except Exception:
+                os.environ["MASTER_ADDR"] = "localhost"
+
+        # 🎯 PORTA CASUALE per evitare conflitti tra job diversi
+        if "MASTER_PORT" not in os.environ:
+            os.environ["MASTER_PORT"] = str(np.random.randint(20000, 29999))
+            
         return rank, world_size
     else:
         os.environ['MASTER_ADDR'] = 'localhost'
