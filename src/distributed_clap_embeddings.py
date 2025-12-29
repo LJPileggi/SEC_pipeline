@@ -179,17 +179,23 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
 
 def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_tasks, pbar_instance=None):
     """
-    Worker process SLURM allineato con le ottimizzazioni di memoria 'stateless'.
+    Worker process SLURM con inizializzazione collettiva e uscita condizionale per processi vuoti.
     """
-    # 🎯 DIAGNOSTICA: Attiviamo il faulthandler anche su SLURM
     import faulthandler
-    faulthandler.enable()
+    faulthandler.enable() # 🎯 Diagnostica per crash di basso livello
 
-    # Setup ambiente distribuito PyTorch
+    # 🎯 Tutti i processi partecipano al setup per evitare deadlock nel rendezvous
     device = setup_distributed_environment(rank, world_size, slurm=True)
+    
+    # 🎯 Gestione dei processi vuoti: si chiudono solo dopo l'init_process_group
+    if not my_tasks:
+        logging.info(f"Rank {rank} non ha task assegnati. Sincronizzazione completata. Uscita preventiva.")
+        cleanup_distributed_environment(rank)
+        return
+
+    # Inizializzazione modello solo per chi ha effettivamente lavoro
     clap_model, audio_embedding, _ = CLAP_initializer(device, use_cuda=True)
 
-    # Configurazione worker (Allineamento config)
     config['rank'] = rank
     config['dirs']['root_source'] = os.path.join(basedir_raw, f'{audio_format}')
     config['dirs']['root_target'] = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave')
@@ -214,14 +220,12 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
 
                 start_time = time.time()
                 
-                # 🎯 Esecuzione con process_class_with_cut_secs (che ora è stateless)
                 n_embeddings_per_run, completed = process_class_with_cut_secs(
                     clap_model, audio_embedding, class_name, cut_secs, 
                     n_octave, config, audio_dataset_manager=current_audio_manager
                 )
                 
-                # 🎯 PULIZIA POST-TASK
-                gc.collect()
+                gc.collect() # 🎯 Pulizia memoria post-task
                 
                 target_log_dir = os.path.join(config['dirs']['root_target'], f'{cut_secs}_secs')
                 process_time = time.time() - start_time
@@ -230,9 +234,8 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
                 if pbar_instance:
                     pbar_instance.update(1)
 
-            # 🎯 CHIUSURA E PULIZIA POST-CLASSE (Speculare al locale)
             current_audio_manager.close()
-            del current_audio_manager
+            del current_audio_manager # 🎯 Distruzione esplicita manager
             gc.collect()
             
         except Exception as e:
@@ -317,20 +320,17 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
 
 def run_distributed_slurm(config_file, audio_format, n_octave):
     """
-    Lancia la pipeline distribuita su SLURM adattando il world_size 
-    al numero di classi attive per evitare stalli nel rendezvous.
+    Lancia la pipeline su SLURM mantenendo il world_size originale per la stabilità del rendezvous.
     """
-    # 1. Recupero parametri SLURM originali
+    # 1. Recupero parametri SLURM originali (es. 4 processi richiesti)
     rank, world_size = setup_environ_vars(slurm=True)
 
-    # 2. Setup logging e cartelle
     embed_folder = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave')
     os.makedirs(embed_folder, exist_ok=True)
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s',
                         handlers=[logging.StreamHandler(),
                                   logging.FileHandler(filename=os.path.join(embed_folder, 'log.txt'))])
 
-    # 3. Caricamento configurazione
     classes_list, _, _, _, sampling_rate, ref, noise_perc, seed, center_freqs, cut_secs_list, \
         divisions_xc_sizes_names = get_config_from_yaml(config_file)
 
@@ -342,7 +342,6 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
     config['spectrogram'].update({'sr': sampling_rate, 'ref': ref, 'center_freqs': center_freqs})
     config['audio'].update({'noise_perc': noise_perc, 'seed': seed})
 
-    # 4. Caricamento log per resumability
     log_data = {}
     log_path = os.path.join(embed_folder, 'log.json')
     if os.path.exists(log_path):
@@ -352,7 +351,7 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
         except Exception as e:
             logging.error(f"Errore lettura log: {e}")
 
-    # 🎯 5. IDENTIFICAZIONE CLASSI ATTIVE
+    # 2. Identificazione classi attive
     active_classes = []
     for class_name in classes_list:
         needs_work = False
@@ -366,21 +365,9 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
 
     active_classes.sort()
 
-    # 🎯 6. RIDIMENSIONAMENTO DINAMICO DEL WORLD SIZE PER SLURM
-    # Il world_size effettivo non può superare il numero di classi attive
-    actual_world_size = min(len(active_classes), world_size)
-
-    # Se il rank corrente è fuori dal nuovo world_size, esce subito
-    if rank >= actual_world_size:
-        logging.info(f"Rank {rank} inattivo: actual_world_size ridotto a {actual_world_size}. Uscita.")
-        return
-
-    if actual_world_size == 0:
-        if rank == 0: logging.info("Tutti i task completati.")
-        return
-
-    # 🎯 7. DISTRIBUZIONE TASK (Round-robin sul nuovo world_size)
-    my_assigned_classes = active_classes[rank::actual_world_size]
+    # 🎯 DISTRIBUZIONE TASK: Usiamo il world_size originale di SLURM
+    # Se world_size=4 e classi=3, il Rank 3 avrà una lista vuata
+    my_assigned_classes = active_classes[rank::world_size]
     my_tasks = []
     for class_name in my_assigned_classes:
         for cut_secs in cut_secs_list:
@@ -388,11 +375,11 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
             if not log_data.get(log_key_str, {}).get('completed'):
                 my_tasks.append((cut_secs, class_name))
 
-    logging.info(f"Rank {rank}/{actual_world_size}: classi assegnate {my_assigned_classes}")
+    logging.info(f"Rank {rank}/{world_size}: classi assegnate {my_assigned_classes}")
 
-    # 8. Setup Progress Bar (Solo Rank 0)
+    # 3. Setup Progress Bar (Solo Rank 0)
     manager = mp.Manager()
-    message_queue = manager.Queue() if actual_world_size > 1 else None
+    message_queue = manager.Queue() if world_size > 1 else None
     pbar = None
     if rank == 0:
         total_active_tasks = sum(1 for c in active_classes for s in cut_secs_list 
@@ -400,17 +387,17 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
         if total_active_tasks > 0:
             pbar = MultiProcessTqdm(message_queue, "main_pbar", desc="Progresso Totale SLURM", total=total_active_tasks)
 
-    # 9. Esecuzione Worker
+    # 4. Esecuzione Worker
     try:
-        # Passiamo actual_world_size per il rendezvous corretto in setup_distributed_environment
-        worker_process_slurm(audio_format, n_octave, config, rank, actual_world_size, my_tasks, pbar)
+        # Passiamo il world_size originale per garantire il rendezvous di tutti i processi
+        worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_tasks, pbar)
     except Exception as e:
         logging.error(f"Errore critico Rank {rank}: {e}")
         raise e
     finally:
         if rank == 0 and pbar:
             pbar.close()
-        logging.info(f"Rank {rank}: Esecuzione terminata.")
+        logging.info(f"Rank {rank}: Fine script.")
 
 
 def run_local_multiprocess(config_file, audio_format, n_octave, world_size):

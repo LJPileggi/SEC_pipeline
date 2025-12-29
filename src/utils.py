@@ -640,7 +640,7 @@ def setup_distributed_environment(rank, world_size, slurm=True):
      - slurm: whether we are running on a SLURM environment or not; default to True.
     """
     if slurm:
-        dist.init_process_group("gloo", rank=rank, world_size=world_size)
+        dist.init_process_group("nccl", rank=rank, world_size=world_size)
         torch.cuda.set_device(rank)
         device = torch.device(f'cuda:{rank}')
         logging.info(f"Processo locale {rank} avviato su {device}.")
