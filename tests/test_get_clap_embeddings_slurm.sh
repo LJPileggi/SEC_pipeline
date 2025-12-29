@@ -65,8 +65,13 @@ export NCCL_IB_DISABLE=1
 export NCCL_P2P_DISABLE=1
 
 # 🎯 FORZA IL MASTER_ADDR DINAMICO (Se non lo fa utils.py)
-export MASTER_ADDR=$(hostname)
+# export MASTER_ADDR=$(hostname)
 export MASTER_PORT=29500
+
+# Forza PyTorch e NCCL a usare solo l'interfaccia di loopback locale
+export NCCL_SOCKET_IFNAME=lo
+export GLOO_SOCKET_IFNAME=lo
+export MASTER_ADDR=127.0.0.1
 
 echo "🚀 Avvio Pipeline CLAP su SLURM..."
 srun singularity exec \

@@ -605,9 +605,9 @@ def setup_environ_vars(slurm=True):
         # 🎯 1. MASTER_ADDR: Mai usare localhost su SLURM. 
         # Usiamo il nome del nodo che ospita il Rank 0.
         if "MASTER_ADDR" not in os.environ:
-            import socket
-            # Su un singolo nodo, hostname è perfetto e visibile a tutti i task srun
-            os.environ["MASTER_ADDR"] = socket.gethostname()
+            # Se siamo su un nodo di login, hostname reale può dare problemi di routing
+            # Forziamo 127.0.0.1 che è l'indirizzo più sicuro per processi sullo stesso nodo
+            os.environ["MASTER_ADDR"] = "127.0.0.1"
         
         # 🎯 2. MASTER_PORT: Usiamo l'ID del Job SLURM come "seme" per la porta.
         # In questo modo tutti i task dello STESSO JOB avranno la STESSA PORTA,
