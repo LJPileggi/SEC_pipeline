@@ -599,34 +599,28 @@ def reconstruct_tracks_from_embeddings(base_tracks_dir, hdf5_emb_path, idx_list)
 
 def setup_environ_vars(slurm=True):
     if slurm:
-        # 🎯 Recuperiamo Rank e World Size da SLURM
         rank = int(os.environ.get("SLURM_PROCID", 0))
         world_size = int(os.environ.get("SLURM_NTASKS", 4))
         
-        # 🎯 RECUPERO DINAMICO DEL MASTER_ADDR (Cruciale per SLURM)
-        # Se non è impostato, lo ricaviamo dal primo nodo della lista allocata
+        # 🎯 1. MASTER_ADDR: Mai usare localhost su SLURM. 
+        # Usiamo il nome del nodo che ospita il Rank 0.
         if "MASTER_ADDR" not in os.environ:
-            import subprocess
-            try:
-                # Esegue 'scontrol show hostnames' per ottenere il nome del primo nodo
-                node_list = os.environ.get("SLURM_JOB_NODELIST")
-                if node_list:
-                    result = subprocess.check_output(
-                        ["scontrol", "show", "hostnames", node_list],
-                        universal_newlines=True
-                    )
-                    os.environ["MASTER_ADDR"] = result.splitlines()[0]
-                else:
-                    os.environ["MASTER_ADDR"] = "localhost"
-            except Exception:
-                os.environ["MASTER_ADDR"] = "localhost"
-
-        # 🎯 PORTA CASUALE per evitare conflitti tra job diversi
+            import socket
+            # Su un singolo nodo, hostname è perfetto e visibile a tutti i task srun
+            os.environ["MASTER_ADDR"] = socket.gethostname()
+        
+        # 🎯 2. MASTER_PORT: Usiamo l'ID del Job SLURM come "seme" per la porta.
+        # In questo modo tutti i task dello STESSO JOB avranno la STESSA PORTA,
+        # ma job diversi avranno porte diverse. Geniale e sicuro.
         if "MASTER_PORT" not in os.environ:
-            os.environ["MASTER_PORT"] = str(np.random.randint(20000, 29999))
+            job_id = os.environ.get("SLURM_JOB_ID", "29500")
+            # Prendiamo le ultime 4 cifre del job_id e sommiamo a 20000
+            base_port = 20000 + (int(job_id) % 10000)
+            os.environ["MASTER_PORT"] = str(base_port)
             
         return rank, world_size
     else:
+        # Locale rimane invariato
         os.environ['MASTER_ADDR'] = 'localhost'
         os.environ['MASTER_PORT'] = str(np.random.randint(29500, 29999))
 
