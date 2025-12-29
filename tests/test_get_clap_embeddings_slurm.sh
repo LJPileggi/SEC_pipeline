@@ -1,8 +1,9 @@
 #!/bin/bash
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4           
-#SBATCH --cpus-per-task=1             
-#SBATCH --time=01:00:00               
+#SBATCH --cpus-per-task=8              # 🎯 Aumentato per velocizzare l'inferenza su CPU
+#SBATCH --time=04:00:00               
+#SBATCH --mem=128G                     # 🎯 RAM abbondante per evitare OOM con segmenti lunghi
 #SBATCH --exclusive                   
 #SBATCH --gres=gpu:4                   
 #SBATCH -A IscrC_Pb-skite
@@ -13,151 +14,96 @@
 SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/clap_pipeline.sif"
 CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
 TEMP_DIR="/tmp/$SLURM_JOB_ID"
-TEMP_PYTHON_SCRIPT_PATH="$TEMP_DIR/create_h5_data.py" # Script Python temporaneo per la generazione dati
-PERSISTENT_DESTINATION="/leonardo_scratch/large/$USER/SEC_pipeline/benchmark_logs/$SLURM_JOB_ID"
+PERSISTENT_DESTINATION="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/benchmark_logs/$SLURM_JOB_ID"
 
-# Variabili di configurazione per il Benchmark Rapido
+# Variabili di configurazione
 BENCHMARK_CONFIG_FILE="test_config.yaml" 
 BENCHMARK_AUDIO_FORMAT="wav"
 BENCHMARK_N_OCTAVE="1"
 
-# --- 2. PREPARAZIONE DATI SUL DISCO LOCALE VELOCE (/tmp) ---
+# --- 2. PREPARAZIONE AMBIENTE SU /tmp (Disco Locale Veloce) ---
 
-# 2.1. Creazione della cartella temporanea e della sua struttura interna
-# La pipeline si aspetta i file HDF5 in TEMP_DIR/dataSEC/RAW_DATASET/
 mkdir -p "$TEMP_DIR/dataSEC/RAW_DATASET"
+mkdir -p "$TEMP_DIR/work_dir"
 
-# 2.2. Copia dei pesi CLAP
 echo "Copia dei pesi CLAP su /tmp..."
-CLAP_LOCAL_WEIGHTS="$TEMP_DIR/CLAP_weights_2023.pth"
+CLAP_LOCAL_WEIGHTS="$TEMP_DIR/work_dir/CLAP_weights_2023.pth"
 cp "$CLAP_SCRATCH_WEIGHTS" "$CLAP_LOCAL_WEIGHTS"
 
-# 2.3. GENERAZIONE DINAMICA DEL DATASET HDF5 (Passaggio Cruciale)
-echo "Generazione dinamica del dataset HDF5 di test in $TEMP_DIR/dataSEC/RAW_DATASET/..."
+# --- 3. GENERAZIONE DINAMICA DEL DATASET HDF5 ---
 
-# Crea lo script Python temporaneo usando il codice di create_fake_raw_audio_h5.py
-# NOTA: Assicurati che create_fake_raw_audio_h5.py sia disponibile nel SIF o sia
-# stato copiato/bindato correttamente se il suo codice è necessario.
-cat << EOF > "$TEMP_PYTHON_SCRIPT_PATH"
-import sys
-import os
-sys.path.append('.') # Assicurati che i moduli locali siano importabili
-
-# Importa TUTTE le funzioni necessarie dal tuo file create_fake_raw_audio_h5.py
-# (Questo snippet deve essere eseguito all'interno del container)
-from tests.utils.create_fake_raw_audio_h5 import create_fake_raw_audio_h5 # Assumo che la funzione sia in src.utils o simile
-
-# Percorso di destinazione che mappa a $TEMP_DIR/dataSEC/RAW_DATASET/
-# Visto che siamo dentro il container, usiamo /tmp_data/dataSEC/RAW_DATASET
-TARGET_DIR = os.path.join(os.getenv('NODE_TEMP_BASE_DIR', '/tmp_data/dataSEC'), 'RAW_DATASET') 
-
+echo "Generazione dataset HDF5 di test..."
+cat << EOF > "$TEMP_DIR/work_dir/create_h5_data.py"
+import sys, os
+sys.path.append('.')
+from tests.utils.create_fake_raw_audio_h5 import create_fake_raw_audio_h5 
+TARGET_DIR = os.path.join(os.getenv('NODE_TEMP_BASE_DIR'), 'RAW_DATASET') 
 if __name__ == '__main__':
-    # Esegui la funzione per generare i file HDF5
-    print(f"Generazione file in: {TARGET_DIR}")
     create_fake_raw_audio_h5(TARGET_DIR)
 EOF
 
-# Esegui lo script Python temporaneo all'interno del container
-singularity exec \
-    --bind $TEMP_DIR:/tmp_data \
-    "$SIF_FILE" \
-    python3 "$TEMP_PYTHON_SCRIPT_PATH"
+singularity exec --bind "$TEMP_DIR:/tmp_data" "$SIF_FILE" \
+    python3 "/tmp_data/work_dir/create_h5_data.py"
 
-# --- 3. CONFIGURAZIONE ESECUTIVA (Variabili d'Ambiente) ---
+# --- 4. CONFIGURAZIONE AMBIENTE ---
 
-# Variabili usate da models.py e dirs_config.py
 export CLAP_TEXT_ENCODER_PATH="/usr/local/clap_cache/tokenizer_model/" 
-export LOCAL_CLAP_WEIGHTS_PATH="$CLAP_LOCAL_WEIGHTS"
+export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/CLAP_weights_2023.pth"
 export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC" 
-
-# VARIABILE "NO SAVE EMBEDDINGS" (richiede la modifica in utils.py)
 export NO_EMBEDDING_SAVE="True" 
 
-# --- 4. ESECUZIONE DELLA PIPELINE (Singola Run) ---
+# --- 5. ESECUZIONE PIPELINE DISTRIBUITA (srun) ---
 
-echo "--------------------------------------------------------"
-echo "Avvio del Benchmark Rapido CLAP"
-echo "CONFIG: $BENCHMARK_CONFIG_FILE"
-echo "SALVATAGGIO EMBEDDINGS: DISATTIVATO"
-echo "--------------------------------------------------------"
-
-singularity exec \
-    --bind $TEMP_DIR:/tmp_data \
-    --bind $(pwd)/configs:/app/configs \
+echo "🚀 Avvio Pipeline CLAP su SLURM..."
+srun singularity exec \
+    --bind "$TEMP_DIR:/tmp_data" \
+    --bind "$(pwd)/configs:/app/configs" \
     "$SIF_FILE" \
     python3 scripts/get_clap_embeddings.py \
         --config_file "$BENCHMARK_CONFIG_FILE" \
         --n_octave "$BENCHMARK_N_OCTAVE" \
         --audio_format "$BENCHMARK_AUDIO_FORMAT"
 
+# --- 6. UNIONE SEQUENZIALE DEI LOG (Post-Processing) ---
 
-# --- 5. TRASFERIMENTO DEI LOG E PULIZIA FINALE (Passaggio Corretto) ---
-
-# La pipeline ha creato log e file temporanei sotto $TEMP_DIR/dataSEC/...
-echo "--------------------------------------------------------"
-echo "Trasferimento dei log e dei dati temporanei su disco persistente..."
-echo "Destinazione: $PERSISTENT_DESTINATION"
-echo "--------------------------------------------------------"
-
-mkdir -p "$PERSISTENT_DESTINATION"
-
-# Copia l'intera struttura 'dataSEC' (che include tutti i log e i file temporanei)
-# L'unica cosa che si salva è la cartella 'dataSEC' (e tutto ciò che c'è sotto)
-cp -r "$TEMP_DIR/dataSEC" "$PERSISTENT_DESTINATION/"
-
-# 5. ANALISI FINALE DEI LOG (DOPO LA MERGE)
-# -------------------------------------------------------------
-
-# Definiamo il percorso dello script Python temporaneo per l'analisi
-TEMP_LOG_ANALYSE_SCRIPT="/tmp/temp_log_analyse_script_$$.py"
-
-# Creiamo lo script Python per l'analisi.
-# Questo script carica la funzione di analisi e la esegue.
-
-cat << EOF > "$TEMP_LOG_ANALYSE_SCRIPT"
-import sys
-import os
-import argparse
-# Aggiusta il percorso per l'importazione
-# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'SEC_pipeline')))
+echo "🔗 Unione sequenziale dei log..."
+cat << EOF > "$TEMP_DIR/work_dir/join_logs_wrapper.py"
+import sys, os
 sys.path.append('.')
-
-# Importa l'analizzatore di log (il file che mi hai appena confermato)
-from tests.utils.analyse_test_execution_times import analyze_execution_times, print_analysis_results 
-
-# Parametri passati dalla shell: audio_format, n_octave, config_file
-if __name__ == '__main__':
-    if len(sys.argv) < 4:
-        print("Errore: argomenti mancanti per lo script di analisi.")
-        sys.exit(1)
-        
-    audio_format = sys.argv[1]
-    n_octave = sys.argv[2]
-    config_file = sys.argv[3]
-    
-    # 1. Esegui l'analisi
-    results = analyze_execution_times(audio_format, n_octave, config_file)
-    
-    # 2. Stampa i risultati
-    print_analysis_results(results)
-
+from src.utils import join_logs
+from src.dirs_config import basedir_preprocessed
+def main():
+    base_path = os.path.join(basedir_preprocessed, "$BENCHMARK_AUDIO_FORMAT", "${BENCHMARK_N_OCTAVE}_octave")
+    for entry in os.listdir(base_path):
+        target_dir = os.path.join(base_path, entry)
+        if os.path.isdir(target_dir) and entry.endswith("_secs"):
+            print(f"Merging: {entry}")
+            join_logs(target_dir)
+if __name__ == '__main__': main()
 EOF
 
-# Esegui lo script di analisi usando i parametri definiti in precedenza
-# Audio format e n_octave vengono passati dalla shell
-echo "Avvio dell'analisi dei tempi di esecuzione..."
-singularity exec \
-    --bind $TEMP_DIR:/tmp_data \
-    "$SIF_FILE" \
-    python3 "$TEMP_LOG_ANALYSE_SCRIPT" $AUDIO_FORMAT $N_OCTAVE $CONFIG_FILE
+singularity exec --bind "$TEMP_DIR:/tmp_data" "$SIF_FILE" \
+    python3 "/tmp_data/work_dir/join_logs_wrapper.py"
 
-# Rimozione degli script temporanei
-rm -f "$TEMP_LOG_ANALYSE_SCRIPT"
-# Ricordati di rimuovere anche TEMP_LOG_MERGE_SCRIPT e altri script temporanei!
-rm -f "$TEMP_LOG_MERGE_SCRIPT" 
-rm -f "$TEMP_PYTHON_SCRIPT"
+# --- 7. ANALISI FINALE ---
 
-# Pulizia di tutti i dati locali (incluso il dataset HDF5 di test e i log originali)
-echo "Pulizia della cartella temporanea locale..."
-rm -rf "$TEMP_DIR" 
-echo "Pulizia completata. I log sono stati salvati in $PERSISTENT_DESTINATION"
+echo "📊 Avvio Analisi Tempi..."
+cat << EOF > "$TEMP_DIR/work_dir/analysis_wrapper.py"
+import os, sys
+sys.path.append('.') 
+import tests.utils.analyse_test_execution_times as analysis_module
+analysis_module.config_test_folder = os.path.join(os.getenv('NODE_TEMP_BASE_DIR'), 'PREPROCESSED_DATASET')
+if __name__ == '__main__':
+    results = analysis_module.analyze_execution_times("$BENCHMARK_AUDIO_FORMAT", "$BENCHMARK_N_OCTAVE", "$BENCHMARK_CONFIG_FILE")
+    analysis_module.print_analysis_results(results)
+EOF
+
+singularity exec --bind "$TEMP_DIR:/tmp_data" "$SIF_FILE" \
+    python3 "/tmp_data/work_dir/analysis_wrapper.py"
+
+# --- 8. SALVATAGGIO RISULTATI E PULIZIA ---
+
+mkdir -p "$PERSISTENT_DESTINATION"
+cp -r "$TEMP_DIR/dataSEC" "$PERSISTENT_DESTINATION/"
+rm -rf "$TEMP_DIR"
+echo "✅ Job Completato. Risultati in $PERSISTENT_DESTINATION"

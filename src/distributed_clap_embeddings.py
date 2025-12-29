@@ -179,13 +179,17 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
 
 def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_tasks, pbar_instance=None):
     """
-    Worker process SLURM con isolamento per classe (Latenza 2 ottimizzata).
+    Worker process SLURM allineato con le ottimizzazioni di memoria 'stateless'.
     """
+    # 🎯 DIAGNOSTICA: Attiviamo il faulthandler anche su SLURM
+    import faulthandler
+    faulthandler.enable()
+
     # Setup ambiente distribuito PyTorch
     device = setup_distributed_environment(rank, world_size, slurm=True)
     clap_model, audio_embedding, _ = CLAP_initializer(device, use_cuda=True)
 
-    # Configurazione worker
+    # Configurazione worker (Allineamento config)
     config['rank'] = rank
     config['dirs']['root_source'] = os.path.join(basedir_raw, f'{audio_format}')
     config['dirs']['root_target'] = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave')
@@ -193,15 +197,12 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
     config['audio']['n_octave'] = n_octave
     config['device'] = str(device)
     
-    # 🎯 Raggruppamento task per classe per minimizzare I/O contesa
     from collections import defaultdict
     tasks_by_class = defaultdict(list)
     for cut_secs, class_name in my_tasks:
         tasks_by_class[class_name].append(cut_secs)
 
-    # Iterazione sulle classi assegnate a questo Rank
     for class_name, assigned_cuts in tasks_by_class.items():
-        # Apertura manager RAW (Unica per classe)
         h5_path = os.path.join(config['dirs']['root_source'], class_name, f'{class_name}_{audio_format}_dataset.h5')
         
         try:
@@ -213,14 +214,15 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
 
                 start_time = time.time()
                 
-                # Calcolo embedding
+                # 🎯 Esecuzione con process_class_with_cut_secs (che ora è stateless)
                 n_embeddings_per_run, completed = process_class_with_cut_secs(
                     clap_model, audio_embedding, class_name, cut_secs, 
                     n_octave, config, audio_dataset_manager=current_audio_manager
                 )
+                
+                # 🎯 PULIZIA POST-TASK
                 gc.collect()
                 
-                # Log rank-specific
                 target_log_dir = os.path.join(config['dirs']['root_target'], f'{cut_secs}_secs')
                 process_time = time.time() - start_time
                 write_log(target_log_dir, (cut_secs, class_name), process_time, n_embeddings_per_run, completed, **config)
@@ -228,7 +230,7 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
                 if pbar_instance:
                     pbar_instance.update(1)
 
-            # Chiusura manager RAW
+            # 🎯 CHIUSURA E PULIZIA POST-CLASSE (Speculare al locale)
             current_audio_manager.close()
             del current_audio_manager
             gc.collect()
