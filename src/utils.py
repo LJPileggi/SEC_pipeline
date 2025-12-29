@@ -642,7 +642,7 @@ def setup_distributed_environment(rank, world_size, slurm=True):
             # 🎯 Backend NCCL per GPU (molto sensibile alla rete)
             print(f"[RANK {rank}] Chiamata init_process_group (backend=nccl)...", flush=True)
             dist.init_process_group(
-                backend="nccl", 
+                backend="gloo", 
                 rank=rank, 
                 world_size=world_size,
                 timeout=datetime.timedelta(seconds=180) # 🎯 Timeout a 3 min (evita attese infinite)
