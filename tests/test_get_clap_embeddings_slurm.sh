@@ -54,9 +54,19 @@ export NO_EMBEDDING_SAVE="True"
 
 # --- 5. ESECUZIONE PIPELINE DISTRIBUITA (srun) ---
 
+# --- DEBUG RETE PYTORCH ---
 export TORCH_DISTRIBUTED_DEBUG=DETAIL
 export TORCH_CPP_LOG_LEVEL=INFO
 export NCCL_DEBUG=INFO
+
+# 🎯 FORZA L'INTERFACCIA DI RETE (Spesso risolve su Leonardo)
+# Se Leonardo usa InfiniBand, a volte forzare lo stack socket aiuta il debugging
+export NCCL_IB_DISABLE=1 
+export NCCL_P2P_DISABLE=1
+
+# 🎯 FORZA IL MASTER_ADDR DINAMICO (Se non lo fa utils.py)
+export MASTER_ADDR=$(hostname)
+export MASTER_PORT=29500
 
 echo "🚀 Avvio Pipeline CLAP su SLURM..."
 srun singularity exec \
