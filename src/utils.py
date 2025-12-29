@@ -640,7 +640,7 @@ def setup_distributed_environment(rank, world_size, slurm=True):
     try:
         if slurm:
             # 🎯 Backend NCCL per GPU (molto sensibile alla rete)
-            print(f"[RANK {rank}] Chiamata init_process_group (backend=nccl)...", flush=True)
+            print(f"[RANK {rank}] Chiamata init_process_group (backend=gloo)...", flush=True)
             dist.init_process_group(
                 backend="gloo", 
                 rank=rank, 
