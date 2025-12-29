@@ -54,6 +54,10 @@ export NO_EMBEDDING_SAVE="True"
 
 # --- 5. ESECUZIONE PIPELINE DISTRIBUITA (srun) ---
 
+export TORCH_DISTRIBUTED_DEBUG=DETAIL
+export TORCH_CPP_LOG_LEVEL=INFO
+export NCCL_DEBUG=INFO
+
 echo "🚀 Avvio Pipeline CLAP su SLURM..."
 srun singularity exec \
     --bind "$TEMP_DIR:/tmp_data" \
