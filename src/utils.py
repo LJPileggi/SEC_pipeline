@@ -627,52 +627,37 @@ def setup_environ_vars(slurm=True):
 import datetime
 
 def setup_distributed_environment(rank, world_size, slurm=True):
-    """
-    Setup con debugging avanzato e tracciamento del rendezvous.
-    """
-    import time
-    print(f"\n[RANK {rank}] >>> AVVIO SETUP DISTRIBUITO (WS={world_size}, SLURM={slurm})", flush=True)
-    print(f"[RANK {rank}] MASTER_ADDR: {os.environ.get('MASTER_ADDR')}", flush=True)
-    print(f"[RANK {rank}] MASTER_PORT: {os.environ.get('MASTER_PORT')}", flush=True)
+    import datetime, time
+    # 🎯 Forza l'uso di IPv4 per evitare risoluzioni ambigue del hostname su Leonardo
+    os.environ["TP_SOCKET_IFNAME"] = "lo"
+    os.environ["GLOO_SOCKET_IFNAME"] = "lo"
     
-    start_time = time.time()
+    print(f"\n[RANK {rank}] >>> AVVIO SETUP DISTRIBUITO (WS={world_size})", flush=True)
+    
+    # In modalità interattiva o su nodo singolo, Gloo è più stabile di NCCL 
+    # perché non richiede l'inizializzazione del driver GPU per la comunicazione
+    backend = "nccl" if (slurm and torch.cuda.is_available()) else "gloo"
     
     try:
-        if slurm:
-            # 🎯 Backend NCCL per GPU (molto sensibile alla rete)
-            print(f"[RANK {rank}] Chiamata init_process_group (backend=nccl)...", flush=True)
-            dist.init_process_group(
-                backend="nccl", 
-                rank=rank, 
-                world_size=world_size,
-                timeout=datetime.timedelta(seconds=180) # 🎯 Timeout a 3 min (evita attese infinite)
-            )
+        dist.init_process_group(
+            backend=backend, 
+            rank=rank, 
+            world_size=world_size,
+            init_method="env://",
+            timeout=datetime.timedelta(seconds=60)
+        )
+        
+        if torch.cuda.is_available():
             torch.cuda.set_device(rank)
             device = torch.device(f'cuda:{rank}')
         else:
-            # 🎯 Backend GLOO per CPU/Interattivo
-            print(f"[RANK {rank}] Chiamata init_process_group (backend=gloo)...", flush=True)
-            dist.init_process_group(
-                backend="gloo", 
-                rank=rank, 
-                world_size=world_size,
-                timeout=datetime.timedelta(seconds=120)
-            )
-            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-            if torch.cuda.is_available():
-                torch.cuda.set_device(rank)
-                device = torch.device(f'cuda:{rank}')
+            device = torch.device('cpu')
 
-        end_time = time.time()
-        print(f"[RANK {rank}] ✅ RENDEZVOUS COMPLETATO in {end_time - start_time:.2f}s sul device {device}", flush=True)
-        
+        print(f"[RANK {rank}] ✅ RENDEZVOUS COMPLETATO su {device}", flush=True)
+        return device
     except Exception as e:
-        print(f"\n[RANK {rank}] ❌ ERRORE CRITICO DURANTE IL RENDEZVOUS:", flush=True)
-        print(traceback.format_exc(), flush=True)
-        # Se il rendezvous fallisce, non possiamo continuare
+        print(f"[RANK {rank}] ❌ ERRORE: {e}", flush=True)
         raise e
-
-    return device
 
 def cleanup_distributed_environment(rank):
     """Cleanup con gestione errori per evitare crash a catena."""

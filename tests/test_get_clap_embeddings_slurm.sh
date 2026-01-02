@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
+#SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=8              
 #SBATCH --time=04:00:00               
 #SBATCH --mem=128G                     
@@ -57,28 +57,23 @@ export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/CLAP_weights_2023.pth"
 export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC" 
 export NO_EMBEDDING_SAVE="True" 
 
-# --- 5. ESECUZIONE PIPELINE DISTRIBUITA (srun) ---
-
-# Debug Rete (Mantienili per capire se il rendezvous fallisce)
-export TORCH_DISTRIBUTED_DEBUG=DETAIL
-export TORCH_CPP_LOG_LEVEL=INFO
-export NCCL_DEBUG=INFO
-
-# Forza l'interfaccia locale per evitare che i processi cerchino di uscire dal nodo
+# --- 🎯 NUOVE VARIABILI PER SBLOCCARE IL RENDEZVOUS ---
+# Disabilita la comunicazione diretta GPU-to-GPU che spesso fallisce nei container
+export NCCL_P2P_DISABLE=1 
+# Forza l'uso di socket standard TCP
+export NCCL_IB_DISABLE=1  
+# Forza l'uso dell'interfaccia di loopback locale
 export NCCL_SOCKET_IFNAME=lo
 export GLOO_SOCKET_IFNAME=lo
+
 export MASTER_ADDR=127.0.0.1
 export MASTER_PORT=29500
 
-
-
-echo "🚀 Avvio Pipeline CLAP su SLURM con srun -l..."
-# Rimuovi temporaneamente -C se sospetti che blocchi la rete interna
-# Aggiungi --mpi=pmi2 se disponibile su Leonardo per gestire i rank
-# srun -l -n 4
+# --- 5. ESECUZIONE PIPELINE ---
+echo "🚀 Avvio Pipeline..."
 singularity exec \
     --bind "$TEMP_DIR:/tmp_data" \
-    --bind "$PROJECT_ROOT_DIR:/app" \
+    --bind "$(pwd):/app" \
     "$SIF_FILE" \
     python3 scripts/get_clap_embeddings.py \
         --config_file "$BENCHMARK_CONFIG_FILE" \
