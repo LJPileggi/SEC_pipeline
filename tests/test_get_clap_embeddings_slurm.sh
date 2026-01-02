@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=4           
+#SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8              
 #SBATCH --time=04:00:00               
 #SBATCH --mem=128G                     
@@ -75,7 +75,8 @@ export MASTER_PORT=29500
 echo "🚀 Avvio Pipeline CLAP su SLURM con srun -l..."
 # Rimuovi temporaneamente -C se sospetti che blocchi la rete interna
 # Aggiungi --mpi=pmi2 se disponibile su Leonardo per gestire i rank
-srun -l -n 4 singularity exec \
+# srun -l -n 4
+singularity exec \
     --bind "$TEMP_DIR:/tmp_data" \
     --bind "$PROJECT_ROOT_DIR:/app" \
     "$SIF_FILE" \
