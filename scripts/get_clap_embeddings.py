@@ -27,19 +27,22 @@ def parsing():
 def main():
     args = parsing()
     
-    # Rileva automaticamente quante GPU usare in locale, altrimenti default a 4
-    if torch.cuda.is_available():
-        world_size = torch.cuda.device_count()
-    else:
-        world_size = 4
-
-    # Rileva l'ambiente di esecuzione
-    if "SLURM_PROCID" in os.environ:
-        # In ambiente SLURM, il logging e il setup del rank sono gestiti internamente
-        print(f"Ambiente SLURM rilevato. Avvio in modalità distribuita...")
+    # 🎯 1. Spostiamo il rilevamento dell'ambiente PRIMA di ogni altra cosa
+    # Usiamo SLURM_JOB_ID che è la variabile più solida del sistema
+    is_slurm = "SLURM_JOB_ID" in os.environ
+    
+    if is_slurm:
+        # In SLURM, forziamo il world_size leggendo la variabile globale dei task
+        world_size = int(os.environ.get("SLURM_NTASKS", 4))
+        print(f"Ambiente SLURM rilevato (Job: {os.environ['SLURM_JOB_ID']}).")
+        print(f"Esecuzione distribuita: Rank {os.environ.get('SLURM_PROCID', 'unknown')} di {world_size}")
         run_distributed_slurm(args.config_file, args.audio_format, args.n_octave)
     else:
-        # Ambiente locale o altro non-SLURM
+        # Ambiente locale
+        if torch.cuda.is_available():
+            world_size = torch.cuda.device_count()
+        else:
+            world_size = 4
         print(f"Ambiente locale rilevato. Avvio con {world_size} processi...")
         run_local_multiprocess(args.config_file, args.audio_format, args.n_octave, world_size)
 
