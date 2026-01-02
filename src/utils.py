@@ -647,6 +647,12 @@ def setup_distributed_environment(rank, world_size, slurm=True):
             world_size=world_size,
             timeout=datetime.timedelta(seconds=60)
         )
+        device = torch.device(f'cuda:{rank}') if torch.cuda.is_available() else torch.device('cpu')
+        print(f"[RANK {rank}] ✅ GRUPPO SINCRONIZZATO!", flush=True)
+        return device
+    except Exception as e:
+        print(f"[RANK {rank}] ❌ ERRORE: {e}", flush=True)
+        raise e
 
 def cleanup_distributed_environment(rank):
     """Cleanup con gestione errori per evitare crash a catena."""
