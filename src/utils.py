@@ -624,40 +624,29 @@ def setup_environ_vars(slurm=True):
         os.environ['MASTER_ADDR'] = 'localhost'
         os.environ['MASTER_PORT'] = str(np.random.randint(29500, 29999))
 
-import datetime
-
 def setup_distributed_environment(rank, world_size, slurm=True):
     import datetime, time
-    # 🎯 Forza l'uso di IPv4 per evitare risoluzioni ambigue del hostname su Leonardo
-    os.environ["TP_SOCKET_IFNAME"] = "lo"
-    os.environ["GLOO_SOCKET_IFNAME"] = "lo"
+    # 🎯 PUNTO DI INCONTRO FISICO: Un file su Scratch che tutti possono leggere/scrivere
+    # Rimuovi questo file all'inizio del job se esiste
+    sync_file = os.path.join(os.environ.get("NODE_TEMP_BASE_DIR", "/tmp"), "torch_sync_file")
+    if rank == 0 and os.path.exists(sync_file):
+        os.remove(sync_file)
     
-    print(f"\n[RANK {rank}] >>> AVVIO SETUP DISTRIBUITO (WS={world_size})", flush=True)
+    # URL di inizializzazione tramite FILE
+    init_method = f"file://{sync_file}"
     
-    # In modalità interattiva o su nodo singolo, Gloo è più stabile di NCCL 
-    # perché non richiede l'inizializzazione del driver GPU per la comunicazione
-    backend = "nccl" if (slurm and torch.cuda.is_available()) else "gloo"
-    
+    print(f"\n[RANK {rank}] >>> TENTATIVO RENDEZVOUS FILE-BASED (WS={world_size})", flush=True)
+    print(f"[RANK {rank}] Sync File: {sync_file}", flush=True)
+
     try:
+        # Usiamo GLOO per la massima compatibilità di rete nei test
         dist.init_process_group(
-            backend=backend, 
+            backend="gloo", 
+            init_method=init_method,
             rank=rank, 
             world_size=world_size,
-            init_method="env://",
             timeout=datetime.timedelta(seconds=60)
         )
-        
-        if torch.cuda.is_available():
-            torch.cuda.set_device(rank)
-            device = torch.device(f'cuda:{rank}')
-        else:
-            device = torch.device('cpu')
-
-        print(f"[RANK {rank}] ✅ RENDEZVOUS COMPLETATO su {device}", flush=True)
-        return device
-    except Exception as e:
-        print(f"[RANK {rank}] ❌ ERRORE: {e}", flush=True)
-        raise e
 
 def cleanup_distributed_environment(rank):
     """Cleanup con gestione errori per evitare crash a catena."""
