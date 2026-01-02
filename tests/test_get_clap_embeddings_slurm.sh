@@ -73,17 +73,16 @@ export MASTER_PORT=29500
 
 
 echo "🚀 Avvio Pipeline CLAP su SLURM con srun -l..."
-# 🎯 srun -l: etichetta l'output di ogni rank (es. 0:, 1:, 2:)
-# 🎯 singularity exec -C: isolamento totale per evitare conflitti di socket host
-srun -l singularity exec -C \
+# Rimuovi temporaneamente -C se sospetti che blocchi la rete interna
+# Aggiungi --mpi=pmi2 se disponibile su Leonardo per gestire i rank
+srun -l -n 4 singularity exec \
     --bind "$TEMP_DIR:/tmp_data" \
-    --bind "$(pwd)/configs:/app/configs" \
+    --bind "$PROJECT_ROOT_DIR:/app" \
     "$SIF_FILE" \
     python3 scripts/get_clap_embeddings.py \
         --config_file "$BENCHMARK_CONFIG_FILE" \
         --n_octave "$BENCHMARK_N_OCTAVE" \
-        --audio_format "$BENCHMARK_AUDIO_FORMAT" \
-        --mode slurm
+        --audio_format "$BENCHMARK_AUDIO_FORMAT"
 
 # --- 6. UNIONE SEQUENZIALE DEI LOG (Post-Processing) ---
 
