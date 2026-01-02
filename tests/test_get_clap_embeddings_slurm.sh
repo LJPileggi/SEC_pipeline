@@ -73,7 +73,7 @@ export MASTER_PORT=29500
 # 🎯 Rimuovi il flag -C (Containall) se presente: a volte impedisce ai processi 
 # figli di vedere i file di lock creati dai fratelli.
 echo "🚀 Lancio Multi-Processo..."
-srun --unbuffered -l -n 4 singularity exec \
+srun -l -n 4 echo "PROCESSO START" singularity exec \
     --bind "$TEMP_DIR:/tmp_data" \
     --bind "$(pwd):/app" \
     "$SIF_FILE" \
