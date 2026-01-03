@@ -12,6 +12,8 @@ SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/cl
 # Usiamo lo scratch per il file di sync
 SYNC_FILE="/leonardo_scratch/large/userexternal/$USER/torch_sync_test"
 
+sleep 10
+
 echo "--- 1. TEST SLURM (FUORI DAL CONTAINER) ---"
 srun -l -n 4 echo "SLURM OK: Sono il processo $SLURM_PROCID di $SLURM_NTASKS"
 
