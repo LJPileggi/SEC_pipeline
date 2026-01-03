@@ -2,20 +2,24 @@ import os
 import torch
 import numpy as np
 import scipy
+import msclap # 🎯 Importiamo prima msclap
 import huggingface_hub
 
-# 🎯 MONKEY PATCH: Sovrascriviamo hf_hub_download per bloccare la rete
-def patched_hf_download(*args, **kwargs):
+# 🎯 DEFINIAMO LA PATCH
+def patched_hf_hub_download(*args, **kwargs):
     local_path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
     if local_path and os.path.exists(local_path):
-        print(f"🎯 [PATCH] Redirect download a: {local_path}", flush=True)
+        print(f"🎯 [PATCH] Redirect a {local_path}", flush=True)
         return local_path
-    raise FileNotFoundError("Patch fallita: LOCAL_CLAP_WEIGHTS_PATH non trovato.")
+    raise FileNotFoundError(f"Patch fallita: {local_path} non trovato")
 
-# Applichiamo la patch globalmente prima di caricare msclap
-huggingface_hub.hf_hub_download = patched_hf_download
+# 🎯 APPLICHIAMO LA PATCH OVUNQUE
+# 1. Nella libreria originale
+huggingface_hub.hf_hub_download = patched_hf_hub_download
+# 2. Direttamente dentro il riferimento che ha msclap al suo interno
+msclap.CLAPWrapper.hf_hub_download = patched_hf_hub_download
 
-from msclap import CLAP
+from msclap import CLAP # Ora l'import userà la versione patchata
 
 ### CLAP models and classifiers ###
 
