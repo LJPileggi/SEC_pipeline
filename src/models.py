@@ -27,6 +27,7 @@ transformers.utils.hub.cached_file = universal_path_redirect
 transformers.utils.hub.hf_hub_download = universal_path_redirect
 
 from msclap import CLAP
+import numpy as np
 
 def CLAP_initializer(device='cpu', use_cuda=False):
     """
