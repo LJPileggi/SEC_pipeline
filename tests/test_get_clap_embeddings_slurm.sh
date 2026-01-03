@@ -73,9 +73,8 @@ echo "Verifica task SLURM attivi:"
 srun -l -n 4 /bin/hostname  # 🎯 TEST 1: Deve restituire 4 righe
 
 echo "🚀 Avvio Multi-Processo con srun blindato..."
-# 🎯 Aggiungiamo --cpu-bind=none e --export=ALL per garantire che 
-# Singularity non soffochi i processi figli e che vedano le variabili Slurm.
-ssrun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \
+# 🎯 Forza Slurm ad assegnare 1 GPU esatta a ogni task srun
+srun --unbuffered -l --export=ALL --gres=gpu:1 --ntasks=4 --cpus-per-task=8 \
     singularity exec \
     --bind "$TEMP_DIR:/tmp_data" \
     --bind "$(pwd):/app" \

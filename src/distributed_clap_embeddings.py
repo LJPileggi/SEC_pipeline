@@ -184,13 +184,12 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
     import faulthandler
     faulthandler.enable() # 🎯 Diagnostica per crash di basso livello
 
-    # 🎯 Tutti i processi partecipano al setup per evitare deadlock nel rendezvous
+    # 🎯 Tutti i rank DEVONO eseguire il setup, indipendentemente dai task
     device = setup_distributed_environment(rank, world_size, slurm=True)
-    
-    # 🎯 Gestione dei processi vuoti: si chiudono solo dopo l'init_process_group
+
     if not my_tasks:
-        logging.info(f"Rank {rank} non ha task assegnati. Sincronizzazione completata. Uscita preventiva.")
-        cleanup_distributed_environment(rank)
+        print(f"Rank {rank}: nessun task. In attesa degli altri...")
+        dist.barrier() # Rimane nel gruppo finché gli altri non finiscono
         return
 
     # Inizializzazione modello solo per chi ha effettivamente lavoro

@@ -627,12 +627,11 @@ def setup_environ_vars(slurm=True):
 def setup_distributed_environment(rank, world_size, slurm=True):
     import datetime, time
     # 🎯 PUNTO DI INCONTRO FISICO: Un file su Scratch che tutti possono leggere/scrivere
-    # Rimuovi questo file all'inizio del job se esiste
-    sync_file = os.path.abspath("/app/torch_sync_file")
+    # Rimuovi questo file all'inizio del job se esiste# 🎯 Usa il percorso mappato su Scratch che è scrivibile
+    sync_file = "/tmp_data/torch_sync_file" 
     if rank == 0 and os.path.exists(sync_file):
         os.remove(sync_file)
-    
-    # URL di inizializzazione tramite FILE
+
     init_method = f"file://{sync_file}"
     
     print(f"\n[RANK {rank}] >>> TENTATIVO RENDEZVOUS FILE-BASED (WS={world_size})", flush=True)
