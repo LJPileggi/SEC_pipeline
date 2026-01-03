@@ -61,12 +61,16 @@ export NCCL_P2P_DISABLE=1
 export NCCL_IB_DISABLE=1
 
 # --- 5. ESECUZIONE PIPELINE ---
-# 🎯 NOTA: Rimosso --gres=gpu:1 per evitare conflitti di allocazione
-# 🎯 NOTA: Manteniamo i bind essenziali
-srun --unbuffered -l --export=ALL --cpu-bind=none \
+echo "🚀 Avvio Multi-Processo con percorsi forzati..."
+
+# 🎯 Aggiungiamo --workdir per essere certi che il container parta da /app
+# 🎯 Aggiungiamo il bind esplicito per lo scratch come nel debug per sicurezza
+srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \
     singularity exec \
+    --bind "/leonardo_scratch:/leonardo_scratch" \
     --bind "$TEMP_DIR:/tmp_data" \
     --bind "$(pwd):/app" \
+    --pwd "/app" \
     "$SIF_FILE" \
     python3 scripts/get_clap_embeddings.py \
         --config_file "$BENCHMARK_CONFIG_FILE" \
