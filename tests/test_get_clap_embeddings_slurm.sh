@@ -3,8 +3,7 @@
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=8              
 #SBATCH --time=04:00:00               
-#SBATCH --mem=128G                     
-#SBATCH --exclusive                   
+#SBATCH --mem=128G                    
 #SBATCH --gres=gpu:4                   
 #SBATCH -A IscrC_Pb-skite
 #SBATCH -p boost_usr_prod
@@ -73,9 +72,10 @@ export MASTER_PORT=29500
 echo "Verifica task SLURM attivi:"
 srun -l -n 4 /bin/hostname  # 🎯 TEST 1: Deve restituire 4 righe
 
-echo "🚀 Lancio Multi-Processo con srun forzato..."
-# Usiamo --cpu-bind=none per evitare che i processi figli siano soffocati
-srun --unbuffered -l -n 4 --cpu-bind=none singularity exec \
+echo "🚀 Avvio Multi-Processo con srun blindato..."
+# 🎯 Aggiungiamo --cpu-bind=none e --export=ALL per garantire che 
+# Singularity non soffochi i processi figli e che vedano le variabili Slurm.
+srun --unbuffered -l --export=ALL --cpu-bind=none singularity exec \
     --bind "$TEMP_DIR:/tmp_data" \
     --bind "$(pwd):/app" \
     "$SIF_FILE" \
