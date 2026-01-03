@@ -1,6 +1,39 @@
+import os
+import huggingface_hub
+import transformers
+
+# --- 🎯 MONKEY PATCH NUCLEARE TOTALE (OFFLINE MODE) ---
+
+# 1. Patch per i pesi CLAP (.pth)
+def patched_hf_hub_download(*args, **kwargs):
+    local_path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
+    if local_path and os.path.exists(local_path):
+        print(f"🎯 [GLOBAL PATCH] Redirect pesi a: {local_path}", flush=True)
+        return local_path
+    raise FileNotFoundError(f"Pesi non trovati a {local_path}")
+
+# 2. Patch per il TextEncoder (BERT/Tokenizer)
+def patched_transformers_cached_file(*args, **kwargs):
+    text_path = os.getenv("CLAP_TEXT_ENCODER_PATH")
+    if text_path and os.path.exists(text_path):
+        # Se transformers cerca un file specifico, lo uniamo al path
+        filename = kwargs.get('filename')
+        if filename:
+            full_path = os.path.join(text_path, filename)
+            if os.path.exists(full_path):
+                print(f"🎯 [GLOBAL PATCH] Redirect {filename} a: {full_path}", flush=True)
+                return full_path
+        return text_path
+    return None
+
+# Applichiamo le patch globalmente
+huggingface_hub.hf_hub_download = patched_hf_hub_download
+transformers.utils.hub.cached_file = patched_transformers_cached_file
+
+print("🚀 Patch Offline applicate con successo.", flush=True)
+
 import argparse
 import sys
-import os
 import logging
 # import torch # Aggiunto per rilevamento GPU locale
 

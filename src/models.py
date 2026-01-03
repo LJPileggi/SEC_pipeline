@@ -2,67 +2,29 @@ import os
 import torch
 import numpy as np
 import scipy
-import msclap # 🎯 Importiamo prima msclap
-import huggingface_hub
-import transformers # 🎯 NUOVO: Dobbiamo patchare anche transformers
-
-# --- 🎯 MONKEY PATCH TOTALE PER AMBIENTE OFFLINE ---
-
-def patched_hf_hub_download(*args, **kwargs):
-    """Intercetta i pesi audio di CLAP."""
-    local_path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
-    if local_path and os.path.exists(local_path):
-        print(f"🎯 [PATCH CLAP] Redirect a {local_path}", flush=True)
-        return local_path
-    raise FileNotFoundError(f"Pesi non trovati: {local_path}")
-
-def patched_transformers_download(*args, **kwargs):
-    """Intercetta il TextEncoder (BERT/Tokenizer)."""
-    # Recuperiamo il path del text encoder che abbiamo nel container
-    text_path = os.getenv("CLAP_TEXT_ENCODER_PATH")
-    if text_path and os.path.exists(text_path):
-        # Se transformers cerca un file specifico (es. config.json), glielo diamo
-        filename = kwargs.get('filename')
-        if filename:
-            full_path = os.path.join(text_path, filename)
-            if os.path.exists(full_path):
-                return full_path
-        return text_path
-    return None
-
-# Applichiamo le patch prima di ogni importazione pesante
-huggingface_hub.hf_hub_download = patched_hf_hub_download
-# Patchiamo il caricamento file di transformers
-transformers.utils.hub.cached_file = patched_transformers_download
-
 from msclap import CLAP
-
-### CLAP models and classifiers ###
 
 def CLAP_initializer(device='cpu', use_cuda=False):
     """
-    Inizializzatore CLAP con patch per il caricamento offline.
+    CLAP model initialiser. 
+    Grazie alla patch nell'entry point, msclap userà i file locali automaticamente.
     """
-    # 1. Recupera i percorsi dalle variabili d'ambiente passate dallo script .sh
+    # 1. Recupero dei path (solo per i print di debug, la patch lavora a valle)
     clap_weights_path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
     text_encoder_path = os.getenv("CLAP_TEXT_ENCODER_PATH")
 
-    # Verifica preliminare (opzionale ma utile per debug)
-    if not clap_weights_path or not os.path.exists(clap_weights_path):
-        raise FileNotFoundError(f"Pesi non trovati al path: {clap_weights_path}")
+    print(f"🎯 [RANK {os.environ.get('SLURM_PROCID', '0')}] Inizializzazione CLAP...", flush=True)
 
-    # 2. Inizializzazione CLAP
-    # Grazie alla Monkey Patch sopra, questa riga non proverà più a connettersi
-    # a HuggingFace, ma userà direttamente il file puntato da local_path.
+    # 2. Inizializzazione standard
+    # La patch in get_clap_embeddings.py intercetterà la chiamata interna 
+    # di msclap a hf_hub_download e AutoModel.from_pretrained.
     clap_model = CLAP(version='2023', use_cuda=use_cuda)
 
-    # 3. Configurazione parametri originali e spostamento su device
-    # (Logica originale preservata per coerenza con il resto della pipeline)
+    # 3. Configurazione dell'audio encoder (Logica originale intoccata)
     original_parameters = clap_model.clap.audio_encoder.to('cpu').state_dict()
     clap_model.clap.audio_encoder = clap_model.clap.audio_encoder.to(device)
     audio_embedding = clap_model.clap.audio_encoder
     
-    # Congeliamo i pesi per l'estrazione degli embedding
     for param in audio_embedding.parameters():
         param.requires_grad = False
         
