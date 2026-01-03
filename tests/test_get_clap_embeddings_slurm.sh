@@ -20,45 +20,39 @@ BENCHMARK_CONFIG_FILE="test_config.yaml"
 BENCHMARK_AUDIO_FORMAT="wav"
 BENCHMARK_N_OCTAVE="1"
 
-# --- 2. PREPARAZIONE AMBIENTE E "TRUFFA" CACHE CLAP ---
-
+# --- 2. PREPARAZIONE AMBIENTE ---
 mkdir -p "$TEMP_DIR/dataSEC/RAW_DATASET"
 mkdir -p "$TEMP_DIR/work_dir"
 
-# 🎯 CREAZIONE STRUTTURA CACHE HUGGINGFACE (Cruciale per msclap)
-# msclap cerca i file in questa specifica gerarchia di sottocartelle
-CACHE_MODELS_DIR="$TEMP_DIR/work_dir/hub/models--microsoft--msclap/snapshots/main"
-mkdir -p "$CACHE_MODELS_DIR"
+# 🎯 STRUTTURA CACHE RIGIDA (HuggingFace Style)
+# La libreria msclap cerca i pesi in questa esatta gerarchia
+CACHE_BASE="$TEMP_DIR/work_dir/huggingface/hub/models--microsoft--msclap/snapshots/main"
+mkdir -p "$CACHE_BASE"
+cp "$CLAP_SCRATCH_WEIGHTS" "$CACHE_BASE/CLAP_weights_2023.pth"
 
-echo "Preparazione cache CLAP locale in $CACHE_MODELS_DIR..."
-# Copiamo il file rinominandolo come si aspetta la libreria
-cp "$CLAP_SCRATCH_WEIGHTS" "$CACHE_MODELS_DIR/CLAP_weights_2023.pth"
-
-# --- 3. GENERAZIONE DINAMICA DEL DATASET HDF5 ---
-
-echo "Generazione dataset HDF5 di test..."
+# --- 3. GENERAZIONE DATASET (Correzione TypeError) ---
 cat << EOF > "$TEMP_DIR/work_dir/create_h5_data.py"
 import sys, os
-# 🎯 FORZA PATH ASSOLUTO INTERNO
 sys.path.append('/app')
 from tests.utils.create_fake_raw_audio_h5 import create_fake_raw_audio_h5 
-TARGET_DIR = os.path.join(os.getenv('NODE_TEMP_BASE_DIR'), 'RAW_DATASET') 
+# Fallback manuale se la variabile non arriva
+base_dir = os.environ.get('NODE_TEMP_BASE_DIR', '/tmp_data/dataSEC')
+TARGET_DIR = os.path.join(base_dir, 'RAW_DATASET') 
 if __name__ == '__main__':
     create_fake_raw_audio_h5(TARGET_DIR)
 EOF
 
-# 🎯 RIMOSSO -C E AGGIUNTO BIND PROGETTO PER EVITARE MODULENOTFOUND
+# 🎯 RIMOSSO -C per garantire che NODE_TEMP_BASE_DIR passi
+export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
 singularity exec --bind "$TEMP_DIR:/tmp_data" --bind "$(pwd):/app" --pwd "/app" "$SIF_FILE" \
     python3 "/tmp_data/work_dir/create_h5_data.py"
 
-# --- 4. CONFIGURAZIONE AMBIENTE ---
-
-# 🎯 Diciamo a HuggingFace di usare la nostra "finta" cartella home/cache
-export HF_HOME="$TEMP_DIR/work_dir"
+# --- 4. CONFIGURAZIONE AMBIENTE PIPELINE ---
+export HF_HOME="$TEMP_DIR/work_dir/huggingface"
 export HF_HUB_OFFLINE=1 
 
 export CLAP_TEXT_ENCODER_PATH="/usr/local/clap_cache/tokenizer_model/" 
-export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/hub/models--microsoft--msclap/snapshots/main/CLAP_weights_2023.pth"
+export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/huggingface/hub/models--microsoft--msclap/snapshots/main/CLAP_weights_2023.pth"
 export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC" 
 export NO_EMBEDDING_SAVE="True" 
 
