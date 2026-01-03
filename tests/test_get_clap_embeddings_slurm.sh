@@ -13,52 +13,52 @@
 SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/clap_pipeline.sif"
 CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
 
-# 🎯 SPOSTAMENTO SU SCRATCH: /tmp sui nodi di calcolo può essere isolato per rank.
-# Usando lo scratch siamo sicuri che tutti i 4 rank vedano la stessa cartella.
 TEMP_DIR="/leonardo_scratch/large/userexternal/$USER/tmp_job_$SLURM_JOB_ID"
 PERSISTENT_DESTINATION="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/benchmark_logs/$SLURM_JOB_ID"
 
-# Variabili di configurazione
 BENCHMARK_CONFIG_FILE="test_config.yaml" 
 BENCHMARK_AUDIO_FORMAT="wav"
 BENCHMARK_N_OCTAVE="1"
 
-# --- 2. PREPARAZIONE AMBIENTE SU SCRATCH ---
+# --- 2. PREPARAZIONE AMBIENTE E "TRUFFA" CACHE CLAP ---
 
 mkdir -p "$TEMP_DIR/dataSEC/RAW_DATASET"
 mkdir -p "$TEMP_DIR/work_dir"
 
-echo "Copia dei pesi CLAP su Scratch ($TEMP_DIR)..."
-CLAP_LOCAL_WEIGHTS="$TEMP_DIR/work_dir/CLAP_weights_2023.pth"
-cp "$CLAP_SCRATCH_WEIGHTS" "$CLAP_LOCAL_WEIGHTS"
+# 🎯 CREAZIONE STRUTTURA CACHE HUGGINGFACE (Cruciale per msclap)
+# msclap cerca i file in questa specifica gerarchia di sottocartelle
+CACHE_MODELS_DIR="$TEMP_DIR/work_dir/hub/models--microsoft--msclap/snapshots/main"
+mkdir -p "$CACHE_MODELS_DIR"
+
+echo "Preparazione cache CLAP locale in $CACHE_MODELS_DIR..."
+# Copiamo il file rinominandolo come si aspetta la libreria
+cp "$CLAP_SCRATCH_WEIGHTS" "$CACHE_MODELS_DIR/CLAP_weights_2023.pth"
 
 # --- 3. GENERAZIONE DINAMICA DEL DATASET HDF5 ---
 
 echo "Generazione dataset HDF5 di test..."
 cat << EOF > "$TEMP_DIR/work_dir/create_h5_data.py"
 import sys, os
+# 🎯 FORZA PATH ASSOLUTO INTERNO
 sys.path.append('/app')
 from tests.utils.create_fake_raw_audio_h5 import create_fake_raw_audio_h5 
-# Usiamo il percorso mappato interno al container
 TARGET_DIR = os.path.join(os.getenv('NODE_TEMP_BASE_DIR'), 'RAW_DATASET') 
 if __name__ == '__main__':
     create_fake_raw_audio_h5(TARGET_DIR)
 EOF
 
-# Esecuzione singola per preparare i dati
-singularity exec -C --bind "$TEMP_DIR:/tmp_data" "$SIF_FILE" \
+# 🎯 RIMOSSO -C E AGGIUNTO BIND PROGETTO PER EVITARE MODULENOTFOUND
+singularity exec --bind "$TEMP_DIR:/tmp_data" --bind "$(pwd):/app" --pwd "/app" "$SIF_FILE" \
     python3 "/tmp_data/work_dir/create_h5_data.py"
 
 # --- 4. CONFIGURAZIONE AMBIENTE ---
-# Questa variabile dice alla libreria di NON scaricare nulla e usare solo i file locali
+
+# 🎯 Diciamo a HuggingFace di usare la nostra "finta" cartella home/cache
+export HF_HOME="$TEMP_DIR/work_dir"
 export HF_HUB_OFFLINE=1 
 
-# 🎯 LA VERA CHIAVE: Diciamo a HuggingFace che la sua cache è il nostro TEMP_DIR
-# msclap cercherà qui dentro la sottocartella 'models--microsoft--msclap'
-export HF_HOME="$TEMP_DIR/work_dir"
-
 export CLAP_TEXT_ENCODER_PATH="/usr/local/clap_cache/tokenizer_model/" 
-export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/CLAP_weights_2023.pth"
+export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/hub/models--microsoft--msclap/snapshots/main/CLAP_weights_2023.pth"
 export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC" 
 export NO_EMBEDDING_SAVE="True" 
 
@@ -67,10 +67,8 @@ export NCCL_P2P_DISABLE=1
 export NCCL_IB_DISABLE=1
 
 # --- 5. ESECUZIONE PIPELINE ---
-echo "🚀 Avvio Multi-Processo con percorsi forzati..."
+echo "🚀 Avvio Multi-Processo..."
 
-# 🎯 Aggiungiamo --workdir per essere certi che il container parta da /app
-# 🎯 Aggiungiamo il bind esplicito per lo scratch come nel debug per sicurezza
 srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \
     singularity exec \
     --bind "/leonardo_scratch:/leonardo_scratch" \
@@ -83,12 +81,12 @@ srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \
         --n_octave "$BENCHMARK_N_OCTAVE" \
         --audio_format "$BENCHMARK_AUDIO_FORMAT"
 
-# --- 6. UNIONE SEQUENZIALE DEI LOG (Post-Processing) ---
+# --- 6. UNIONE SEQUENZIALE DEI LOG ---
 
 echo "🔗 Unione sequenziale dei log..."
 cat << EOF > "$TEMP_DIR/work_dir/join_logs_wrapper.py"
 import sys, os
-sys.path.append('.')
+sys.path.append('/app')
 from src.utils import join_logs
 from src.dirs_config import basedir_preprocessed
 def main():
@@ -102,7 +100,7 @@ def main():
 if __name__ == '__main__': main()
 EOF
 
-singularity exec -C --bind "$TEMP_DIR:/tmp_data" "$SIF_FILE" \
+singularity exec --bind "$TEMP_DIR:/tmp_data" --bind "$(pwd):/app" --pwd "/app" "$SIF_FILE" \
     python3 "/tmp_data/work_dir/join_logs_wrapper.py"
 
 # --- 7. ANALISI FINALE ---
@@ -118,12 +116,12 @@ if __name__ == '__main__':
     analysis_module.print_analysis_results(results)
 EOF
 
-singularity exec -C --bind "$TEMP_DIR:/tmp_data" "$SIF_FILE" \
+singularity exec --bind "$TEMP_DIR:/tmp_data" --bind "$(pwd):/app" --pwd "/app" "$SIF_FILE" \
     python3 "/tmp_data/work_dir/analysis_wrapper.py"
 
 # --- 8. SALVATAGGIO RISULTATI E PULIZIA ---
 
 mkdir -p "$PERSISTENT_DESTINATION"
 cp -r "$TEMP_DIR/dataSEC" "$PERSISTENT_DESTINATION/"
-rm -rf "$TEMP_DIR"
+# rm -rf "$TEMP_DIR"
 echo "✅ Job Completato. Risultati in $PERSISTENT_DESTINATION"
