@@ -52,13 +52,16 @@ export HF_HOME="$TEMP_DIR/work_dir/huggingface"
 export HF_HUB_OFFLINE=1 
 
 export CLAP_TEXT_ENCODER_PATH="/usr/local/clap_cache/tokenizer_model/" 
-export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/huggingface/hub/models--microsoft--msclap/snapshots/main/CLAP_weights_2023.pth"
+export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/CLAP_weights_2023.pth"
+cp "$CLAP_SCRATCH_WEIGHTS" "$TEMP_DIR/work_dir/CLAP_weights_2023.pth"
+
 export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC" 
 export NO_EMBEDDING_SAVE="True" 
 
 export PYTHONUNBUFFERED=1
 export NCCL_P2P_DISABLE=1
 export NCCL_IB_DISABLE=1
+
 
 # --- 5. ESECUZIONE PIPELINE ---
 echo "🚀 Avvio Multi-Processo..."

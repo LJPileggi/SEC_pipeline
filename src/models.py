@@ -9,45 +9,50 @@ from msclap import CLAP
 
 def CLAP_initializer(device='cpu', use_cuda=False):
     """
-    CLAP model initialiser
-    
-    returns:
-     - clap_model: configured CLAP object;
-     - audio_embedding: CLAP audio encoder;
-     - original_parameters: CLAP original parameters.
+    CLAP model initialiser con caricamento manuale per nodi offline.
     """
-    # 1. Recupera il percorso dei pesi (dal disco locale del nodo /tmp)
+
     clap_weights_path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
-    
-    # 2. Recupera il percorso del Text Encoder (dall'interno del Container)
-    #    NOTA: Il nome corretto della variabile d'ambiente è CLAP_TEXT_ENCODER_PATH
     text_encoder_path = os.getenv("CLAP_TEXT_ENCODER_PATH")
 
-    os.environ['CLAP_WEIGHTS'] = clap_weights_path 
-    os.environ['TEXT_MODEL_PATH'] = text_encoder_path
+    # Verifica percorsi
+    if not clap_weights_path or not os.path.exists(clap_weights_path):
+        raise FileNotFoundError(f"Pesi CLAP non trovati: {clap_weights_path}")
+    
+    if not text_encoder_path or not os.path.exists(text_encoder_path):
+        raise FileNotFoundError(f"Encoder testuale non trovato: {text_encoder_path}")
 
-    # --- Verifica dei percorsi (Solo i pesi devono esistere sulla macchina) ---
-    if not clap_weights_path:
-        raise ValueError("Variabile d'ambiente LOCAL_CLAP_WEIGHTS_PATH non impostata.")
-    if not os.path.exists(clap_weights_path):
-         raise FileNotFoundError(f"Impossibile trovare i pesi CLAP al percorso: {clap_weights_path} (Errore: il file non è stato copiato correttamente su /tmp)")
+    # 1. Inizializzazione dell'architettura (senza pesi)
+    # NOTA: msclap proverà a scaricare i pesi qui. Se fallisce a causa dell'offline mode,
+    # lo catturiamo e procediamo al caricamento manuale.
+    try:
+        clap_model = CLAP(version='2023', use_cuda=use_cuda)
+    except Exception as e:
+        print(f"[WARNING] Inizializzazione standard fallita (normale in offline): {e}", flush=True)
+        # Se il costruttore fallisce per rete, creiamo un'istanza minima o riproviamo 
+        # forzando variabili fittizie, ma solitamente l'errore avviene al download.
+        clap_model = CLAP(version='2023', use_cuda=use_cuda)
 
-    if not text_encoder_path:
-        raise ValueError("Variabile d'ambiente CLAP_TEXT_ENCODER_PATH non impostata. (Dovrebbe puntare all'interno del container)")
-        
-    # AGGIUNTA NECESSARIA per allinearsi con il test:
-    if not os.path.exists(text_encoder_path):
-         # Il messaggio è allineato a quello atteso dal test
-         raise FileNotFoundError(f"Impossibile trovare l'encoder testuale CLAP a: {text_encoder_path}")
-
-    # --- Inizializzazione CLAP (USA IL PERCORSO LOCALE) ---
-    clap_model = CLAP(version='2023', use_cuda=use_cuda) # download_if_missing=False    
-    # ... (resto del codice CLAP, non modificato)
+    # 2. 🎯 CARICAMENTO MANUALE DEI PESI (La soluzione definitiva)
+    print(f"🎯 Caricamento manuale pesi da: {clap_weights_path}", flush=True)
+    
+    # msclap espone il modello PyTorch sottostante in .clap o .model
+    checkpoint = torch.load(clap_weights_path, map_location='cpu')
+    
+    # msclap versione 2023 salva i pesi sotto la chiave 'model'
+    state_dict = checkpoint['model'] if 'model' in checkpoint else checkpoint
+    
+    # Carichiamo i pesi direttamente nel modulo audio/text
+    clap_model.clap.load_state_dict(state_dict, strict=False)
+    
+    # 3. Configurazione Encoder Audio (Originale)
     original_parameters = clap_model.clap.audio_encoder.to('cpu').state_dict()
     clap_model.clap.audio_encoder = clap_model.clap.audio_encoder.to(device)
-    audio_embedding=clap_model.clap.audio_encoder
+    audio_embedding = clap_model.clap.audio_encoder
+    
     for param in audio_embedding.parameters():
         param.requires_grad = False
+        
     return clap_model, audio_embedding, original_parameters
 
 def spectrogram_n_octaveband_generator(
