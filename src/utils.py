@@ -628,7 +628,7 @@ def setup_distributed_environment(rank, world_size, slurm=True):
     import datetime, time
     # 🎯 PUNTO DI INCONTRO FISICO: Un file su Scratch che tutti possono leggere/scrivere
     # Rimuovi questo file all'inizio del job se esiste
-    sync_file = os.path.join(os.environ.get("NODE_TEMP_BASE_DIR", "/tmp"), "torch_sync_file")
+    sync_file = os.path.abspath("/app/torch_sync_file")
     if rank == 0 and os.path.exists(sync_file):
         os.remove(sync_file)
     
