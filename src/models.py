@@ -2,7 +2,6 @@ import os
 import torch
 import numpy as np
 import scipy
-from msclap import CLAP
 import huggingface_hub
 
 # 🎯 MONKEY PATCH: Sovrascriviamo hf_hub_download per bloccare la rete
@@ -15,6 +14,8 @@ def patched_hf_download(*args, **kwargs):
 
 # Applichiamo la patch globalmente prima di caricare msclap
 huggingface_hub.hf_hub_download = patched_hf_download
+
+from msclap import CLAP
 
 ### CLAP models and classifiers ###
 
