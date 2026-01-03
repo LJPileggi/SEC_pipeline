@@ -27,6 +27,8 @@ def parsing():
 def main():
     # 1. Parsing immediato (solo CPU/stringhe)
     args = parsing()
+    rank = os.environ.get("SLURM_PROCID", "NON_TROVATO")
+    print(f"DEBUG: Rank rilevato dal sistema: {rank}", flush=True)
     
     # 2. Rilevamento ambiente ultra-veloce senza chiamate a torch.cuda
     slurm_job_id = os.environ.get("SLURM_JOB_ID")

@@ -74,7 +74,7 @@ srun -l -n 4 /bin/hostname  # 🎯 TEST 1: Deve restituire 4 righe
 
 echo "🚀 Avvio Multi-Processo con srun blindato..."
 # 🎯 Forza Slurm ad assegnare 1 GPU esatta a ogni task srun
-srun --unbuffered -l --export=ALL --gres=gpu:1 --ntasks=4 --cpus-per-task=8 \
+srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \
     singularity exec \
     --bind "$TEMP_DIR:/tmp_data" \
     --bind "$(pwd):/app" \

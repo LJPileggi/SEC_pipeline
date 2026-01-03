@@ -626,9 +626,10 @@ def setup_environ_vars(slurm=True):
 
 def setup_distributed_environment(rank, world_size, slurm=True):
     import datetime, time
-    # 🎯 PUNTO DI INCONTRO FISICO: Un file su Scratch che tutti possono leggere/scrivere
-    # Rimuovi questo file all'inizio del job se esiste# 🎯 Usa il percorso mappato su Scratch che è scrivibile
-    sync_file = "/tmp_data/torch_sync_file" 
+    # 🎯 USA LO STESSO PERCORSO DEL TEST DI SUCCESSO
+    user = os.environ.get("USER")
+    sync_file = f"/leonardo_scratch/large/userexternal/{user}/torch_sync_file"
+    
     if rank == 0 and os.path.exists(sync_file):
         os.remove(sync_file)
 
