@@ -4,22 +4,38 @@ import numpy as np
 import scipy
 import msclap # 🎯 Importiamo prima msclap
 import huggingface_hub
+import transformers # 🎯 NUOVO: Dobbiamo patchare anche transformers
 
-# 🎯 DEFINIAMO LA PATCH
+# --- 🎯 MONKEY PATCH TOTALE PER AMBIENTE OFFLINE ---
+
 def patched_hf_hub_download(*args, **kwargs):
+    """Intercetta i pesi audio di CLAP."""
     local_path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
     if local_path and os.path.exists(local_path):
-        print(f"🎯 [PATCH] Redirect a {local_path}", flush=True)
+        print(f"🎯 [PATCH CLAP] Redirect a {local_path}", flush=True)
         return local_path
-    raise FileNotFoundError(f"Patch fallita: {local_path} non trovato")
+    raise FileNotFoundError(f"Pesi non trovati: {local_path}")
 
-# 🎯 APPLICHIAMO LA PATCH OVUNQUE
-# 1. Nella libreria originale
+def patched_transformers_download(*args, **kwargs):
+    """Intercetta il TextEncoder (BERT/Tokenizer)."""
+    # Recuperiamo il path del text encoder che abbiamo nel container
+    text_path = os.getenv("CLAP_TEXT_ENCODER_PATH")
+    if text_path and os.path.exists(text_path):
+        # Se transformers cerca un file specifico (es. config.json), glielo diamo
+        filename = kwargs.get('filename')
+        if filename:
+            full_path = os.path.join(text_path, filename)
+            if os.path.exists(full_path):
+                return full_path
+        return text_path
+    return None
+
+# Applichiamo le patch prima di ogni importazione pesante
 huggingface_hub.hf_hub_download = patched_hf_hub_download
-# 2. Direttamente dentro il riferimento che ha msclap al suo interno
-msclap.CLAPWrapper.hf_hub_download = patched_hf_hub_download
+# Patchiamo il caricamento file di transformers
+transformers.utils.hub.cached_file = patched_transformers_download
 
-from msclap import CLAP # Ora l'import userà la versione patchata
+from msclap import CLAP
 
 ### CLAP models and classifiers ###
 
