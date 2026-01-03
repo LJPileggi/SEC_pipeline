@@ -626,7 +626,7 @@ def setup_environ_vars(slurm=True):
 
 def setup_distributed_environment(rank, world_size, slurm=True):
     import datetime, time
-    # 🎯 USA LO STESSO PERCORSO DEL TEST DI SUCCESSO
+    # 🎯 Coerenza totale col test: usa lo scratch reale
     user = os.environ.get("USER")
     sync_file = f"/leonardo_scratch/large/userexternal/{user}/torch_sync_file"
     

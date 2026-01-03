@@ -73,9 +73,10 @@ echo "Verifica task SLURM attivi:"
 srun -l -n 4 /bin/hostname  # 🎯 TEST 1: Deve restituire 4 righe
 
 echo "🚀 Avvio Multi-Processo con srun blindato..."
-# 🎯 Forza Slurm ad assegnare 1 GPU esatta a ogni task srun
-srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \
+# 🎯 Aggiungi il bind dello scratch altrimenti non scriverai MAI il sync file
+srun --unbuffered -l --export=ALL --cpu-bind=none \
     singularity exec \
+    --bind "/leonardo_scratch:/leonardo_scratch" \
     --bind "$TEMP_DIR:/tmp_data" \
     --bind "$(pwd):/app" \
     "$SIF_FILE" \
