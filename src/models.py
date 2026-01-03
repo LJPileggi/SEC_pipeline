@@ -3,53 +3,45 @@ import torch
 import numpy as np
 import scipy
 from msclap import CLAP
+import huggingface_hub
 
+# 🎯 MONKEY PATCH: Sovrascriviamo hf_hub_download per bloccare la rete
+def patched_hf_download(*args, **kwargs):
+    local_path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
+    if local_path and os.path.exists(local_path):
+        print(f"🎯 [PATCH] Redirect download a: {local_path}", flush=True)
+        return local_path
+    raise FileNotFoundError("Patch fallita: LOCAL_CLAP_WEIGHTS_PATH non trovato.")
+
+# Applichiamo la patch globalmente prima di caricare msclap
+huggingface_hub.hf_hub_download = patched_hf_download
 
 ### CLAP models and classifiers ###
 
 def CLAP_initializer(device='cpu', use_cuda=False):
     """
-    CLAP model initialiser con caricamento manuale per nodi offline.
+    Inizializzatore CLAP con patch per il caricamento offline.
     """
-
+    # 1. Recupera i percorsi dalle variabili d'ambiente passate dallo script .sh
     clap_weights_path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
     text_encoder_path = os.getenv("CLAP_TEXT_ENCODER_PATH")
 
-    # Verifica percorsi
+    # Verifica preliminare (opzionale ma utile per debug)
     if not clap_weights_path or not os.path.exists(clap_weights_path):
-        raise FileNotFoundError(f"Pesi CLAP non trovati: {clap_weights_path}")
-    
-    if not text_encoder_path or not os.path.exists(text_encoder_path):
-        raise FileNotFoundError(f"Encoder testuale non trovato: {text_encoder_path}")
+        raise FileNotFoundError(f"Pesi non trovati al path: {clap_weights_path}")
 
-    # 1. Inizializzazione dell'architettura (senza pesi)
-    # NOTA: msclap proverà a scaricare i pesi qui. Se fallisce a causa dell'offline mode,
-    # lo catturiamo e procediamo al caricamento manuale.
-    try:
-        clap_model = CLAP(version='2023', use_cuda=use_cuda)
-    except Exception as e:
-        print(f"[WARNING] Inizializzazione standard fallita (normale in offline): {e}", flush=True)
-        # Se il costruttore fallisce per rete, creiamo un'istanza minima o riproviamo 
-        # forzando variabili fittizie, ma solitamente l'errore avviene al download.
-        clap_model = CLAP(version='2023', use_cuda=use_cuda)
+    # 2. Inizializzazione CLAP
+    # Grazie alla Monkey Patch sopra, questa riga non proverà più a connettersi
+    # a HuggingFace, ma userà direttamente il file puntato da local_path.
+    clap_model = CLAP(version='2023', use_cuda=use_cuda)
 
-    # 2. 🎯 CARICAMENTO MANUALE DEI PESI (La soluzione definitiva)
-    print(f"🎯 Caricamento manuale pesi da: {clap_weights_path}", flush=True)
-    
-    # msclap espone il modello PyTorch sottostante in .clap o .model
-    checkpoint = torch.load(clap_weights_path, map_location='cpu')
-    
-    # msclap versione 2023 salva i pesi sotto la chiave 'model'
-    state_dict = checkpoint['model'] if 'model' in checkpoint else checkpoint
-    
-    # Carichiamo i pesi direttamente nel modulo audio/text
-    clap_model.clap.load_state_dict(state_dict, strict=False)
-    
-    # 3. Configurazione Encoder Audio (Originale)
+    # 3. Configurazione parametri originali e spostamento su device
+    # (Logica originale preservata per coerenza con il resto della pipeline)
     original_parameters = clap_model.clap.audio_encoder.to('cpu').state_dict()
     clap_model.clap.audio_encoder = clap_model.clap.audio_encoder.to(device)
     audio_embedding = clap_model.clap.audio_encoder
     
+    # Congeliamo i pesi per l'estrazione degli embedding
     for param in audio_embedding.parameters():
         param.requires_grad = False
         
