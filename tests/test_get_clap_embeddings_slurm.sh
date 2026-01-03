@@ -37,7 +37,7 @@ cp "$CLAP_SCRATCH_WEIGHTS" "$CLAP_LOCAL_WEIGHTS"
 echo "Generazione dataset HDF5 di test..."
 cat << EOF > "$TEMP_DIR/work_dir/create_h5_data.py"
 import sys, os
-sys.path.append('.')
+sys.path.append('/app')
 from tests.utils.create_fake_raw_audio_h5 import create_fake_raw_audio_h5 
 # Usiamo il percorso mappato interno al container
 TARGET_DIR = os.path.join(os.getenv('NODE_TEMP_BASE_DIR'), 'RAW_DATASET') 
@@ -50,6 +50,12 @@ singularity exec -C --bind "$TEMP_DIR:/tmp_data" "$SIF_FILE" \
     python3 "/tmp_data/work_dir/create_h5_data.py"
 
 # --- 4. CONFIGURAZIONE AMBIENTE ---
+# Questa variabile dice alla libreria di NON scaricare nulla e usare solo i file locali
+export HF_HUB_OFFLINE=1 
+
+# 🎯 LA VERA CHIAVE: Diciamo a HuggingFace che la sua cache è il nostro TEMP_DIR
+# msclap cercherà qui dentro la sottocartella 'models--microsoft--msclap'
+export HF_HOME="$TEMP_DIR/work_dir"
 
 export CLAP_TEXT_ENCODER_PATH="/usr/local/clap_cache/tokenizer_model/" 
 export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/CLAP_weights_2023.pth"
@@ -104,7 +110,7 @@ singularity exec -C --bind "$TEMP_DIR:/tmp_data" "$SIF_FILE" \
 echo "📊 Avvio Analisi Tempi..."
 cat << EOF > "$TEMP_DIR/work_dir/analysis_wrapper.py"
 import os, sys
-sys.path.append('.') 
+sys.path.append('/app') 
 import tests.utils.analyse_test_execution_times as analysis_module
 analysis_module.config_test_folder = os.path.join(os.getenv('NODE_TEMP_BASE_DIR'), 'PREPROCESSED_DATASET')
 if __name__ == '__main__':
