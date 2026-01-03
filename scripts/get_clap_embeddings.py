@@ -1,39 +1,34 @@
 import os
+import sys
+
+# 🎯 ESSENZIALE: Poiché il codice è dinamico, forziamo Python a usare 
+# la cartella montata (/app) come priorità assoluta per src e altri moduli.
+sys.path.insert(0, '/app')
+
 import huggingface_hub
 import transformers
+import msclap
 
-# --- 🎯 MONKEY PATCH NUCLEARE TOTALE (OFFLINE MODE) ---
-
-# 1. Patch per i pesi CLAP (.pth)
-def patched_hf_hub_download(*args, **kwargs):
-    local_path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
-    if local_path and os.path.exists(local_path):
-        print(f"🎯 [GLOBAL PATCH] Redirect pesi a: {local_path}", flush=True)
-        return local_path
-    raise FileNotFoundError(f"Pesi non trovati a {local_path}")
-
-# 2. Patch per il TextEncoder (BERT/Tokenizer)
-def patched_transformers_cached_file(*args, **kwargs):
+# 🎯 MONKEY PATCH: Intercettiamo i due guardiani (HF e Transformers)
+def universal_path_redirect(*args, **kwargs):
+    # Logica per i pesi CLAP
+    if any(x for x in args if 'msclap' in str(x)) or 'CLAP_weights' in str(kwargs):
+        path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
+        print(f"🎯 [RANK {os.environ.get('SLURM_PROCID','0')}] REDIRECT CLAP -> {path}", flush=True)
+        return path
+    
+    # Logica per il TextEncoder
     text_path = os.getenv("CLAP_TEXT_ENCODER_PATH")
-    if text_path and os.path.exists(text_path):
-        # Se transformers cerca un file specifico, lo uniamo al path
-        filename = kwargs.get('filename')
-        if filename:
-            full_path = os.path.join(text_path, filename)
-            if os.path.exists(full_path):
-                print(f"🎯 [GLOBAL PATCH] Redirect {filename} a: {full_path}", flush=True)
-                return full_path
-        return text_path
-    return None
+    print(f"🎯 [RANK {os.environ.get('SLURM_PROCID','0')}] REDIRECT TEXT -> {text_path}", flush=True)
+    return text_path
 
-# Applichiamo le patch globalmente
-huggingface_hub.hf_hub_download = patched_hf_hub_download
-transformers.utils.hub.cached_file = patched_transformers_cached_file
-
-print("🚀 Patch Offline applicate con successo.", flush=True)
+# Iniezione nei namespace per prevenire l'uso delle versioni non-patchate
+huggingface_hub.hf_hub_download = universal_path_redirect
+msclap.CLAPWrapper.hf_hub_download = universal_path_redirect
+transformers.utils.hub.cached_file = universal_path_redirect
+transformers.utils.hub.hf_hub_download = universal_path_redirect
 
 import argparse
-import sys
 import logging
 # import torch # Aggiunto per rilevamento GPU locale
 
