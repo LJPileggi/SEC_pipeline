@@ -627,8 +627,7 @@ def setup_environ_vars(slurm=True):
 def setup_distributed_environment(rank, world_size, slurm=True):
     import datetime, time
     # 🎯 Coerenza totale col test: usa lo scratch reale
-    user = os.environ.get("USER")
-    sync_file = f"/leonardo_scratch/large/userexternal/{user}/torch_sync_file"
+    sync_file = "/tmp_data/torch_sync_file"
     
     if rank == 0 and os.path.exists(sync_file):
         os.remove(sync_file)

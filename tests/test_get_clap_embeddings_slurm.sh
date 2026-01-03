@@ -56,27 +56,15 @@ export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/CLAP_weights_2023.pth"
 export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC" 
 export NO_EMBEDDING_SAVE="True" 
 
-# --- 🎯 NUOVE VARIABILI PER SBLOCCARE IL RENDEZVOUS ---
-# Disabilita la comunicazione diretta GPU-to-GPU che spesso fallisce nei container
-export NCCL_P2P_DISABLE=1 
-# Forza l'uso di socket standard TCP
-export NCCL_IB_DISABLE=1  
-# Forza l'uso dell'interfaccia di loopback locale
-export NCCL_SOCKET_IFNAME=lo
-export GLOO_SOCKET_IFNAME=lo
-
-export MASTER_ADDR=127.0.0.1
-export MASTER_PORT=29500
+export PYTHONUNBUFFERED=1
+export NCCL_P2P_DISABLE=1
+export NCCL_IB_DISABLE=1
 
 # --- 5. ESECUZIONE PIPELINE ---
-echo "Verifica task SLURM attivi:"
-srun -l -n 4 /bin/hostname  # 🎯 TEST 1: Deve restituire 4 righe
-
-echo "🚀 Avvio Multi-Processo con srun blindato..."
-# 🎯 Aggiungi il bind dello scratch altrimenti non scriverai MAI il sync file
+# 🎯 NOTA: Rimosso --gres=gpu:1 per evitare conflitti di allocazione
+# 🎯 NOTA: Manteniamo i bind essenziali
 srun --unbuffered -l --export=ALL --cpu-bind=none \
     singularity exec \
-    --bind "/leonardo_scratch:/leonardo_scratch" \
     --bind "$TEMP_DIR:/tmp_data" \
     --bind "$(pwd):/app" \
     "$SIF_FILE" \
