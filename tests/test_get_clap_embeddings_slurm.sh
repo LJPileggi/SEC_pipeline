@@ -70,10 +70,12 @@ export MASTER_ADDR=127.0.0.1
 export MASTER_PORT=29500
 
 # --- 5. ESECUZIONE PIPELINE ---
-# 🎯 Rimuovi il flag -C (Containall) se presente: a volte impedisce ai processi 
-# figli di vedere i file di lock creati dai fratelli.
-echo "🚀 Lancio Multi-Processo..."
-srun -l -n 4 echo "PROCESSO START" singularity exec \
+echo "Verifica task SLURM attivi:"
+srun -l -n 4 /bin/hostname  # 🎯 TEST 1: Deve restituire 4 righe
+
+echo "🚀 Lancio Multi-Processo con srun forzato..."
+# Usiamo --cpu-bind=none per evitare che i processi figli siano soffocati
+srun --unbuffered -l -n 4 --cpu-bind=none singularity exec \
     --bind "$TEMP_DIR:/tmp_data" \
     --bind "$(pwd):/app" \
     "$SIF_FILE" \
