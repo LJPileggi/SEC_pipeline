@@ -131,6 +131,84 @@ def spectrogram_n_octaveband_generator(
     spectrogram = 20 * np.log10(rms / ref)
     return spectrogram.T
 
+def spectrogram_n_octaveband_generator_gpu(
+        wav_data: torch.Tensor,
+        sampling_rate: int,
+        n_octave: int = 3,
+        integration_seconds: float = 0.1,
+        order: int = 4,
+        center_freqs: torch.Tensor = None,
+        ref: float = 2e-5,
+        device: str = 'cuda'
+) -> torch.Tensor:
+    """
+    Versione GPU-accelerata del generatore di spettrogrammi in bande di n-ottava.
+    Accetta tensor (Batch, Samples) e restituisce (Batch, Time, Freq).
+    """
+    if wav_data.dim() == 1:
+        wav_data = wav_data.unsqueeze(0) # Batchize se singolo canale
+    
+    batch_size, n_samples = wav_data.shape
+
+    # --- Calcolo Frequenze Centrali (Logica ISO 266) ---
+    if center_freqs is None:
+        f_ref, f_min = 1000.0, 20.0
+        f_max = sampling_rate / 2.0
+        n_min = int(np.round(n_octave * np.log2(f_min / f_ref)))
+        n_max = int(np.round(n_octave * np.log2(f_max / f_ref)))
+        n_indices = torch.arange(n_min, n_max + 1, device=device)
+        center_freqs = f_ref * (2**(n_indices / n_octave))
+        center_freqs = center_freqs[center_freqs <= f_max]
+
+    # Parametri bande
+    factor = 2 ** (1 / (2 * n_octave))
+    freq_d = center_freqs / factor
+    freq_u = center_freqs * factor
+    
+    # --- Filtraggio SOS via Convoluzione ---
+    # Nota: Per semplicità in questa fase di test, usiamo ancora scipy per generare i coeff,
+    # ma eseguiamo l'applicazione del filtro SOS (Second Order Sections) via torch.
+    all_bands_output = []
+    window = int(sampling_rate * integration_seconds)
+    
+    for lower, upper in zip(freq_d, freq_u):
+        sos = scipy.signal.butter(N=order, Wn=np.array([lower.cpu(), upper.cpu()]) / (sampling_rate / 2),
+                                 btype='bandpass', output='sos')
+        sos = torch.from_numpy(sos).to(device).to(wav_data.dtype)
+        
+        # Applicazione SOS Filter (Cascata di filtri biquad)
+        x = wav_data
+        for section in sos:
+            # section: [b0, b1, b2, a0, a1, a2] -> a0 è sempre 1.0 per butter
+            b, a = section[:3], section[3:]
+            # Implementazione semplificata del filtraggio SOS via torch (Direct Form II)
+            # Per performance ottimali nel batching, usiamo l'estensione torchaudio se disponibile,
+            # altrimenti procediamo con questa implementazione funzionale.
+            import torchaudio.functional as F
+            x = F.lfilter(x, a, b)
+        all_bands_output.append(x)
+
+    # Stack delle bande: (Bande, Batch, Samples) -> (Batch, Bande, Samples)
+    filtered = torch.stack(all_bands_output).permute(1, 0, 2)
+    
+    # --- Gestione Finestra di Integrazione ---
+    if filtered.shape[2] < window:
+        spectrogram = torch.zeros((batch_size, filtered.shape[1], 1), device=device)
+    else:
+        # Reshape per calcolare la media quadratica (RMS) per ogni finestra
+        n_windows = filtered.shape[2] // window
+        spectrogram_view = filtered[:, :, :n_windows * window].reshape(batch_size, filtered.shape[1], n_windows, window)
+        
+        # RMS = sqrt(mean(x^2))
+        rms = torch.sqrt(torch.mean(spectrogram_view**2, dim=-1))
+        rms[rms == 0] = torch.finfo(wav_data.dtype).eps
+        
+        # Conversione in dB
+        spectrogram = 20 * torch.log10(rms / ref)
+
+    # Restituiamo (Batch, Time, Freq) per coerenza con la versione CPU
+    return spectrogram.permute(0, 2, 1)
+
 class OriginalModel:
     """
     Original CLAP classifier exploiting cosine similarity between
