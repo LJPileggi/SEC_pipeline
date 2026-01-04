@@ -45,7 +45,7 @@ else
     echo "Download dei pesi CLAP completato con successo."
 fi
 
-# --- 3.5. 🎯 DOWNLOAD ASSET ROBERTA (TEXT ENCODER) CON FALLBACK ---
+# --- 3.5. DOWNLOAD ASSET ROBERTA (TEXT ENCODER) CON FALLBACK ---
 echo "--- 3.5. DOWNLOAD ASSET TEXT ENCODER (ROBERTA-BASE) ---"
 ROBERTA_FILES=(
     "config.json"
@@ -63,25 +63,17 @@ for file in "${ROBERTA_FILES[@]}"; do
         echo "Asset $file già presente."
     else
         echo "Download $file da HuggingFace..."
-        # Usiamo wget senza -q per vedere eventuali errori in tempo reale
         wget -P "$ROBERTA_DIR" "https://huggingface.co/roberta-base/resolve/main/$file"
         
-        # 🎯 LOGICA DI FALLBACK PER IL 404 (Specialmente per special_tokens_map.json)
         if [ $? -ne 0 ]; then 
             if [ "$file" == "special_tokens_map.json" ]; then
-                echo "⚠️ Download fallito per $file (404?). Creazione manuale del file standard..."
-                echo '{
-  "bos_token": "<s>",
-  "cls_token": "<s>",
-  "eos_token": "</s>",
-  "mask_token": "<mask>",
-  "pad_token": "<pad>",
-  "sep_token": "</s>",
-  "unk_token": "<unk>"
-}' > "$ROBERTA_DIR/$file"
-                echo "✅ File $file creato manualmente."
+                echo "⚠️ Fallback per $file..."
+                echo '{"cls_token": "<s>", "pad_token": "<pad>", "sep_token": "</s>", "unk_token": "<unk>", "bos_token": "<s>", "eos_token": "</s>", "mask_token": "<mask>"}' > "$ROBERTA_DIR/$file"
+            elif [ "$file" == "added_tokens.json" ]; then
+                echo "⚠️ Fallback per $file (creazione file vuoto)..."
+                echo '{}' > "$ROBERTA_DIR/$file"
             else
-                echo "ERRORE CRITICO: Download di $file fallito e non è previsto un fallback."
+                echo "ERRORE CRITICO: Download di $file fallito."
                 exit 1
             fi
         fi
