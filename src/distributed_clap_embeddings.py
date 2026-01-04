@@ -24,12 +24,13 @@ os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
 def process_class_with_cut_secs_slurm(clap_model, audio_embedding, class_to_process, cut_secs, n_octave, config, audio_dataset_manager=None):
-    # --- SETUP IDENTICO ALL'ORIGINALE ---
+    # --- SETUP INIZIALE (Ripristinato Integrale) ---
     root_source = config['dirs']['root_source']
     root_target = config['dirs']['root_target']
     target_class_dir = os.path.join(root_target, f'{cut_secs}_secs', class_to_process)
     os.makedirs(target_class_dir, exist_ok=True)
     
+    audio_format = config['audio']['audio_format']
     sr = config['spectrogram']['sr']
     ref = config['spectrogram']['ref']
     center_freqs = config['spectrogram']['center_freqs']
@@ -37,57 +38,82 @@ def process_class_with_cut_secs_slurm(clap_model, audio_embedding, class_to_proc
     seed = config['audio']['seed']
     device = config['device']
     rank = config.get('rank', 0)
-    audio_format = config['audio']['audio_format']
 
-    # 📊 TIMER DI DIAGNOSTICA (Solo Rank 0 accumula)
+    # 📊 STATISTICHE DI PERFORMANCE (Solo per Rank 0)
     stats = {"load": 0, "prep": 0, "gpu": 0, "save": 0, "count": 0}
 
-    def print_stats():
+    def print_performance_stats():
         if rank == 0 and stats["count"] > 0:
             c = stats["count"]
-            print(f"\n[DIAGNOSTICA RANK 0] Media su {c} campioni (secondi):", flush=True)
-            print(f"  - Lettura Disco (I/O):  {stats['load']/c:.4f}s", flush=True)
-            print(f"  - Pre-proc (CPU+Spec): {stats['prep']/c:.4f}s", flush=True)
-            print(f"  - Inferenza (GPU):     {stats['gpu'] /c:.4f}s", flush=True)
-            print(f"  - Salvataggio (H5):    {stats['save']/c:.4f}s", flush=True)
-            print(f"  - Totale x audio:      {(sum(stats.values())-stats['count'])/c:.4f}s\n", flush=True)
+            print(f"\n[RANK 0 - PERFORMANCE] Media su {c} campioni (secondi):", flush=True)
+            print(f"  - I/O Disco:       {stats['load']/c:.4f}s", flush=True)
+            print(f"  - Pre-proc (CPU):  {stats['prep']/c:.4f}s", flush=True)
+            print(f"  - Inferenza (GPU): {stats['gpu']/c:.4f}s", flush=True)
+            print(f"  - Scrittura H5:    {stats['save']/c:.4f}s", flush=True)
+            print(f"  - TOTALE:          {(sum(stats.values())-c)/c:.4f}s\n", flush=True)
 
-    # ... (Logica di inizializzazione manager identica all'originale) ...
+    def diag_print(msg):
+        print(f"[RANK {rank} - DIAG] {msg}", flush=True)
+
+    def trim_memory():
+        try:
+            ctypes.CDLL('libc.so.6').malloc_trim(0)
+        except Exception:
+            pass
+
     class_seed = seed + hash(class_to_process) % 10000000
     offset_rng = np.random.default_rng(class_seed)
     noise_rng = np.random.default_rng(class_seed)
+
     division_names = [d[0] for d in config['data']['divisions_xc_sizes_names']]
     target_counts_list = np.cumsum([d[1] for d in config['data']['divisions_xc_sizes_names']])
 
+    own_manager = False
     if audio_dataset_manager is None:
         audio_dataset_manager = HDF5DatasetManager(os.path.join(root_source, class_to_process,
                                                     f'{class_to_process}_{audio_format}_dataset.h5'))
+        own_manager = True
+
+    split_emb_dataset_manager = None
+    di = 0; results = 0; round_ = 0; n_embeddings_per_run = 0
     
     class_idx_attr = audio_dataset_manager.hf.attrs.get('class_idx', 0)
-    permuted_indices = audio_dataset_manager.get_reproducible_permutation(class_seed)
-    
-    di = 0; results = 0; round_ = 0; n_embeddings_per_run = 0
-    split_emb_dataset_manager = None
+    adaptive_buffer_size = max(1, int(100 / cut_secs))
+    torch.set_num_threads(1)
 
     try:
+        permuted_indices = audio_dataset_manager.get_reproducible_permutation(class_seed)
+        
         while True:
             round_ += 1
             for track_idx in permuted_indices:
-                # 🕒 1. LETTURA
-                t0 = time.perf_counter()
+                # 🕒 1. LETTURA (I/O)
+                t_load_start = time.perf_counter()
                 track, metadata = audio_dataset_manager.get_audio_and_metadata(track_idx)
-                t1 = time.perf_counter()
-
+                t_load_end = time.perf_counter()
+                
                 window_size = int(cut_secs * sr)
-                offset = 0 # ... (Logica offset identica) ...
+                offset = 0
+                if round_ > 1 and track.shape[0] > window_size:
+                    max_offset = track.shape[0] - window_size
+                    if max_offset > 0:
+                        offset = offset_rng.integers(0, max_offset)
                 n_buckets = math.ceil((track.shape[0] - offset) / window_size)
 
                 for b in range(n_buckets):
+                    if results % 10 == 0:
+                        diag_print(f"{class_to_process}, {cut_secs} s: created {results}/{target_counts_list[di]}")
+                    
                     if results >= target_counts_list[di]:
-                        if split_emb_dataset_manager: split_emb_dataset_manager.close()
+                        if split_emb_dataset_manager:
+                            split_emb_dataset_manager.close()
+                            del split_emb_dataset_manager
+                            split_emb_dataset_manager = None
+                            gc.collect()
                         di += 1
-                        if di >= len(division_names): return n_embeddings_per_run, True
-                        split_emb_dataset_manager = None
+                        if di >= len(division_names):
+                            if own_manager: audio_dataset_manager.close()
+                            return n_embeddings_per_run, True
 
                     # 🕒 2. PRE-PROCESSING (CPU)
                     t_prep_start = time.perf_counter()
@@ -104,6 +130,15 @@ def process_class_with_cut_secs_slurm(clap_model, audio_embedding, class_to_proc
                     spec_n_o = spectrogram_n_octaveband_generator(new_audio, sr, n_octave=n_octave, center_freqs=center_freqs, ref=ref)
                     t_prep_end = time.perf_counter()
 
+                    if split_emb_dataset_manager is None:
+                        h5_path = os.path.join(target_class_dir, f'{class_to_process}_{division_names[di]}_{audio_format}_emb.h5')
+                        split_emb_dataset_manager = HDF5EmbeddingDatasetsManager(h5_path, 'a', buffer_size=adaptive_buffer_size)
+                        split_emb_dataset_manager.initialize_hdf5(1024, spec_n_o.shape, audio_format, cut_secs, n_octave, sr, seed, noise_perc, division_names[di], class_to_process)
+
+                    emb_pkey = f"{class_idx_attr}_{track_idx}_{b}_{round_}_{results}"
+                    if emb_pkey in split_emb_dataset_manager:
+                        results += 1; continue
+
                     # 🕒 3. INFERENZA (GPU)
                     t_gpu_start = time.perf_counter()
                     x = torch.tensor(new_audio, dtype=torch.float32).to(device).unsqueeze(0)
@@ -112,31 +147,34 @@ def process_class_with_cut_secs_slurm(clap_model, audio_embedding, class_to_proc
                     embedding_cpu = embedding.detach().cpu().numpy()
                     t_gpu_end = time.perf_counter()
 
-                    # 🕒 4. SALVATAGGIO + CONTROLLO INTEGRITÀ
+                    # 🕒 4. SALVATAGGIO + CHECK INTEGRITÀ
                     t_save_start = time.perf_counter()
-                    # 🎯 CHECK INTEGRITÀ: No NaN, no vettori piatti
                     if np.isnan(embedding_cpu).any() or np.all(embedding_cpu == 0):
                         logging.error(f"EMBEDDING CORROTTO rilevato per {metadata['track_name']}!")
                     
-                    if split_emb_dataset_manager is None:
-                        h5_path = os.path.join(target_class_dir, f'{class_to_process}_{division_names[di]}_{audio_format}_emb.h5')
-                        split_emb_dataset_manager = HDF5EmbeddingDatasetsManager(h5_path, 'a', buffer_size=10)
-                        split_emb_dataset_manager.initialize_hdf5(1024, spec_n_o.shape, audio_format, cut_secs, n_octave, sr, seed, noise_perc, division_names[di], class_to_process)
-
-                    emb_pkey = f"{class_idx_attr}_{track_idx}_{b}_{round_}_{results}"
                     split_emb_dataset_manager.add_to_data_buffer(embedding_cpu, spec_n_o, emb_pkey, metadata['track_name'], class_to_process, metadata['subclass'])
                     t_save_end = time.perf_counter()
 
-                    # AGGIORNAMENTO STATISTICHE (Solo Rank 0)
+                    # 📊 AGGIORNAMENTO STATS (Solo Rank 0)
                     if rank == 0:
-                        stats["load"] += (t1 - t0); stats["prep"] += (t_prep_end - t_prep_start)
-                        stats["gpu"] += (t_gpu_end - t_gpu_start); stats["save"] += (t_save_end - t_save_start)
+                        stats["load"] += (t_load_end - t_load_start)
+                        stats["prep"] += (t_prep_end - t_prep_start)
+                        stats["gpu"] += (t_gpu_end - t_gpu_start)
+                        stats["save"] += (t_save_end - t_save_start)
                         stats["count"] += 1
-                        if stats["count"] % 50 == 0: print_stats()
+                        if stats["count"] % 50 == 0: print_performance_stats()
 
+                    del x, embedding, embedding_cpu, spec_n_o, new_audio, cut_data
+                    if torch.cuda.is_available(): torch.cuda.empty_cache()
                     results += 1; n_embeddings_per_run += 1
-                    del x, embedding, embedding_cpu, spec_n_o
+                
+                del track, metadata
+                if results % 5 == 0:
+                    gc.collect(); trim_memory()
+
     except Exception:
+        if split_emb_dataset_manager: split_emb_dataset_manager.close()
+        if own_manager: audio_dataset_manager.close()
         logging.error(f"{traceback.format_exc()}"); return n_embeddings_per_run, False
 
 def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, cut_secs, n_octave, config, audio_dataset_manager=None):
