@@ -55,6 +55,7 @@ ROBERTA_FILES=(
     "tokenizer_config.json"
     "special_tokens_map.json"
     "tokenizer.json"
+    "added_tokens.json"
 )
 
 for file in "${ROBERTA_FILES[@]}"; do

@@ -7,27 +7,37 @@ def CLAP_initializer(device='cpu', use_cuda=False):
     import transformers
     from msclap import CLAP
     
-    text_path = os.getenv("CLAP_TEXT_ENCODER_PATH")
+    text_path = os.getenv("CLAP_TEXT_ENCODER_PATH") # Punta a /tmp_data/roberta-base
     rank = os.environ.get('SLURM_PROCID', '0')
 
-    # 🎯 PATCH DI FORZA BRUTA: Sovrascriviamo AutoModel.from_pretrained
-    # in modo che ignori l'argomento 'pretrained_model_name_or_path'
-    original_from_pretrained = transformers.AutoModel.from_pretrained
+    # 🎯 PATCH DI FORZA BRUTA: Sovrascriviamo AutoModel e AutoTokenizer
+    original_model_from_pretrained = transformers.AutoModel.from_pretrained
+    original_tokenizer_from_pretrained = transformers.AutoTokenizer.from_pretrained
 
-    def forced_from_pretrained(pretrained_model_name_or_path, *args, **kwargs):
-        print(f"🎯 [RANK {rank}] AutoModel.from_pretrained intercettato! Ignoro {pretrained_model_name_or_path} e uso {text_path}", flush=True)
-        return original_from_pretrained(text_path, *args, **kwargs)
+    # Override per il Modello
+    def forced_model_from_pretrained(pretrained_model_name_or_path, *args, **kwargs):
+        print(f"🎯 [RANK {rank}] AutoModel intercettato! Forzo caricamento da {text_path}", flush=True)
+        return original_model_from_pretrained(text_path, *args, **kwargs)
 
-    # Applichiamo la sostituzione globale nel modulo transformers
-    transformers.AutoModel.from_pretrained = forced_from_pretrained
-    transformers.models.auto.AutoModel.from_pretrained = forced_from_pretrained
+    # Override per il Tokenizer
+    def forced_tokenizer_from_pretrained(pretrained_model_name_or_path, *args, **kwargs):
+        print(f"🎯 [RANK {rank}] AutoTokenizer intercettato! Forzo caricamento da {text_path}", flush=True)
+        # Forza la libreria a cercare solo localmente per evitare tentativi di connessione
+        kwargs['local_files_only'] = True
+        return original_tokenizer_from_pretrained(text_path, *args, **kwargs)
 
-    print(f"🎯 [RANK {rank}] Inizializzazione CLAP con Override Totale...", flush=True)
+    # Iniezione nei namespace globali di transformers
+    transformers.AutoModel.from_pretrained = forced_model_from_pretrained
+    transformers.models.auto.AutoModel.from_pretrained = forced_model_from_pretrained
+    transformers.AutoTokenizer.from_pretrained = forced_tokenizer_from_pretrained
+    transformers.models.auto.tokenization_auto.AutoTokenizer.from_pretrained = forced_tokenizer_from_pretrained
+
+    print(f"🎯 [RANK {rank}] Inizializzazione CLAP con Override Modello+Tokenizer...", flush=True)
     
-    # Ora la chiamata interna a CLAP() troverà AutoModel già dirottato
+    # Ora la chiamata interna a CLAP() troverà i metodi di transformers già dirottati
     clap_model = CLAP(version='2023', use_cuda=use_cuda)
 
-    # Configurazione audio encoder (invariata)
+    # Configurazione audio encoder (Logica originale)
     original_parameters = clap_model.clap.audio_encoder.to('cpu').state_dict()
     clap_model.clap.audio_encoder = clap_model.clap.audio_encoder.to(device)
     audio_embedding = clap_model.clap.audio_encoder
