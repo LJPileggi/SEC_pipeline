@@ -11,36 +11,35 @@ import msclap
 
 # 🎯 MONKEY PATCH AGGIORNATA: Gestisce redirect di cartelle E file singoli
 def universal_path_redirect(*args, **kwargs):
-    # 1. Gestione Pesi CLAP (.pth)
+    # Log di ogni singola chiamata intercettata per il debugging
+    rank = os.environ.get('SLURM_PROCID', '0')
+    print(f"DEBUG [Rank {rank}]: Chiamata intercettata! Args: {args} Kwargs: {kwargs.keys()}", flush=True)
+
+    # 1. Gestione Pesi CLAP
     if any(x for x in args if 'msclap' in str(x)) or 'CLAP_weights' in str(kwargs):
         path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
-        # print(f"🎯 [REDIRECT CLAP] -> {path}", flush=True)
+        print(f"🎯 [Rank {rank}] REDIRECT CLAP -> {path}", flush=True)
         return path
     
-    # 2. Gestione TextEncoder (RoBERTa)
-    # 🎯 FORZIAMO l'uso della variabile definita nello script Slurm
-    text_path = os.getenv("CLAP_TEXT_ENCODER_PATH") 
-    
-    # Recuperiamo il nome del file richiesto da transformers
-    filename = kwargs.get('filename')
-    if not filename and len(args) > 1:
-        filename = args[1]
+    # 2. Gestione TextEncoder
+    text_path = os.getenv("CLAP_TEXT_ENCODER_PATH")
+    filename = kwargs.get('filename') or (args[1] if len(args) > 1 else None)
 
     if text_path:
-        if filename:
-            # 🎯 Se viene chiesto un file (es. config.json), costruiamo il path completo
-            # Non facciamo controlli 'os.path.exists' qui per evitare che ritorni None
-            # se il filesystem temporaneo è lento
-            return os.path.join(text_path, str(filename))
-        return text_path
+        target = os.path.join(text_path, str(filename)) if filename else text_path
+        print(f"🎯 [Rank {rank}] REDIRECT TEXT -> {target}", flush=True)
+        return target
     
+    print(f"⚠️ [Rank {rank}] Nessun redirect applicato per questa chiamata.", flush=True)
     return None
 
-# Iniezione nei namespace per prevenire l'uso delle versioni non-patchate
+# INIEZIONE TOTALE: Sovrascriviamo ovunque per sicurezza
 huggingface_hub.hf_hub_download = universal_path_redirect
-msclap.CLAPWrapper.hf_hub_download = universal_path_redirect
 transformers.utils.hub.cached_file = universal_path_redirect
 transformers.utils.hub.hf_hub_download = universal_path_redirect
+msclap.CLAPWrapper.hf_hub_download = universal_path_redirect
+
+print("🚀 [PATCH] Sistema di monitoraggio attivato.", flush=True)
 
 import argparse
 import logging

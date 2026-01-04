@@ -66,6 +66,11 @@ export PYTHONUNBUFFERED=1
 export NCCL_P2P_DISABLE=1
 export NCCL_IB_DISABLE=1
 
+echo "--- VERIFICA FILE FISICI ---"
+ls -l "$TEMP_DIR/roberta-base"
+echo "LOCAL_CLAP_WEIGHTS_PATH: $LOCAL_CLAP_WEIGHTS_PATH"
+echo "CLAP_TEXT_ENCODER_PATH: $CLAP_TEXT_ENCODER_PATH"
+echo "---------------------------"
 
 # --- 5. ESECUZIONE PIPELINE ---
 echo "🚀 Avvio Multi-Processo..."
