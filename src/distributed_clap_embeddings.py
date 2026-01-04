@@ -23,6 +23,122 @@ os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
+def process_class_with_cut_secs_slurm(clap_model, audio_embedding, class_to_process, cut_secs, n_octave, config, audio_dataset_manager=None):
+    # --- SETUP IDENTICO ALL'ORIGINALE ---
+    root_source = config['dirs']['root_source']
+    root_target = config['dirs']['root_target']
+    target_class_dir = os.path.join(root_target, f'{cut_secs}_secs', class_to_process)
+    os.makedirs(target_class_dir, exist_ok=True)
+    
+    sr = config['spectrogram']['sr']
+    ref = config['spectrogram']['ref']
+    center_freqs = config['spectrogram']['center_freqs']
+    noise_perc = config['audio']['noise_perc']
+    seed = config['audio']['seed']
+    device = config['device']
+    rank = config.get('rank', 0)
+    audio_format = config['audio']['audio_format']
+
+    # 📊 TIMER DI DIAGNOSTICA (Solo Rank 0 accumula)
+    stats = {"load": 0, "prep": 0, "gpu": 0, "save": 0, "count": 0}
+
+    def print_stats():
+        if rank == 0 and stats["count"] > 0:
+            c = stats["count"]
+            print(f"\n[DIAGNOSTICA RANK 0] Media su {c} campioni (secondi):", flush=True)
+            print(f"  - Lettura Disco (I/O):  {stats['load']/c:.4f}s", flush=True)
+            print(f"  - Pre-proc (CPU+Spec): {stats['prep']/c:.4f}s", flush=True)
+            print(f"  - Inferenza (GPU):     {stats['gpu'] /c:.4f}s", flush=True)
+            print(f"  - Salvataggio (H5):    {stats['save']/c:.4f}s", flush=True)
+            print(f"  - Totale x audio:      {(sum(stats.values())-stats['count'])/c:.4f}s\n", flush=True)
+
+    # ... (Logica di inizializzazione manager identica all'originale) ...
+    class_seed = seed + hash(class_to_process) % 10000000
+    offset_rng = np.random.default_rng(class_seed)
+    noise_rng = np.random.default_rng(class_seed)
+    division_names = [d[0] for d in config['data']['divisions_xc_sizes_names']]
+    target_counts_list = np.cumsum([d[1] for d in config['data']['divisions_xc_sizes_names']])
+
+    if audio_dataset_manager is None:
+        audio_dataset_manager = HDF5DatasetManager(os.path.join(root_source, class_to_process,
+                                                    f'{class_to_process}_{audio_format}_dataset.h5'))
+    
+    class_idx_attr = audio_dataset_manager.hf.attrs.get('class_idx', 0)
+    permuted_indices = audio_dataset_manager.get_reproducible_permutation(class_seed)
+    
+    di = 0; results = 0; round_ = 0; n_embeddings_per_run = 0
+    split_emb_dataset_manager = None
+
+    try:
+        while True:
+            round_ += 1
+            for track_idx in permuted_indices:
+                # 🕒 1. LETTURA
+                t0 = time.perf_counter()
+                track, metadata = audio_dataset_manager.get_audio_and_metadata(track_idx)
+                t1 = time.perf_counter()
+
+                window_size = int(cut_secs * sr)
+                offset = 0 # ... (Logica offset identica) ...
+                n_buckets = math.ceil((track.shape[0] - offset) / window_size)
+
+                for b in range(n_buckets):
+                    if results >= target_counts_list[di]:
+                        if split_emb_dataset_manager: split_emb_dataset_manager.close()
+                        di += 1
+                        if di >= len(division_names): return n_embeddings_per_run, True
+                        split_emb_dataset_manager = None
+
+                    # 🕒 2. PRE-PROCESSING (CPU)
+                    t_prep_start = time.perf_counter()
+                    start = b * window_size + offset
+                    end = start + window_size
+                    cut_data = track[start:end]
+                    if len(cut_data) < window_size:
+                        cut_data = np.pad(cut_data, (0, window_size - len(cut_data)), 'constant')
+
+                    max_threshold = np.mean(np.abs(cut_data))
+                    noise = noise_rng.uniform(-max_threshold, max_threshold, cut_data.shape)
+                    new_audio = (1 - noise_perc) * cut_data + noise_perc * noise
+                    
+                    spec_n_o = spectrogram_n_octaveband_generator(new_audio, sr, n_octave=n_octave, center_freqs=center_freqs, ref=ref)
+                    t_prep_end = time.perf_counter()
+
+                    # 🕒 3. INFERENZA (GPU)
+                    t_gpu_start = time.perf_counter()
+                    x = torch.tensor(new_audio, dtype=torch.float32).to(device).unsqueeze(0)
+                    with torch.inference_mode():
+                       embedding = audio_embedding(x)[0][0]
+                    embedding_cpu = embedding.detach().cpu().numpy()
+                    t_gpu_end = time.perf_counter()
+
+                    # 🕒 4. SALVATAGGIO + CONTROLLO INTEGRITÀ
+                    t_save_start = time.perf_counter()
+                    # 🎯 CHECK INTEGRITÀ: No NaN, no vettori piatti
+                    if np.isnan(embedding_cpu).any() or np.all(embedding_cpu == 0):
+                        logging.error(f"EMBEDDING CORROTTO rilevato per {metadata['track_name']}!")
+                    
+                    if split_emb_dataset_manager is None:
+                        h5_path = os.path.join(target_class_dir, f'{class_to_process}_{division_names[di]}_{audio_format}_emb.h5')
+                        split_emb_dataset_manager = HDF5EmbeddingDatasetsManager(h5_path, 'a', buffer_size=10)
+                        split_emb_dataset_manager.initialize_hdf5(1024, spec_n_o.shape, audio_format, cut_secs, n_octave, sr, seed, noise_perc, division_names[di], class_to_process)
+
+                    emb_pkey = f"{class_idx_attr}_{track_idx}_{b}_{round_}_{results}"
+                    split_emb_dataset_manager.add_to_data_buffer(embedding_cpu, spec_n_o, emb_pkey, metadata['track_name'], class_to_process, metadata['subclass'])
+                    t_save_end = time.perf_counter()
+
+                    # AGGIORNAMENTO STATISTICHE (Solo Rank 0)
+                    if rank == 0:
+                        stats["load"] += (t1 - t0); stats["prep"] += (t_prep_end - t_prep_start)
+                        stats["gpu"] += (t_gpu_end - t_gpu_start); stats["save"] += (t_save_end - t_save_start)
+                        stats["count"] += 1
+                        if stats["count"] % 50 == 0: print_stats()
+
+                    results += 1; n_embeddings_per_run += 1
+                    del x, embedding, embedding_cpu, spec_n_o
+    except Exception:
+        logging.error(f"{traceback.format_exc()}"); return n_embeddings_per_run, False
+
 def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, cut_secs, n_octave, config, audio_dataset_manager=None):
     # --- SETUP INIZIALE (Invariato) ---
     root_source = config['dirs']['root_source']
@@ -219,7 +335,7 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
 
                 start_time = time.time()
                 
-                n_embeddings_per_run, completed = process_class_with_cut_secs(
+                n_embeddings_per_run, completed = process_class_with_cut_secs_slurm(
                     clap_model, audio_embedding, class_name, cut_secs, 
                     n_octave, config, audio_dataset_manager=current_audio_manager
                 )
