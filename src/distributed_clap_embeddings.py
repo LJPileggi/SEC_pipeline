@@ -24,7 +24,6 @@ os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
 def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class_to_process, cut_secs, n_octave, config, audio_dataset_manager=None):
-    # --- SETUP ORIGINALE (Intatto) ---
     root_source, root_target = config['dirs']['root_source'], config['dirs']['root_target']
     target_class_dir = os.path.join(root_target, f'{cut_secs}_secs', class_to_process)
     os.makedirs(target_class_dir, exist_ok=True)
@@ -33,7 +32,6 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     center_freqs, noise_perc, seed = config['spectrogram']['center_freqs'], config['audio']['noise_perc'], config['audio']['seed']
     device, rank = config['device'], config.get('rank', 0)
 
-    # 📊 PERFORMANCE & LOGGING
     stats = {"load": 0, "gpu_total": 0, "save": 0, "count": 0}
     BATCH_SIZE = 128 
     perf_log_path = os.path.join(root_target, f"perf_stats_rank_{rank}.txt")
@@ -42,11 +40,11 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
         if stats["count"] > 0:
             c = stats["count"]
             with open(perf_log_path, "a") as f:
-                f.write(f"\n[RANK {rank} - {class_to_process} {cut_secs}s @ {time.strftime('%H:%M:%S')}] Analisi su {c} campioni:\n")
-                f.write(f"  - I/O Disco:       {stats['load']/c:.6f}s\n")
-                f.write(f"  - GPU (Spec+Emb):  {stats['gpu_total']/c:.6f}s\n")
-                f.write(f"  - Scrittura H5:    {stats['save']/c:.6f}s\n")
-                f.write(f"  - TOTALE X AUDIO:  {sum(v for k,v in stats.items() if k!='count')/c:.6f}s\n")
+                f.write(f"\n[RANK {rank} - {class_to_process} {cut_secs}s @ {time.strftime('%H:%M:%S')}] Batch: {c}\n")
+                f.write(f"  - I/O Disco:       {stats['load']/c:.4f}s\n")
+                f.write(f"  - GPU (Spec+Emb):  {stats['gpu_total']/c:.4f}s\n")
+                f.write(f"  - Scrittura H5:    {stats['save']/c:.4f}s\n")
+                f.write(f"  - TOTALE X AUDIO:  {sum(v for k,v in stats.items() if k!='count')/c:.4f}s\n")
 
     class_seed = int(seed + hash(class_to_process) % 10000000)
     offset_rng = np.random.default_rng(class_seed)
@@ -71,29 +69,30 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
         if not batch_audio: return
         
         t_gpu_start = time.perf_counter()
-        raw_batch = torch.stack(batch_audio).pin_memory().to(device, non_blocking=True)
+        # 🎯 Caricamento in Float32 per la stabilità
+        raw_batch = torch.stack(batch_audio).pin_memory().to(device, non_blocking=True).float()
         
-        # 🎯 DETERMINISMO: Seed locale basato sulla posizione globale nella classe
+        # 🎯 Determinismo Seed
         current_batch_start_idx = results - len(batch_audio)
-        batch_noise_seed = class_seed + current_batch_start_idx
-        g = torch.Generator(device=device).manual_seed(batch_noise_seed)
+        g = torch.Generator(device=device).manual_seed(class_seed + current_batch_start_idx)
         
         with torch.inference_mode():
-            # Rumore Vettorizzato Deterministicamente
+            # Rumore deterministico in Float32
             means = torch.mean(torch.abs(raw_batch), dim=1, keepdim=True)
-            # Uniforme [-1, 1] usando il generatore con seed dedicato
             noise = (torch.rand(raw_batch.shape, generator=g, device=device) * 2 - 1) * means
             batch_tensor = (1 - noise_perc) * raw_batch + noise_perc * noise
             
-            # Mixed Precision Inference
+            # 1. Spettrogrammi (Float32 forzato fuori da autocast)
+            from .models import spectrogram_n_octaveband_generator_gpu
+            specs_gpu = spectrogram_n_octaveband_generator_gpu(batch_tensor, sr, n_octave, center_freqs=center_freqs, ref=ref, device=device)
+            
+            # 2. Inferenza (Mixed Precision FP16)
             with torch.cuda.amp.autocast():
-                from .models import spectrogram_n_octaveband_generator_gpu
-                specs_gpu = spectrogram_n_octaveband_generator_gpu(batch_tensor, sr, n_octave, center_freqs=center_freqs, ref=ref, device=device)
-                
                 output = audio_embedding(batch_tensor)
                 embeddings = output[0] if isinstance(output, (tuple, list)) else output
                 if embeddings.dim() > 2: embeddings = embeddings.squeeze(1)
 
+        # Ritorno a Float32 per CPU/Numpy
         embeddings_cpu = embeddings.float().cpu().numpy()
         specs_cpu = specs_gpu.float().cpu().numpy()
         stats["gpu_total"] += (time.perf_counter() - t_gpu_start)
@@ -108,9 +107,9 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
             split_emb_dataset_manager.add_to_data_buffer(embeddings_cpu[i], specs_cpu[i], batch_meta[i]['pkey'], batch_meta[i]['name'], class_to_process, batch_meta[i]['sub'])
         
         stats["save"] += (time.perf_counter() - t_save_start)
-        cur_batch = len(batch_audio)
-        stats["count"] += cur_batch
-        n_embeddings_per_run += cur_batch
+        cur_batch_len = len(batch_audio)
+        stats["count"] += cur_batch_len
+        n_embeddings_per_run += cur_batch_len
         
         if stats["count"] % (BATCH_SIZE * 4) == 0: write_perf_log()
         batch_audio.clear(); batch_meta.clear()
@@ -145,12 +144,12 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
 
                     start, end = b*window_size+offset, (b+1)*window_size+offset
                     cut_data = track[start:end]
-                    if len(cut_data) < window_size: cut_data = np.pad(cut_data, (0, window_size-len(cut_data)), 'constant')
+                    if len(cut_data) < window_size: cut_data = np.pad(cut_data, (0, window_size - len(cut_data)), 'constant')
                     
                     batch_audio.append(torch.from_numpy(cut_data).float())
                     batch_meta.append({'pkey': emb_pkey, 'name': metadata['track_name'], 'sub': metadata['subclass']})
 
-                    results += 1 # 🎯 Incremento qui per garantire il seed corretto nel flush
+                    results += 1
                     if len(batch_audio) >= BATCH_SIZE: flush_batch()
 
                 if results % 100 == 0: gc.collect(); ctypes.CDLL('libc.so.6').malloc_trim(0)

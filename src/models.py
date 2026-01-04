@@ -133,16 +133,17 @@ def spectrogram_n_octaveband_generator(
 
 def spectrogram_n_octaveband_generator_gpu(wav_batch, sampling_rate, n_octave=3, center_freqs=None, ref=2e-5, device='cuda'):
     """
-    Calcolo 1/n ottava totalmente vettorizzato su GPU senza loop Python.
-    Input: wav_batch (Batch, Samples)
-    Output: Spectrogram (Batch, Time, Freq)
+    Calcolo 1/n ottava totalmente vettorizzato su GPU.
+    Forza Float32 per evitare il crash di torchaudio.functional.lfilter.
     """
     import torchaudio.functional as F
+    
+    # 🎯 Forza Float32 per la stabilità del filtro
+    wav_batch = wav_batch.to(torch.float32) 
     
     if wav_batch.dim() == 1:
         wav_batch = wav_batch.unsqueeze(0)
     
-    # 1. Calcolo frequenze ISO 266 (Logica originale mantenuta)
     if center_freqs is None:
         f_ref, f_min, f_max = 1000.0, 20.0, sampling_rate / 2.0
         n_min = int(np.round(n_octave * np.log2(f_min / f_ref)))
@@ -155,42 +156,31 @@ def spectrogram_n_octaveband_generator_gpu(wav_batch, sampling_rate, n_octave=3,
     factor = 2 ** (1 / (2 * n_octave))
     freq_d, freq_u = center_freqs / factor, center_freqs * factor
     
-    # 2. Pre-calcolo coefficienti filtri (SOS)
-    # Creiamo matrici di coefficienti (n_bands, 6) dove 6 sono [b0, b1, b2, a0, a1, a2]
     sos_coeffs = []
     for lower, upper in zip(freq_d.cpu().numpy(), freq_u.cpu().numpy()):
         sos = scipy.signal.butter(N=4, Wn=np.array([lower, upper]) / (sampling_rate / 2), 
                                  btype='bandpass', output='sos')
         sos_coeffs.append(torch.from_numpy(sos).float())
     
-    # sos_tensor shape: (n_bands, n_sections, 6)
-    sos_tensor = torch.stack(sos_coeffs).to(device)
+    # sos_tensor forzato a float32
+    sos_tensor = torch.stack(sos_coeffs).to(device).to(torch.float32)
     
-    # 3. Applicazione Filtro Vettorizzata
-    # Espandiamo il batch per processare ogni banda: (Batch * n_bands, Samples)
     x = wav_batch.repeat_interleave(n_bands, dim=0)
     
-    # Applichiamo ogni sezione SOS in parallelo su tutto il super-batch
-    # In Butter ordine 4, abbiamo 4 sezioni del secondo ordine
     for s in range(sos_tensor.shape[1]):
-        b = sos_tensor[:, s, :3].repeat(wav_batch.shape[0], 1) # (Batch*n_bands, 3)
-        a = sos_tensor[:, s, 3:].repeat(wav_batch.shape[0], 1) # (Batch*n_bands, 3)
+        b = sos_tensor[:, s, :3].repeat(wav_batch.shape[0], 1).to(torch.float32)
+        a = sos_tensor[:, s, 3:].repeat(wav_batch.shape[0], 1).to(torch.float32)
         x = F.lfilter(x, a, b, clamp=False)
     
-    # filtered shape: (Batch, n_bands, Samples)
     filtered = x.reshape(wav_batch.shape[0], n_bands, -1)
     
-    # 4. RMS e DB Vettorizzati
     window = int(sampling_rate * 0.1)
     n_windows = filtered.shape[2] // window
-    
-    # Reshape per calcolo parallelo: (Batch, n_bands, n_windows, window)
     filtered = filtered[:, :, :n_windows*window].reshape(wav_batch.shape[0], n_bands, n_windows, window)
     
     rms = torch.sqrt(torch.mean(filtered**2, dim=-1))
-    rms = torch.clamp(rms, min=torch.finfo(wav_batch.dtype).eps)
+    rms = torch.clamp(rms, min=torch.finfo(torch.float32).eps)
     
-    # Output (Batch, Time, Freq) per compatibilità CLAP
     return 20 * torch.log10(rms / ref).permute(0, 2, 1)
 
 class OriginalModel:
