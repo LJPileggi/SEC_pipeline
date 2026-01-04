@@ -9,28 +9,25 @@ import huggingface_hub
 import transformers
 import msclap
 
-# 🎯 MONKEY PATCH: Intercettiamo i due guardiani (HF e Transformers)
+# 🎯 MONKEY PATCH AGGIORNATA: Gestisce redirect di cartelle E file singoli
 def universal_path_redirect(*args, **kwargs):
-    # 1. Gestione Pesi CLAP (già funzionante)
+    # 1. Gestione Pesi CLAP
     if any(x for x in args if 'msclap' in str(x)) or 'CLAP_weights' in str(kwargs):
-        path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
-        return path
+        return os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
     
-    # 2. Gestione TextEncoder (Correzione per transformers)
+    # 2. Gestione TextEncoder (RoBERTa)
     text_path = os.getenv("CLAP_TEXT_ENCODER_PATH")
     
-    # Recuperiamo il nome del file specifico richiesto (es. pytorch_model.bin, config.json)
+    # Recuperiamo il nome del file specifico se presente negli argomenti
     filename = kwargs.get('filename') or (args[1] if len(args) > 1 else None)
     
     if text_path and os.path.exists(text_path):
-        if filename and not os.path.isdir(os.path.join(text_path, filename)):
-            # Se è un file noto, restituiamo il path al file, non alla cartella
-            full_file_path = os.path.join(text_path, filename)
+        # Se transformers chiede un file specifico (es. config.json), glielo diamo
+        if filename and not os.path.isdir(os.path.join(text_path, str(filename))):
+            full_file_path = os.path.join(text_path, str(filename))
             if os.path.exists(full_file_path):
-                # print(f"🎯 [RANK {os.environ.get('SLURM_PROCID','0')}] REDIRECT FILE -> {full_file_path}", flush=True)
                 return full_file_path
-        
-        # Fallback alla cartella se non c'è un file specifico o se è la richiesta base
+        # Altrimenti restituiamo la cartella base
         return text_path
     return None
 

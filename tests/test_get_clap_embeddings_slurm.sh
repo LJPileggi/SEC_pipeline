@@ -51,7 +51,11 @@ singularity exec --bind "$TEMP_DIR:/tmp_data" --bind "$(pwd):/app" --pwd "/app" 
 export HF_HOME="$TEMP_DIR/work_dir/huggingface"
 export HF_HUB_OFFLINE=1 
 
-export CLAP_TEXT_ENCODER_PATH="/usr/local/clap_cache/tokenizer_model/" 
+# Copia gli asset di RoBERTa dallo scratch alla cartella del job
+mkdir -p "$TEMP_DIR/roberta-base"
+cp -r /leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/roberta-base/. "$TEMP_DIR/roberta-base/"
+
+export CLAP_TEXT_ENCODER_PATH="/tmp_data/roberta-base"
 export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/CLAP_weights_2023.pth"
 cp "$CLAP_SCRATCH_WEIGHTS" "$TEMP_DIR/work_dir/CLAP_weights_2023.pth"
 
