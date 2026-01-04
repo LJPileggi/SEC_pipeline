@@ -24,18 +24,23 @@ os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
 def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class_to_process, cut_secs, n_octave, config, audio_dataset_manager=None):
-    # --- SETUP INTEGRALE (Invariato) ---
+    # --- SETUP INIZIALE (Copiato da tua process_class_with_cut_secs) ---
     root_source = config['dirs']['root_source']
     root_target = config['dirs']['root_target']
     target_class_dir = os.path.join(root_target, f'{cut_secs}_secs', class_to_process)
     os.makedirs(target_class_dir, exist_ok=True)
     
-    audio_format, sr, ref = config['audio']['audio_format'], config['spectrogram']['sr'], config['spectrogram']['ref']
-    center_freqs, noise_perc, seed = config['spectrogram']['center_freqs'], config['audio']['noise_perc'], config['audio']['seed']
-    device, rank = config['device'], config.get('rank', 0)
+    audio_format = config['audio']['audio_format']
+    sr = config['spectrogram']['sr']
+    ref = config['spectrogram']['ref']
+    center_freqs = config['spectrogram']['center_freqs']
+    noise_perc = config['audio']['noise_perc']
+    seed = config['audio']['seed']
+    device = config['device']
+    rank = config.get('rank', 0)
 
-    # 📊 DIAGNOSTICA BATCHED
-    stats = {"load": 0, "prep_gpu": 0, "gpu_infer": 0, "save": 0, "count": 0}
+    # 📊 DIAGNOSTICA BATCHED E COSTANTI
+    stats = {"load": 0, "prep": 0, "gpu_infer": 0, "save": 0, "count": 0}
     BATCH_SIZE = 32 
 
     def print_performance_stats():
@@ -43,49 +48,69 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
             c = stats["count"]
             print(f"\n[RANK 0 - BATCHED] Media su {c} campioni (secondi):", flush=True)
             print(f"  - I/O Disco:       {stats['load']/c:.4f}s", flush=True)
-            print(f"  - Spec GPU:        {stats['prep_gpu']/c:.4f}s", flush=True)
+            print(f"  - Prep (GPU/CPU):  {stats['prep']/c:.4f}s", flush=True)
             print(f"  - Inferenza GPU:   {stats['gpu_infer']/c:.4f}s", flush=True)
             print(f"  - Scrittura H5:    {stats['save']/c:.4f}s", flush=True)
             print(f"  - TOTALE X AUDIO:  {(sum(stats.values())-c)/c:.4f}s\n", flush=True)
 
+    def diag_print(msg):
+        print(f"[RANK {rank} - DIAG] {msg}", flush=True)
+
+    def trim_memory():
+        try:
+            ctypes.CDLL('libc.so.6').malloc_trim(0)
+        except Exception: pass
+
     class_seed = seed + hash(class_to_process) % 10000000
     offset_rng = np.random.default_rng(class_seed)
     noise_rng = np.random.default_rng(class_seed)
+
     division_names = [d[0] for d in config['data']['divisions_xc_sizes_names']]
     target_counts_list = np.cumsum([d[1] for d in config['data']['divisions_xc_sizes_names']])
 
     own_manager = False
     if audio_dataset_manager is None:
-        audio_dataset_manager = HDF5DatasetManager(os.path.join(root_source, class_to_process, f'{class_to_process}_{audio_format}_dataset.h5'))
+        audio_dataset_manager = HDF5DatasetManager(os.path.join(root_source, class_to_process,
+                                                    f'{class_to_process}_{audio_format}_dataset.h5'))
         own_manager = True
 
     split_emb_dataset_manager = None
     di = 0; results = 0; round_ = 0; n_embeddings_per_run = 0
     class_idx_attr = audio_dataset_manager.hf.attrs.get('class_idx', 0)
-    adaptive_buffer_size = max(10, int(200 / cut_secs)) 
+    adaptive_buffer_size = max(1, int(100 / cut_secs))
+    torch.set_num_threads(1)
 
+    # 📦 ACCUMULATORI PER BATCH
     batch_audio = []; batch_meta = []
 
-    # 🎯 FUNZIONE INTERNA PER IL PROCESSING DEL BATCH (Evita duplicazione codice)
-    def flush_current_batch():
+    def flush_batch():
         nonlocal split_emb_dataset_manager, n_embeddings_per_run
         if not batch_audio: return
         
-        # 1. Spettrogrammi GPU
-        t_spec_s = time.perf_counter()
+        # 1. Spettrogrammi Vettorizzati (GPU o CPU)
+        t_prep_s = time.perf_counter()
         batch_tensor = torch.stack(batch_audio).to(device)
         from .models import spectrogram_n_octaveband_generator_gpu
-        specs_gpu = spectrogram_n_octaveband_generator_gpu(batch_tensor, sr, n_octave, center_freqs=center_freqs, ref=ref, device=device)
-        stats["prep_gpu"] += (time.perf_counter() - t_spec_s)
+        # Usiamo la versione GPU vettorizzata che processa tutto il tensor
+        specs_batch = spectrogram_n_octaveband_generator_gpu(batch_tensor, sr, n_octave, center_freqs=center_freqs, ref=ref, device=device)
+        specs_cpu = specs_batch.cpu().numpy()
+        stats["prep"] += (time.perf_counter() - t_prep_s)
 
-        # 2. Inferenza CLAP
+        # 2. Inferenza CLAP Nativa (Batch)
         t_gpu_s = time.perf_counter()
         with torch.inference_mode():
-            embeddings = audio_embedding(batch_tensor) 
-        embeddings_cpu = embeddings.squeeze(1).cpu().numpy()
+            # Passaggio nativo del batch tensor
+            output = audio_embedding(batch_tensor)
+            # Estrazione batch embedding (matrice Batch x 1024)
+            embeddings = output[0] if isinstance(output, (tuple, list)) else output
+        
+        if embeddings.dim() > 2:
+            embeddings = embeddings.squeeze(1)
+            
+        embeddings_cpu = embeddings.cpu().numpy()
         stats["gpu_infer"] += (time.perf_counter() - t_gpu_s)
 
-        # 3. Salvataggio
+        # 3. Salvataggio e Check Integrità
         t_save_s = time.perf_counter()
         for i, emb_np in enumerate(embeddings_cpu):
             if np.isnan(emb_np).any() or np.all(emb_np == 0):
@@ -94,15 +119,21 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
             if split_emb_dataset_manager is None:
                 h5_path = os.path.join(target_class_dir, f'{class_to_process}_{division_names[di]}_{audio_format}_emb.h5')
                 split_emb_dataset_manager = HDF5EmbeddingDatasetsManager(h5_path, 'a', buffer_size=adaptive_buffer_size)
-                split_emb_dataset_manager.initialize_hdf5(1024, specs_gpu[i].cpu().numpy().shape, audio_format, cut_secs, n_octave, sr, seed, noise_perc, division_names[di], class_to_process)
+                split_emb_dataset_manager.initialize_hdf5(
+                    1024, specs_cpu[i].shape, audio_format, cut_secs, n_octave, 
+                    sr, seed, noise_perc, division_names[di], class_to_process
+                )
 
-            split_emb_dataset_manager.add_to_data_buffer(emb_np, specs_gpu[i].cpu().numpy(), batch_meta[i]['pkey'], batch_meta[i]['name'], class_to_process, batch_meta[i]['sub'])
+            split_emb_dataset_manager.add_to_data_buffer(
+                emb_np, specs_cpu[i], batch_meta[i]['pkey'], 
+                batch_meta[i]['name'], class_to_process, batch_meta[i]['sub']
+            )
         
         stats["save"] += (time.perf_counter() - t_save_s)
         stats["count"] += len(batch_audio)
         n_embeddings_per_run += len(batch_audio)
+        if rank == 0 and stats["count"] % 128 == 0: print_performance_stats()
         
-        # Svuota liste
         batch_audio.clear(); batch_meta.clear()
 
     try:
@@ -115,57 +146,62 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
                 stats["load"] += (time.perf_counter() - t_load_s)
                 
                 window_size = int(cut_secs * sr)
-                offset = offset_rng.integers(0, track.shape[0]-window_size) if round_>1 and track.shape[0]>window_size else 0
+                offset = 0
+                if round_ > 1 and track.shape[0] > window_size:
+                    max_offset = track.shape[0] - window_size
+                    if max_offset > 0:
+                        offset = offset_rng.integers(0, max_offset)
                 n_buckets = math.ceil((track.shape[0] - offset) / window_size)
 
                 for b in range(n_buckets):
-                    # 🎯 Gestione cambio Split: se cambiamo split, dobbiamo svuotare il batch nel vecchio file prima!
+                    if results % 10 == 0:
+                        diag_print(f"{class_to_process}, {cut_secs} s: created {results}/{target_counts_list[di]}")
+                    
                     if results >= target_counts_list[di]:
-                        flush_current_batch() # Forza l'inferenza di quel che resta
+                        flush_batch()
                         if split_emb_dataset_manager:
                             split_emb_dataset_manager.close()
                             split_emb_dataset_manager = None
+                            gc.collect()
                         di += 1
                         if di >= len(division_names):
                             if own_manager: audio_dataset_manager.close()
                             return n_embeddings_per_run, True
 
-                    # Preparazione Audio (CPU)
-                    start, end = b*window_size+offset, (b+1)*window_size+offset
-                    cut_data = track[start:end]
-                    if len(cut_data) < window_size: cut_data = np.pad(cut_data, (0, window_size-len(cut_data)), 'constant')
-                    
-                    max_threshold = np.mean(np.abs(cut_data))
-                    noise = noise_rng.uniform(-max_threshold, max_threshold, cut_data.shape)
-                    new_audio = torch.from_numpy((1 - noise_perc) * cut_data + noise_perc * noise).float()
-                    
                     emb_pkey = f"{class_idx_attr}_{track_idx}_{b}_{round_}_{results}"
                     
-                    # Check resumability (Velocissimo tramite existing_keys nel manager)
                     if split_emb_dataset_manager and emb_pkey in split_emb_dataset_manager:
                         results += 1; continue
 
+                    # Preparazione Audio (Tensor locale)
+                    start, end = b*window_size+offset, (b+1)*window_size+offset
+                    cut_data = track[start:end]
+                    if len(cut_data) < window_size:
+                        cut_data = np.pad(cut_data, (0, window_size - len(cut_data)), 'constant')
+
+                    max_threshold = np.mean(np.abs(cut_data))
+                    noise = noise_rng.uniform(-max_threshold, max_threshold, cut_data.shape)
+                    # Creiamo il tensor ma lo lasciamo in CPU fino allo stack del batch
+                    new_audio = torch.from_numpy((1 - noise_perc) * cut_data + noise_perc * noise).float()
+
                     batch_audio.append(new_audio)
                     batch_meta.append({'pkey': emb_pkey, 'name': metadata['track_name'], 'sub': metadata['subclass']})
-                    
+
                     if len(batch_audio) == BATCH_SIZE:
-                        flush_current_batch()
-                        if rank == 0 and stats["count"] % 128 == 0: print_performance_stats()
+                        flush_batch()
                     
                     results += 1
                 
-                if results % 50 == 0: 
-                    gc.collect(); ctypes.CDLL('libc.so.6').malloc_trim(0)
+                del track, metadata
+                if results % 5 == 0:
+                    gc.collect(); trim_memory()
+            
+            flush_batch() # Svuota residuo fine permuted_indices
 
-            # Se finiamo il giro di permuted_indices, processiamo il residuo
-            flush_current_batch()
-
-    except Exception as e:
-        # 🎯 USCITA DI EMERGENZA: Chiudiamo tutto il possibile
-        logging.error(f"ECCEZIONE IN BATCH: {traceback.format_exc()}")
+    except Exception:
         if split_emb_dataset_manager: split_emb_dataset_manager.close()
         if own_manager: audio_dataset_manager.close()
-        return n_embeddings_per_run, False
+        logging.error(f"{traceback.format_exc()} Lord help me."); return n_embeddings_per_run, False
 
 def process_class_with_cut_secs_slurm(clap_model, audio_embedding, class_to_process, cut_secs, n_octave, config, audio_dataset_manager=None):
     # --- SETUP INIZIALE (Ripristinato Integrale) ---
