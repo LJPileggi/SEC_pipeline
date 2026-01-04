@@ -11,26 +11,39 @@ import msclap
 
 # 🎯 MONKEY PATCH AGGIORNATA: Gestisce redirect di cartelle E file singoli
 def universal_path_redirect(*args, **kwargs):
-    # Log di ogni singola chiamata intercettata per il debugging
     rank = os.environ.get('SLURM_PROCID', '0')
-    print(f"DEBUG [Rank {rank}]: Chiamata intercettata! Args: {args} Kwargs: {kwargs.keys()}", flush=True)
-
-    # 1. Gestione Pesi CLAP
-    if any(x for x in args if 'msclap' in str(x)) or 'CLAP_weights' in str(kwargs):
-        path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
-        print(f"🎯 [Rank {rank}] REDIRECT CLAP -> {path}", flush=True)
-        return path
     
-    # 2. Gestione TextEncoder
-    text_path = os.getenv("CLAP_TEXT_ENCODER_PATH")
-    filename = kwargs.get('filename') or (args[1] if len(args) > 1 else None)
+    # 1. Recupero percorsi dalle tue variabili d'ambiente (definite nello .sh)
+    weights_path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
+    text_path = os.getenv("CLAP_TEXT_ENCODER_PATH") # Questo punta a /tmp_data/roberta-base
 
-    if text_path:
-        target = os.path.join(text_path, str(filename)) if filename else text_path
-        print(f"🎯 [Rank {rank}] REDIRECT TEXT -> {target}", flush=True)
-        return target
-    
-    print(f"⚠️ [Rank {rank}] Nessun redirect applicato per questa chiamata.", flush=True)
+    # 2. Identificazione del bersaglio della chiamata
+    # Spulciamo args e kwargs per capire cosa sta cercando HuggingFace/Transformers
+    target_name = ""
+    if len(args) > 0: target_name += str(args[0])
+    if len(args) > 1: target_name += str(args[1])
+    if 'filename' in kwargs: target_name += str(kwargs['filename'])
+    if 'pretrained_model_name_or_path' in kwargs: target_name += str(kwargs['pretrained_model_name_or_path'])
+
+    # --- LOGICA DI REDIRECT ---
+
+    # A. Se la chiamata riguarda i pesi CLAP (.pth)
+    if 'msclap' in target_name or 'CLAP_weights' in target_name:
+        return weights_path
+
+    # B. Se la chiamata riguarda il TextEncoder (RoBERTa / GPT2 fallback)
+    # Intercettiamo sia 'roberta' che il percorso fantasma '/opt/models' che causa il NoneType
+    if any(x in target_name for x in ['roberta', 'gpt2', '/opt/models', 'config.json', 'pytorch_model.bin']):
+        filename = kwargs.get('filename') or (args[1] if len(args) > 1 else None)
+        
+        if text_path:
+            if filename and not os.path.isdir(os.path.join(text_path, str(filename))):
+                target = os.path.join(text_path, str(filename))
+                # Questo print ti confermerà che stiamo finalmente usando /tmp_data
+                print(f"🎯 [Rank {rank}] FORCED REDIRECT: {filename} -> {target}", flush=True)
+                return target
+            return text_path
+
     return None
 
 # INIEZIONE TOTALE: Sovrascriviamo ovunque per sicurezza
