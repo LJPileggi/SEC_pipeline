@@ -11,23 +11,29 @@ import msclap
 
 # 🎯 MONKEY PATCH AGGIORNATA: Gestisce redirect di cartelle E file singoli
 def universal_path_redirect(*args, **kwargs):
-    # 1. Gestione Pesi CLAP
+    # 1. Gestione Pesi CLAP (.pth)
     if any(x for x in args if 'msclap' in str(x)) or 'CLAP_weights' in str(kwargs):
-        return os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
+        path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
+        # print(f"🎯 [REDIRECT CLAP] -> {path}", flush=True)
+        return path
     
     # 2. Gestione TextEncoder (RoBERTa)
-    text_path = os.getenv("CLAP_TEXT_ENCODER_PATH")
+    # 🎯 FORZIAMO l'uso della variabile definita nello script Slurm
+    text_path = os.getenv("CLAP_TEXT_ENCODER_PATH") 
     
-    # Recuperiamo il nome del file specifico richiesto
+    # Recuperiamo il nome del file richiesto da transformers
     filename = kwargs.get('filename')
     if not filename and len(args) > 1:
         filename = args[1]
 
     if text_path:
         if filename:
-            # Forziamo il percorso del file specifico senza 'if exists' bloccanti
+            # 🎯 Se viene chiesto un file (es. config.json), costruiamo il path completo
+            # Non facciamo controlli 'os.path.exists' qui per evitare che ritorni None
+            # se il filesystem temporaneo è lento
             return os.path.join(text_path, str(filename))
         return text_path
+    
     return None
 
 # Iniezione nei namespace per prevenire l'uso delle versioni non-patchate

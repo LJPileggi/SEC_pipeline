@@ -1,33 +1,8 @@
 import os
 import torch
-import huggingface_hub
-import msclap
-import transformers
-
-# 🎯 FUNZIONE DI REDIRECT
-def universal_path_redirect(*args, **kwargs):
-    # Se la chiamata riguarda i pesi CLAP
-    if 'msclap' in str(args) or 'CLAP_weights' in str(kwargs):
-        path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
-        print(f"🎯 [RANK {os.environ.get('SLURM_PROCID','0')}] REDIRECT CLAP -> {path}", flush=True)
-        return path
-    # Se la chiamata riguarda il TextEncoder/Transformers
-    path = os.getenv("CLAP_TEXT_ENCODER_PATH")
-    print(f"🎯 [RANK {os.environ.get('SLURM_PROCID','0')}] REDIRECT TEXT -> {path}", flush=True)
-    return path
-
-# 🎯 INIEZIONE FORZATA NEI MODULI GIÀ CARICATI
-# Patchiamo msclap dove lui ha già importato hf_hub_download
-import msclap.CLAPWrapper
-msclap.CLAPWrapper.hf_hub_download = universal_path_redirect
-
-# Patchiamo transformers dove AutoModel va a cercare i file
-import transformers.utils.hub
-transformers.utils.hub.cached_file = universal_path_redirect
-transformers.utils.hub.hf_hub_download = universal_path_redirect
-
-from msclap import CLAP
 import numpy as np
+import scipy
+from msclap import CLAP
 
 def CLAP_initializer(device='cpu', use_cuda=False):
     """
