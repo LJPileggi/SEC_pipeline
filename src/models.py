@@ -7,20 +7,26 @@ from msclap import CLAP
 def CLAP_initializer(device='cpu', use_cuda=False):
     """
     CLAP model initialiser. 
-    Grazie alla patch nell'entry point, msclap userà i file locali automaticamente.
+    Applica una patch aggressiva ai default di msclap per forzare il percorso locale 
+    ed evitare il crash NoneType causato dal path cablato /opt/models.
     """
-    # 1. Recupero dei path (solo per i print di debug, la patch lavora a valle)
-    clap_weights_path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
-    text_encoder_path = os.getenv("CLAP_TEXT_ENCODER_PATH")
+    import msclap.models.clap as clap_module
+    
+    # 🎯 PATCH DEI DEFAULT DI SISTEMA
+    # Recuperiamo il percorso dalla variabile d'ambiente impostata nello script Slurm
+    text_path = os.getenv("CLAP_TEXT_ENCODER_PATH")
+    
+    if text_path:
+        rank = os.environ.get('SLURM_PROCID', '0')
+        print(f"🎯 [RANK {rank}] Hard-patching msclap text_model default -> {text_path}", flush=True)
+        # Modifichiamo direttamente la tupla dei valori di default del costruttore di TextEncoder.
+        # Questo costringe la libreria a usare il nostro path invece di quello interno al container.
+        clap_module.TextEncoder.__init__.__defaults__ = (text_path,)
 
-    print(f"🎯 [RANK {os.environ.get('SLURM_PROCID', '0')}] Inizializzazione CLAP...", flush=True)
-
-    # 2. Inizializzazione standard
-    # La patch in get_clap_embeddings.py intercetterà la chiamata interna 
-    # di msclap a hf_hub_download e AutoModel.from_pretrained.
+    # 1. Inizializzazione standard (che ora userà i nuovi default patchati)
     clap_model = CLAP(version='2023', use_cuda=use_cuda)
 
-    # 3. Configurazione dell'audio encoder (Logica originale intoccata)
+    # 2. Configurazione dell'audio encoder (Logica originale intoccata)
     original_parameters = clap_model.clap.audio_encoder.to('cpu').state_dict()
     clap_model.clap.audio_encoder = clap_model.clap.audio_encoder.to(device)
     audio_embedding = clap_model.clap.audio_encoder

@@ -12,37 +12,29 @@ import msclap
 # 🎯 MONKEY PATCH AGGIORNATA: Gestisce redirect di cartelle E file singoli
 def universal_path_redirect(*args, **kwargs):
     rank = os.environ.get('SLURM_PROCID', '0')
-    
-    # 1. Recupero percorsi dalle tue variabili d'ambiente (definite nello .sh)
     weights_path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
-    text_path = os.getenv("CLAP_TEXT_ENCODER_PATH") # Questo punta a /tmp_data/roberta-base
+    text_path = os.getenv("CLAP_TEXT_ENCODER_PATH") # Punta a /tmp_data/roberta-base
 
-    # 2. Identificazione del bersaglio della chiamata
-    # Spulciamo args e kwargs per capire cosa sta cercando HuggingFace/Transformers
-    target_name = ""
-    if len(args) > 0: target_name += str(args[0])
-    if len(args) > 1: target_name += str(args[1])
-    if 'filename' in kwargs: target_name += str(kwargs['filename'])
-    if 'pretrained_model_name_or_path' in kwargs: target_name += str(kwargs['pretrained_model_name_or_path'])
+    # 🎯 IDENTIFICAZIONE BERSAGLIO
+    arg_str = str(args)
+    # Prendiamo il filename se presente in kwargs o args
+    filename = kwargs.get('filename') or (args[1] if len(args) > 1 else None)
 
-    # --- LOGICA DI REDIRECT ---
-
-    # A. Se la chiamata riguarda i pesi CLAP (.pth)
-    if 'msclap' in target_name or 'CLAP_weights' in target_name:
+    # A. CASO PESI CLAP (.pth)
+    if 'msclap' in arg_str or 'CLAP_weights' in arg_str:
         return weights_path
 
-    # B. Se la chiamata riguarda il TextEncoder (RoBERTa / GPT2 fallback)
-    # Intercettiamo sia 'roberta' che il percorso fantasma '/opt/models' che causa il NoneType
-    if any(x in target_name for x in ['roberta', 'gpt2', '/opt/models', 'config.json', 'pytorch_model.bin']):
-        filename = kwargs.get('filename') or (args[1] if len(args) > 1 else None)
+    # B. CASO TEXT ENCODER (La trappola per /opt/models)
+    # Se il percorso contiene /opt/models o gpt2 o roberta, FORZIAMO il redirect a /tmp_data
+    if any(x in arg_str for x in ['/opt/models', 'gpt2', 'roberta']) or \
+       (filename and any(f in str(filename) for f in ['config.json', '.bin', '.safetensors', 'vocab', 'merges'])):
         
-        if text_path:
-            if filename and not os.path.isdir(os.path.join(text_path, str(filename))):
-                target = os.path.join(text_path, str(filename))
-                # Questo print ti confermerà che stiamo finalmente usando /tmp_data
-                print(f"🎯 [Rank {rank}] FORCED REDIRECT: {filename} -> {target}", flush=True)
-                return target
-            return text_path
+        if text_path and filename:
+            target = os.path.join(text_path, str(filename))
+            # 🎯 QUI STA IL TRUCCO: Ignoriamo l'input originale e restituiamo SOLO il nostro path
+            print(f"🎯 [Rank {rank}] OVERRIDE AGGRESSIVO: {filename} -> {target}", flush=True)
+            return target
+        return text_path
 
     return None
 
