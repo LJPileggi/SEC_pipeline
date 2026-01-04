@@ -86,54 +86,44 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     def flush_batch():
         nonlocal split_emb_dataset_manager, n_embeddings_per_run
         if not batch_audio: return
-        
-        # 1. Spettrogrammi Vettorizzati (GPU o CPU)
-        t_prep_s = time.perf_counter()
-        batch_tensor = torch.stack(batch_audio).to(device)
-        from .models import spectrogram_n_octaveband_generator_gpu
-        # Usiamo la versione GPU vettorizzata che processa tutto il tensor
-        specs_batch = spectrogram_n_octaveband_generator_gpu(batch_tensor, sr, n_octave, center_freqs=center_freqs, ref=ref, device=device)
-        specs_cpu = specs_batch.cpu().numpy()
-        stats["prep"] += (time.perf_counter() - t_prep_s)
-
-        # 2. Inferenza CLAP Nativa (Batch)
+    
+        # 🎯 1. MOVIMENTO DATI MASSIVO
         t_gpu_s = time.perf_counter()
+        batch_tensor = torch.stack(batch_audio).to(device, non_blocking=True)
+    
+        # 🎯 2. CALCOLO VETTORIZZATO (Spettrogrammi + Embeddings)
         with torch.inference_mode():
-            # Passaggio nativo del batch tensor
-            output = audio_embedding(batch_tensor)
-            # Estrazione batch embedding (matrice Batch x 1024)
-            embeddings = output[0] if isinstance(output, (tuple, list)) else output
+            # Spettrogrammi su GPU (Totalmente vettoriali ora)
+            specs_gpu = spectrogram_n_octaveband_generator_gpu(batch_tensor, sr, n_octave, center_freqs=center_freqs, ref=ref, device=device)
         
-        if embeddings.dim() > 2:
-            embeddings = embeddings.squeeze(1)
-            
+            # Inferenza CLAP nativa (Batch x Samples)
+            output = audio_embedding(batch_tensor)
+            embeddings = output[0] if isinstance(output, (tuple, list)) else output
+            if embeddings.dim() > 2: embeddings = embeddings.squeeze(1)
+
+        # 🎯 3. SINCRONIZZAZIONE SINGOLA (Solo qui portiamo i risultati su CPU)
         embeddings_cpu = embeddings.cpu().numpy()
+        specs_cpu = specs_gpu.cpu().numpy()
         stats["gpu_infer"] += (time.perf_counter() - t_gpu_s)
 
-        # 3. Salvataggio e Check Integrità
+        # 🎯 4. SCRITTURA BATCH H5
         t_save_s = time.perf_counter()
-        for i, emb_np in enumerate(embeddings_cpu):
-            if np.isnan(emb_np).any() or np.all(emb_np == 0):
+        for i in range(len(embeddings_cpu)):
+            # Check integrità originale
+            if np.isnan(embeddings_cpu[i]).any() or np.all(embeddings_cpu[i] == 0):
                 logging.error(f"EMBEDDING CORROTTO: {batch_meta[i]['name']}")
 
             if split_emb_dataset_manager is None:
-                h5_path = os.path.join(target_class_dir, f'{class_to_process}_{division_names[di]}_{audio_format}_emb.h5')
+                h5_path = os.path.join(target_class_dir, f"{class_to_process}_{division_names[di]}_{audio_format}_emb.h5")
                 split_emb_dataset_manager = HDF5EmbeddingDatasetsManager(h5_path, 'a', buffer_size=adaptive_buffer_size)
-                split_emb_dataset_manager.initialize_hdf5(
-                    1024, specs_cpu[i].shape, audio_format, cut_secs, n_octave, 
-                    sr, seed, noise_perc, division_names[di], class_to_process
-                )
+                split_emb_dataset_manager.initialize_hdf5(1024, specs_cpu[i].shape, audio_format, cut_secs, n_octave, sr, seed, noise_perc, division_names[di], class_to_process)
 
-            split_emb_dataset_manager.add_to_data_buffer(
-                emb_np, specs_cpu[i], batch_meta[i]['pkey'], 
-                batch_meta[i]['name'], class_to_process, batch_meta[i]['sub']
-            )
-        
+            split_emb_dataset_manager.add_to_data_buffer(embeddings_cpu[i], specs_cpu[i], batch_meta[i]['pkey'], batch_meta[i]['name'], class_to_process, batch_meta[i]['sub'])
+    
         stats["save"] += (time.perf_counter() - t_save_s)
         stats["count"] += len(batch_audio)
-        n_embeddings_per_run += len(batch_audio)
+    
         if rank == 0 and stats["count"] % 128 == 0: print_performance_stats()
-        
         batch_audio.clear(); batch_meta.clear()
 
     try:
