@@ -18,16 +18,15 @@ def universal_path_redirect(*args, **kwargs):
     # 2. Gestione TextEncoder (RoBERTa)
     text_path = os.getenv("CLAP_TEXT_ENCODER_PATH")
     
-    # Recuperiamo il nome del file specifico se presente negli argomenti
-    filename = kwargs.get('filename') or (args[1] if len(args) > 1 else None)
-    
-    if text_path and os.path.exists(text_path):
-        # Se transformers chiede un file specifico (es. config.json), glielo diamo
-        if filename and not os.path.isdir(os.path.join(text_path, str(filename))):
-            full_file_path = os.path.join(text_path, str(filename))
-            if os.path.exists(full_file_path):
-                return full_file_path
-        # Altrimenti restituiamo la cartella base
+    # Recuperiamo il nome del file specifico richiesto
+    filename = kwargs.get('filename')
+    if not filename and len(args) > 1:
+        filename = args[1]
+
+    if text_path:
+        if filename:
+            # Forziamo il percorso del file specifico senza 'if exists' bloccanti
+            return os.path.join(text_path, str(filename))
         return text_path
     return None
 
