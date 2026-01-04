@@ -2,35 +2,35 @@ import os
 import torch
 import numpy as np
 import scipy
-from msclap import CLAP
 
 def CLAP_initializer(device='cpu', use_cuda=False):
-    """
-    CLAP model initialiser. 
-    Applica una patch aggressiva ai default di msclap per forzare il percorso locale 
-    ed evitare il crash NoneType causato dal path cablato /opt/models.
-    """
-    import msclap.models.clap as clap_module
+    import transformers
+    from msclap import CLAP
     
-    # 🎯 PATCH DEI DEFAULT DI SISTEMA
-    # Recuperiamo il percorso dalla variabile d'ambiente impostata nello script Slurm
     text_path = os.getenv("CLAP_TEXT_ENCODER_PATH")
-    
-    if text_path:
-        rank = os.environ.get('SLURM_PROCID', '0')
-        print(f"🎯 [RANK {rank}] Hard-patching msclap text_model default -> {text_path}", flush=True)
-        # Modifichiamo direttamente la tupla dei valori di default del costruttore di TextEncoder.
-        # Questo costringe la libreria a usare il nostro path invece di quello interno al container.
-        clap_module.TextEncoder.__init__.__defaults__ = (text_path,)
+    rank = os.environ.get('SLURM_PROCID', '0')
 
-    # 1. Inizializzazione standard (che ora userà i nuovi default patchati)
+    # 🎯 PATCH DI FORZA BRUTA: Sovrascriviamo AutoModel.from_pretrained
+    # in modo che ignori l'argomento 'pretrained_model_name_or_path'
+    original_from_pretrained = transformers.AutoModel.from_pretrained
+
+    def forced_from_pretrained(pretrained_model_name_or_path, *args, **kwargs):
+        print(f"🎯 [RANK {rank}] AutoModel.from_pretrained intercettato! Ignoro {pretrained_model_name_or_path} e uso {text_path}", flush=True)
+        return original_from_pretrained(text_path, *args, **kwargs)
+
+    # Applichiamo la sostituzione globale nel modulo transformers
+    transformers.AutoModel.from_pretrained = forced_from_pretrained
+    transformers.models.auto.AutoModel.from_pretrained = forced_from_pretrained
+
+    print(f"🎯 [RANK {rank}] Inizializzazione CLAP con Override Totale...", flush=True)
+    
+    # Ora la chiamata interna a CLAP() troverà AutoModel già dirottato
     clap_model = CLAP(version='2023', use_cuda=use_cuda)
 
-    # 2. Configurazione dell'audio encoder (Logica originale intoccata)
+    # Configurazione audio encoder (invariata)
     original_parameters = clap_model.clap.audio_encoder.to('cpu').state_dict()
     clap_model.clap.audio_encoder = clap_model.clap.audio_encoder.to(device)
     audio_embedding = clap_model.clap.audio_encoder
-    
     for param in audio_embedding.parameters():
         param.requires_grad = False
         
