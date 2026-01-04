@@ -520,25 +520,11 @@ def get_track_reproducibility_parameters(idx):
     for param, name in zip(params, param_names):
         rep_params[name] = param
     return rep_params
-
 def reconstruct_tracks_from_embeddings(base_tracks_dir, hdf5_emb_path, idx_list):
     """
     Reconstructs a bunch of tracks relative to a given group of embeddings from their unique
     indexing. Indices are written in such a way to parse all the information needed for the
     reconstruction through the function get_track_reproducibility_parameters.
-
-    args:
-     - base_tracks_dir (str): base dir containing the various tracks datasets;
-       to be combined with the information coming from the metadata to get the
-       correct hdf5 file;
-     - hdf5_emb_path (str): path to the hdf5 file of the desired embeddings;
-       has to be relative to an entire split for completeness;
-     - idx_list (list): list containing the embedding indices formatted in
-       the appropriate way:
-       ((class_idx)_(track hdf5 index)_(bucket number)_(round_)_(results number));
-
-    returns:
-     - reconstr_tracks (dict): dict of the recontructed tracks
     """
     hdf5_emb = HDF5EmbeddingDatasetsManager(hdf5_emb_path, 'r', ('splits',))
     audio_format = hdf5_emb.hf.attrs['audio_format']
@@ -546,6 +532,8 @@ def reconstruct_tracks_from_embeddings(base_tracks_dir, hdf5_emb_path, idx_list)
     sample_rate = hdf5_emb.hf.attrs['sample_rate']
     noise_perc = hdf5_emb.hf.attrs['noise_perc']
     seed = hdf5_emb.hf.attrs['seed']
+    
+    # Mantenuta tua logica originale per le classi
     classes_list = hdf5_emb.hf['embedding_dataset']['classes'].unique().sort()
     repr_params_list = [get_track_reproducibility_parameters(idx) for idx in idx_list]
     repr_params_list = sorted(repr_params_list, key=lambda a : a['class_idx'])
@@ -557,16 +545,14 @@ def reconstruct_tracks_from_embeddings(base_tracks_dir, hdf5_emb_path, idx_list)
             if curr_class:
                 hdf5_class_tracks.close()
             curr_class = repr_params['class_idx']
-            class_seed = seed + hash(classes_list[curr_class]) % 10000000
+            class_seed = int(seed + hash(classes_list[curr_class]) % 10000000) # Cast int per sicurezza seed
             hdf5_class_path = os.path.join(base_tracks_dir, f'raw_{audio_format}', f'{classes_list[curr_class]}_{audio_format}_dataset.h5')
             hdf5_class_tracks = HDF5DatasetManager(hdf5_class_path, audio_format)
+        
         original_track = hdf5_class_tracks[repr_params['hdf5_index']]
 
-        # set random number generator to reconstruct offset and noise
+        # 1. Ricostruzione Offset (Mantenuta tua logica originale con offset_rng)
         offset_rng = np.random.default_rng(class_seed)
-        noise_rng = np.random.default_rng(class_seed)
-
-        # generate right offset
         offset = 0
         window_size = int(cut_secs * sample_rate)
         if repr_params['round_'] > 1 and original_track.shape[0] > window_size:
@@ -575,7 +561,7 @@ def reconstruct_tracks_from_embeddings(base_tracks_dir, hdf5_emb_path, idx_list)
                 for _ in range(repr_params['round_'] + 1):
                     offset = offset_rng.integers(0, max_offset)
 
-        # generate noise
+        # 2. Preparazione Cut
         start = repr_params['bucket'] * window_size + offset
         end = start + window_size
         cut_track = original_track[start:end]
@@ -584,17 +570,26 @@ def reconstruct_tracks_from_embeddings(base_tracks_dir, hdf5_emb_path, idx_list)
             pad_length = window_size - len(cut_track)
             cut_track = np.pad(cut_track, (0, pad_length), 'constant')
 
-        abs_cut_track = np.abs(cut_track)
-        max_threshold = np.mean(abs_cut_track)
-        for _ in range(repr_params['results']):
-            noise = noise_rng.uniform(-max_threshold, max_threshold, cut_track.shape)
+        # 🎯 3. GENERAZIONE RUMORE DETERMINISTICA (Allineata a versione SLURM Batched)
+        # Calcoliamo la soglia come nel batch
+        max_threshold = np.mean(np.abs(cut_track))
+        
+        # Allineamento Seed: usiamo lo stesso seed calcolato nel flush_batch
+        # In batch era: class_seed + (results - len(batch)) + i
+        # Che semplificato per il singolo audio è: class_seed + results
+        audio_specific_seed = class_seed + repr_params['results']
+        noise_rng_batched = np.random.default_rng(audio_specific_byte_seed)
+        
+        # Generiamo il rumore uniforme [-max_threshold, max_threshold]
+        noise = noise_rng_batched.uniform(-max_threshold, max_threshold, cut_track.shape)
+        
+        # Ricostruzione finale (Invariata)
         reconstr_track = (1 - noise_perc) * cut_track + noise_perc * noise
         reconstr_tracks[track_idx] = reconstr_track
 
     hdf5_emb.close()
     hdf5_class_tracks.close()
     return reconstr_tracks
-
 ### Distributed environment functions ###
 
 def setup_environ_vars(slurm=True):

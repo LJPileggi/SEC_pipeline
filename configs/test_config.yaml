@@ -10,7 +10,7 @@ ref: 2.e-05
 noise_perc: 0.3
 seed: 1
 valid_cut_secs: [1, 2, 3]
-train_size: 200
-es_size: 50
-valid_size: 50
-test_size: 50
+train_size: 500
+es_size: 100
+valid_size: 100
+test_size: 100
