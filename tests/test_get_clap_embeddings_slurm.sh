@@ -76,7 +76,7 @@ echo "---------------------------"
 echo "🚀 Avvio Multi-Processo..."
 
 srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \
-    singularity exec \
+    singularity exec --nv \
     --bind "/leonardo_scratch:/leonardo_scratch" \
     --bind "$TEMP_DIR:/tmp_data" \
     --bind "$(pwd):/app" \
