@@ -12,6 +12,10 @@ import torch.distributed as dist
 from torch.utils.data import Dataset, DataLoader
 import traceback
 
+# 🎯 PRODUCTION GLOBAL VARIABLE
+# Reads from environment to toggle detailed diagnostic prints
+VERBOSE = os.environ.get("VERBOSE", "False").lower() == "true"
+
 __all__ = [
            "get_config_from_yaml",
 
@@ -24,25 +28,40 @@ __all__ = [
 
            "get_track_reproducibility_parameters",
            "reconstruct_tracks_from_embeddings",
+           "TorchEmbeddingDataset",
+           "load_single_cut_secs_dataloaders",
 
            "setup_environ_vars",
            "setup_distributed_environment",
            "cleanup_distributed_environment"
           ]
 
-### Get model, training and spectrogram configuration from yaml ###
-
 def get_config_from_yaml(config_file="config0.yaml"):
     """
-    Loads configuration from yaml file and yields
-    variables to use in desired namespace.
+    Loads model, training, and spectrogram configurations from a YAML file 
+    located in the 'configs' directory.
 
     args:
-     - config_file: name of config file, to be attached to its relative path.
+     - config_file (str, default: 'config0.yaml'): Name of the YAML configuration 
+                      file to be loaded.
+
+    returns:
+     - classes (list): List of audio class names;
+     - patience (int): Early stopping patience;
+     - epochs (int): Maximum training epochs;
+     - batch_size (int): Size of training batches;
+     - sampling_rate (int): Audio sampling rate;
+     - ref (float): Reference value for spectrogram decibel conversion;
+     - noise_perc (float): Percentage of noise to add for augmentation;
+     - seed (int): Global random seed;
+     - center_freqs (np.array/None): Predefined center frequencies for octave bands;
+     - valid_cut_secs (list): Durations of audio segments in seconds;
+     - splits_xc_sizes_names (list): List of tuples containing split names and sizes.
     """
     config_path = os.path.join('configs', config_file)
     with open(config_path, 'r') as f:
         configs = yaml.load(f, Loader=yaml.SafeLoader)
+    
     classes = configs["classes"]
     patience = configs["patience"]
     epochs = configs["epochs"]
@@ -51,26 +70,41 @@ def get_config_from_yaml(config_file="config0.yaml"):
     ref = configs["ref"]
     noise_perc = configs["noise_perc"]
     seed = configs["seed"]
-    if configs.get("center_freqs"):
-        center_freqs = np.array(configs["center_freqs"])
-    else:
-        center_freqs = None
+    
+    center_freqs = np.array(configs["center_freqs"]) if configs.get("center_freqs") else None
+    
     valid_cut_secs = configs["valid_cut_secs"]
     splits_xc_sizes_names = [("train", configs["train_size"]),
-                                ("es", configs["es_size"]),
-                                ("valid", configs["valid_size"]),
-                                ("test", configs["test_size"])]
+                             ("es", configs["es_size"]),
+                             ("valid", configs["valid_size"]),
+                             ("test", configs["test_size"])]
+    
     return classes, patience, epochs, batch_size, sampling_rate, ref, noise_perc, seed, \
-                                  center_freqs, valid_cut_secs, splits_xc_sizes_names
+           center_freqs, valid_cut_secs, splits_xc_sizes_names
 
-   
-### Log file functions for embedding calculation ###
 
 def write_log(log_path, new_cut_secs_class, process_time, n_embeddings_per_run, completed, **kwargs):
-    os.makedirs(log_path, exist_ok=True) #
+    """
+    Writes or updates a rank-specific JSON log file for tracking the embedding 
+    process of a specific (duration, class) pair. It ensures atomic writes 
+    using fsync to prevent data corruption on cluster filesystems.
+
+    args:
+     - log_path (str): Directory where the log file will be stored;
+     - new_cut_secs_class (str/tuple): The (cut_secs, class_name) identifier;
+     - process_time (float): Time taken to process the current task;
+     - n_embeddings_per_run (int): Number of embeddings generated in this run;
+     - completed (bool): Whether the task was finished entirely;
+     - **kwargs: Configuration parameters and rank info to store in the log.
+
+    returns:
+     - None: The log is written directly to disk.
+    """
+    os.makedirs(log_path, exist_ok=True)
     
     new_cut_secs_class = str(new_cut_secs_class)
-    logfile = os.path.join(log_path, f"log_rank_{kwargs['rank']}.json") #
+    # Each rank writes its own file to avoid I/O contention
+    logfile = os.path.join(log_path, f"log_rank_{kwargs['rank']}.json")
     
     log = {"config": {}}
     if os.path.exists(logfile):
@@ -83,8 +117,7 @@ def write_log(log_path, new_cut_secs_class, process_time, n_embeddings_per_run, 
     if not log.get("config"): 
         log["config"].update(kwargs)
 
-    # Poiché ora il file log_rank_X.json accoglie più classi, 
-    # usiamo la tupla come chiave per non sovrascrivere i dati
+    # Use the identifier as key to allow multiple classes in the same rank log
     if new_cut_secs_class not in log:
         log[new_cut_secs_class] = {"process_time": [], "n_embeddings_per_run": [], "rank": []}
         
@@ -93,15 +126,24 @@ def write_log(log_path, new_cut_secs_class, process_time, n_embeddings_per_run, 
     log[new_cut_secs_class]["rank"].append(kwargs["rank"])
     log[new_cut_secs_class]["completed"] = completed
 
+    # ATOMIC WRITE: Ensure data is physically written to disk
     with open(logfile, 'w') as f:
         json.dump(log, f, indent=4)
-        f.flush() # 🎯 Forza la scrittura fisica
-        os.fsync(f.fileno()) # 🎯 Sincronizza col sistema operativo
+        f.flush() 
+        os.fsync(f.fileno()) 
+
 
 def join_logs(log_dir):
     """
-    Unisce i log dei vari rank presenti in una cartella di cut_secs,
-    preservando i dati di tutte le classi processate.
+    Merges all rank-specific JSON logs (log_rank_*.json) found in a directory 
+    into a single master 'log.json' file. It aggregates statistics for 
+    partially completed classes across different ranks.
+
+    args:
+     - log_dir (str): Path to the directory containing individual rank logs.
+
+    returns:
+     - None: Deletes individual rank logs after merging into the final file.
     """
     final_log = {"config": {}}
     final_log_file = os.path.join(log_dir, "log.json")
@@ -122,36 +164,42 @@ def join_logs(log_dir):
                             final_log["config"].update(data)
                         continue
 
-                    # 🎯 LOGICA DI MERGE ROBUSTA
-                    # Se la chiave (es. "(1, 'Birds')") esiste già, estendiamo le liste.
-                    # Questo è fondamentale se più rank hanno lavorato sulla stessa classe.
+                    # ROBUST MERGE LOGIC: Extend lists if the class exists
                     if key in final_log:
                         for field in ["process_time", "n_embeddings_per_run", "rank"]:
                             if field in data:
                                 final_log[key][field].extend(data[field])
-                        # Il task è completato solo se lo sono tutti i segmenti
+                        # Task is completed only if all segments were successful
                         final_log[key]["completed"] = final_log[key].get("completed", True) and data.get("completed", False)
                     else:
-                        # Se è una nuova classe per questo cut_secs, la aggiungiamo interamente
                         final_log[key] = data
                         
         except Exception as e:
-            print(f"Errore durante l'unione del log {log_file}: {e}")
+            print(f"Error merging log {log_file}: {e}")
 
-    # Scrittura del file unificato finale per il cut_secs corrente
+    # Write the unified file
     with open(final_log_file, 'w') as f:
         json.dump(final_log, f, indent=4)
         
-    # Cleanup
-    # for log_file in log_files:
-    #     os.remove(log_file)
+    # Cleanup to keep the directory tidy
+    for log_file in log_files:
+        os.remove(log_file)
 
 ### hdf5 raw dataset class ###
 
 class HDF5DatasetManager:
     """
-    Gestisce l'accesso rapido ai dati in un file HDF5 (il Super-Dataset), 
-    accedendo ai metadati tramite un DataFrame che mantiene l'indice HDF5.
+    Manages high-speed access to raw audio data stored in a primary HDF5 "Super-Dataset". 
+    It implements lazy loading and direct index-based retrieval to minimize memory overhead 
+    by avoiding the use of intermediate data structures like Pandas for metadata.
+
+    args:
+     - h5_file_path (str): Absolute path to the source HDF5 file;
+     - audio_format (str, default: 'wav'): The audio extension used to identify datasets 
+                      within the HDF5 structure.
+
+    returns:
+     - Instance: A manager object with an open file handle and metadata descriptors.
     """
     
     def __init__(self, h5_file_path: str, audio_format: str = 'wav'):
@@ -160,44 +208,73 @@ class HDF5DatasetManager:
         self.audio_format = audio_format
         self.metadata_dset_name = f'metadata_{self.audio_format}'
         self.audio_dset_name = f'audio_{self.audio_format}'
-        self.n_records = 0 # 🎯 Gestione lazy
+        self.n_records = 0 # Initialized via lazy evaluation upon file opening
         
         try:
+            # Open HDF5 with rdcc_nbytes=0 to bypass the internal chunk cache, 
+            # as our access pattern is sequential/permuted but not repetitive.
             self.hf = h5py.File(self.h5_file_path, 'r', rdcc_nbytes=0)
             self.n_records = self.hf[self.metadata_dset_name].shape[0]
-            logging.info(f"HDF5 Manager pronto: {self.n_records} tracce rilevate.")
+            logging.info(f"HDF5 Manager Ready: {self.n_records} tracks detected.")
         except Exception as e:
-            logging.error(f"Errore apertura {h5_file_path}: {e}")
+            logging.error(f"Error opening {h5_file_path}: {e}")
             raise
 
     def get_audio_and_metadata(self, hdf5_index):
-        """🎯 Legge direttamente da HDF5 senza passare per Pandas."""
+        """
+        Retrieves a single audio waveform and its associated metadata dictionary 
+        directly from the HDF5 datasets using atomic index slicing.
+
+        args:
+         - hdf5_index (int): The numerical index of the record to retrieve.
+
+        returns:
+         - audio (np.ndarray): The raw audio signal;
+         - meta_dict (dict): Decoded metadata fields (e.g., track name, subclass).
+        """
         audio = self.hf[self.audio_dset_name][hdf5_index]
-        # Recupera la riga di metadati come numpy void object
+        # Retrieve row as a numpy void object (structured array)
         raw_meta = self.hf[self.metadata_dset_name][hdf5_index]
-        # Converte in dizionario semplice per minimizzare l'overhead
+        # Decode bytes to strings to ensure compatibility with downstream logic
         meta_dict = {n: (raw_meta[n].decode('utf-8') if isinstance(raw_meta[n], bytes) else raw_meta[n]) 
                      for n in raw_meta.dtype.names}
         return audio, meta_dict
 
     def get_reproducible_permutation(self, seed: int):
-        """🎯 Permuta solo gli indici numerici, non gli oggetti."""
+        """
+        Generates a deterministic permutation of the dataset indices.
+
+        args:
+         - seed (int): The seed for the random number generator.
+
+        returns:
+         - (np.ndarray): A shuffled array of indices from 0 to n_records - 1.
+        """
         rng = np.random.default_rng(seed)
         return rng.permutation(np.arange(self.n_records))
 
     def close(self):
+        """Safely closes the HDF5 file handle and triggers garbage collection."""
         if self.hf:
             self.hf.close()
             self.hf = None
         gc.collect()
 
-    def __del__(self):
-        """Ripristinato per sicurezza, ma l'azione reale è in close()."""
-        try:
-            if self.hf: self.hf.close()
-        except: pass
 
 class HDF5EmbeddingDatasetsManager(Dataset):
+    """
+    An advanced HDF5 manager designed for writing and reading audio embeddings 
+    and spectrograms. It features an O(1) in-memory key lookup for resumability, 
+    adaptive buffering to optimize disk I/O, and structured metadata handling.
+
+    args:
+     - h5_path (str): Path to the target embedding HDF5 file;
+     - mode (str, default: 'r'): File access mode ('r', 'w', 'a');
+     - partitions (set, default: {'classes', 'splits'}): Controls the internal 
+                      dtype structure of the dataset;
+     - buffer_size (int, default: 10): Number of records to hold in RAM before flushing 
+                      to disk.
+    """
     def __init__(self, h5_path, mode='r', partitions=set(('classes', 'splits')), buffer_size=10):
         super().__init__()
         self.h5_path = h5_path
@@ -206,67 +283,43 @@ class HDF5EmbeddingDatasetsManager(Dataset):
         self.hf = None
         self.buffer_size = buffer_size
         self.buffer_count = 0
-        self.existing_keys = set()
+        self.existing_keys = set() # For O(1) latency checks during resumption
         self.dt = None           
         self.buffer_array = None 
         
         try:
-            # Apertura del file con retry logica interna di h5py se possibile
             self.hf = h5py.File(self.h5_path, self.mode, rdcc_nbytes=0)
         except Exception as e:
-            logging.error(f"Impossibile aprire il file {h5_path}: {e}")
+            logging.error(f"Could not open file {h5_path}: {e}")
             raise
 
-        # 🎯 RECUPERO METADATI E CHIAVI (Fondamentale per la Resumability)
+        # 🎯 METADATA & KEY RECOVERY (Resumability Logic)
         if self.hf is not None and 'embedding_dataset' in self.hf:
             try:
-                # 1. Recuperiamo i parametri strutturali dagli attributi del file
+                # Recover structural parameters from HDF5 attributes
                 emb_dim = self.hf.attrs.get('embedding_dim')
                 spec_sh = self.hf.attrs.get('spec_shape')
                 
                 if emb_dim is not None and spec_sh is not None:
-                    # Ricostruiamo il formato del dataset (dtype)
                     self.dt = self._set_dataset_format(emb_dim, spec_sh)
                     
-                    # 2. Caricamento sicuro delle chiavi ID per il check O(1)
+                    # Load existing IDs into memory to avoid repeated disk reads during skips
                     dset = self.hf['embedding_dataset']
                     if dset.shape[0] > 0:
-                        # Leggiamo gli ID. Usiamo una slice [:] per caricare in memoria
                         raw_ids = dset['ID'][:]
                         self.existing_keys = {k.decode('utf-8') if isinstance(k, bytes) else k for k in raw_ids}
                     
-                    # 3. Inizializziamo il buffer NumPy solo se siamo in modalità append
                     if self.mode == 'a':
                         self.buffer_array = np.empty(self.buffer_size, dtype=self.dt)
             except Exception as e:
-                # Se il file è corrotto o incompleto, logghiamo ma non crashiamo il worker
-                logging.warning(f"Manager: Errore durante il caricamento dei metadati da {h5_path}: {e}")
-
-    def __len__(self):
-        if 'embedding_dataset' in self.hf:
-            return self.hf['embedding_dataset'].shape[0]
-        return 0
+                logging.warning(f"Manager: Error loading metadata from {h5_path}: {e}")
 
     def __contains__(self, emb_pkey: str) -> bool:
-        """
-        Verifica se un embedding esiste già usando il lookup O(1) in memoria.
-        """
-        # 🎯 Lookup istantaneo: nessuna lettura da disco
+        """Checks if a specific embedding ID already exists in the file (O(1) lookup)."""
         return emb_pkey in self.existing_keys
 
-    def __getitem__(self, idx):
-        """
-        Metodo modificato per gestire sia l'accesso per chiave (stringa) che l'accesso per indice (numero).
-        """
-        if isinstance(idx, str):
-            # Se l'indice è una stringa, lo interpreta come una richiesta di esistenza (contains)
-            # e delega al metodo __contains__.
-            return self.__contains__(idx) 
-    
-        # Altrimenti, gestisce l'accesso per indice numerico standard (es. riga 0, 1, 2...)
-        return self.hf['embedding_dataset'][idx]
-        
     def _set_dataset_format(self, embedding_dim, spec_shape):
+        """Defines the structured numpy dtype for the HDF5 records."""
         if 'classes' in self.partitions:
             dt = np.dtype([
                     ('ID', 'S100'),
@@ -289,11 +342,11 @@ class HDF5EmbeddingDatasetsManager(Dataset):
     def initialize_hdf5(self, embedding_dim, spec_shape, audio_format, cut_secs, n_octave, 
                         sample_rate, seed, noise_perc, split, class_name=None):
         """
-        Inizializza il file HDF5 e configura i buffer necessari per l'append.
-        Salva i metadati come attributi per permettere all'__init__ di ricaricarli in caso di resume.
+        Prepares a new HDF5 file for writing by setting global attributes and 
+        pre-allocating the 'embedding_dataset' with resizable dimensions.
         """
         if self.mode == 'a':
-            # 🎯 SALVATAGGIO ATTRIBUTI (Metadati strutturali)
+            # Save structural metadata as HDF5 attributes
             self.hf.attrs['audio_format'] = audio_format
             self.hf.attrs['cut_secs'] = cut_secs
             self.hf.attrs['n_octave'] = n_octave
@@ -302,231 +355,208 @@ class HDF5EmbeddingDatasetsManager(Dataset):
             self.hf.attrs['seed'] = seed
             self.hf.attrs['split'] = split
             self.hf.attrs['embedding_dim'] = embedding_dim
-            self.hf.attrs['spec_shape'] = spec_shape # Fondamentale per ricostruire il buffer NumPy
+            self.hf.attrs['spec_shape'] = spec_shape 
             
-            # Setup formato dataset e buffer pre-allocato
             self.dt = self._set_dataset_format(embedding_dim, spec_shape)
             self.buffer_array = np.empty(self.buffer_size, dtype=self.dt)
             
             if 'classes' in self.partitions:
                 self.hf.attrs['class'] = class_name
             
-            # Creazione fisica del dataset se non esiste
             if 'embedding_dataset' not in self.hf:
-                # Usiamo chunks=True per permettere il ridimensionamento dinamico
+                # Use chunks=True to enable dynamic resizing via dataset.resize()
                 self.hf.create_dataset('embedding_dataset', 
                                         shape=(0,),
                                         maxshape=(None,),
                                         dtype=self.dt,
                                         chunks=True)
-            
-            # 🎯 FORZA SCRITTURA METADATI
-            # Questo assicura che se il processo crasha subito dopo, l'__init__ troverà almeno gli attributi
             self.hf.flush()
-        else:
-            raise Exception(f'Permessi non validi per la scrittura su {self.h5_path}.')
 
     def add_to_data_buffer(self, embedding, spectrogram, hash_keys, track_name, class_=None, subclass=None):
         """
-        Scrive i dati nel buffer NumPy gestendo correttamente la codifica delle stringhe.
+        Stages data into the RAM buffer. Flushes to disk automatically when the buffer is full.
         """
         idx = self.buffer_count
         
-        # Funzione helper interna per codificare solo se necessario
         def to_bytes(s):
-            if isinstance(s, str):
-                return s.encode('utf-8')
-            return s # È già bytes o None
+            return s.encode('utf-8') if isinstance(s, str) else s
 
-        # Inserimento con controllo del tipo
         self.buffer_array[idx]['ID'] = to_bytes(hash_keys)
-        
-        if torch.is_tensor(embedding):
-            self.buffer_array[idx]['embeddings'] = embedding.detach().cpu().numpy()
-        else:
-            self.buffer_array[idx]['embeddings'] = embedding
-            
+        self.buffer_array[idx]['embeddings'] = embedding.detach().cpu().numpy() if torch.is_tensor(embedding) else embedding
         self.buffer_array[idx]['spectrograms'] = spectrogram
         self.buffer_array[idx]['track_names'] = to_bytes(track_name)
         
         if 'classes' not in self.partitions:
             self.buffer_array[idx]['classes'] = to_bytes(class_) if class_ else b''
-        
         self.buffer_array[idx]['subclasses'] = to_bytes(subclass) if subclass else b''
         
         self.buffer_count += 1
+        # Update the memory-safe key set immediately
         self.existing_keys.add(hash_keys if isinstance(hash_keys, str) else hash_keys.decode('utf-8'))
         
         if self.buffer_count >= self.buffer_size:
             self.flush_buffers()
 
     def flush_buffers(self):
-        """Scrive su disco e pulisce i riferimenti agli oggetti pesanti."""
+        """
+        Physically writes the buffered data to the HDF5 file and resets the RAM buffer.
+        """
         if self.buffer_count == 0:
             return
 
-        # 🎯 Ripristinata la logica della variabile d'ambiente
+        # Check for environmental override to disable saving (useful for dry runs)
         if os.getenv('NO_EMBEDDING_SAVE', 'False').lower() in ('false', '0', 'f'):
             dataset = self.hf['embedding_dataset']
             current_size = dataset.shape[0]
             dataset.resize(current_size + self.buffer_count, axis=0)
             dataset[current_size:] = self.buffer_array[:self.buffer_count]
 
-        # 🎯 TRUCCO FINALE: Invece di fill(0), azzeriamo il riferimento
-        # Questo costringe NumPy a rilasciare il grosso blocco di memoria C
+        # Reset buffer by creating a new empty array to release C-level memory
         self.buffer_array = np.empty(self.buffer_size, dtype=self.dt)
         self.buffer_count = 0
         gc.collect()
 
     def extend_dataset(self, new_data):
         """
-        Estende il dataset direttamente bypassando i buffer. 
-        Aggiorna il set delle chiavi per mantenere la coerenza della Latenza 1.
+        Directly extends the HDF5 dataset using a pre-formatted numpy array, 
+        bypassing the buffer for bulk operations.
         """
-        if isinstance(new_data, dict):
-            if 'ID' not in new_data:
-                 raise ValueError("Missing 'ID' key in dictionary data.")
-            num_new_elements = len(new_data['ID'])
-
-            # Pre-allocazione temporanea per la conversione del dizionario
-            new_data_array = np.empty(num_new_elements, dtype=self.dt)
-
-            for name in self.dt.names:
-                if name in new_data:
-                    new_data_array[name] = new_data[name]
-                else:
-                    raise TypeError(f"Missing {name} in to-be-added data.")
-            new_data = new_data_array
-
-        if new_data.dtype != self.dt:
-            raise TypeError(f"New data dtype {new_data.dtype} is "
-                            f"incompatible with native dataset dtype {self.dt}")
-        
-        # --- Scrittura su HDF5 ---
         dataset = self.hf['embedding_dataset']
         current_size = dataset.shape[0]
-        new_size = current_size + len(new_data)
+        dataset.resize(current_size + len(new_data), axis=0)
+        dataset[current_size:] = new_data
         
-        dataset.resize(new_size, axis=0)
-        dataset[current_size:] = new_data # Scrittura efficiente per blocchi
-        
-        # --- 🎯 AGGIORNAMENTO LATENZA 1 ---
-        # Decodifichiamo e aggiungiamo le nuove chiavi al set in memoria
+        # 🎯 SYNC LOOKUP SET
         new_ids = new_data['ID']
         self.existing_keys.update(k.decode('utf-8') if isinstance(k, bytes) else k for k in new_ids)
 
     def close(self):
-        """Assicura l'ultimo scarico dati prima della chiusura."""
+        """Ensures final buffer flush before closing the file handle."""
         if self.hf:
             self.flush_buffers() 
-            try:
-                self.hf.close()
-            except Exception:
-                pass
+            self.hf.close()
             self.hf = None
         self.buffer_array = None
 
-    def __del__(self):
-        pass
-
 def combine_hdf5_files(root_dir, cut_secs_list, embedding_dim, spec_shape, audio_format, cut_secs, n_octave, 
-                                             sample_rate, seed, noise_perc, splits_list):
+                       sample_rate, seed, noise_perc, splits_list):
     """
-    Combines individual HDF5 files for each class and split into unified HDF5 files
-    for each split.
-    # ... (omissione documentazione)
+    Consolidates individual class-specific HDF5 files into unified files for each dataset split 
+    (e.g., combined_train.h5). It iterates through all processed classes and segments, 
+    efficiently appending data to the master files while injecting class labels.
+
+    args:
+     - root_dir (str): The base directory containing processed segment folders;
+     - cut_secs_list (list): List of segment durations processed;
+     - embedding_dim (int): Dimension of the audio embeddings;
+     - spec_shape (tuple): Shape of the generated spectrograms;
+     - audio_format (str): Original audio format (e.g., 'wav');
+     - cut_secs (int/float): Current segment duration being merged;
+     - n_octave (int): Octave band resolution;
+     - sample_rate (int): Audio sampling rate;
+     - seed (int): Global seed used for processing;
+     - noise_perc (float): Noise percentage used for augmentation;
+     - splits_list (list): List of tuples containing split names (e.g., [('train', size), ...]).
+
+    returns:
+     - None: The combined files are written directly to the filesystem.
     """
+    # Identify all processed classes based on folder structure
     classes_list = sorted([d for d in os.listdir(os.path.join(root_dir, f'{cut_secs_list[0]}_secs')) 
                             if os.path.isdir(os.path.join(root_dir, f'{cut_secs_list[0]}_secs', d))])
     
     for current_cut_secs in cut_secs_list:
-        
         for split_tuple in splits_list:
             split_name = split_tuple[0]
             output_h5_path = os.path.join(root_dir, f'{current_cut_secs}_secs', f'combined_{split_name}.h5')
             
-            # Setup Manager di Output (out_h5)
+            # Initialize the output master file manager
             out_h5 = HDF5EmbeddingDatasetsManager(output_h5_path, mode='a', partitions=set(('splits',)))
-            
             out_h5.initialize_hdf5(embedding_dim, spec_shape, audio_format, current_cut_secs, n_octave,
-                                             sample_rate, seed, noise_perc, split_name)
+                                   sample_rate, seed, noise_perc, split_name)
 
             for class_name in classes_list:
                 class_h5_path = os.path.join(root_dir, f'{current_cut_secs}_secs', class_name, f'{class_name}_{split_name}.h5')
                         
                 if not os.path.exists(class_h5_path):
-                    print(f"[WARNING] File non trovato per la classe '{class_name}' e split '{split_name}': {class_h5_path}. Salto.")
+                    print(f"[WARNING] Class file not found: {class_h5_path}. Skipping.")
                     continue
                         
-                print(f"Aggiunta dati dalla classe: {class_name}...")
+                print(f"Merging data for class: {class_name}...")
                         
                 try:
-                    # Uso HDF5EmbeddingDatasetsManager per la lettura (in_h5)
+                    # Open the individual class file for reading
                     in_h5 = HDF5EmbeddingDatasetsManager(class_h5_path, 'r', set(('splits', 'classes')))
                     
-                    # Lettura dei dati. Se fallisce qui, avremo un traceback.
+                    # Read all records from the class-specific dataset
                     class_data = in_h5['embedding_dataset'][:]
                     
+                    # Prepare the extended array with the output master format
                     class_data_extended = np.empty(class_data.shape, dtype=out_h5.dt)
                     
-                    # FIX: Copia dei campi usando .dtype.names (corretto nell'ultima iterazione)
+                    # Map common fields between input and output structures
                     for name in class_data_extended.dtype.names:
                         if name in class_data.dtype.names: 
                             class_data_extended[name] = class_data[name]
 
-                    # Aggiunta del metadato 'classes'
+                    # Inject the class name as a metadata field if required by the output structure
                     if 'classes' in class_data_extended.dtype.names:
                         class_data_extended['classes'] = np.array([class_name.encode('utf-8')] * len(class_data),
                                                                     dtype=class_data_extended.dtype['classes'])
                         
-                    # CHIAMATA CRUCIALE: Se non viene raggiunta, c'è un errore prima.
+                    # Bulk append to the master HDF5 file
                     out_h5.extend_dataset(class_data_extended)
-                    
-                    # Chiusura del manager di input
                     in_h5.close()
                     
                 except Exception as e:
                     print("\n" + "="*80)
-                    print(f"FATAL ERROR - Eccezione catturata durante l'unione dei file di classe '{class_name}' (Split {split_name}): {e}")
-                    # Stampa l'eccezione completa per il debug
+                    print(f"FATAL ERROR - Exception during merge of class '{class_name}' (Split {split_name}): {e}")
                     traceback.print_exc() 
                     print("="*80 + "\n")
-                    # Continua l'esecuzione
                     
-            # Chiusura del manager di output
-            out_h5.close() 
+            out_h5.close()
+
 
 def get_track_reproducibility_parameters(idx):
     """
-    Gives a dictionary containing all the information to reconstruct the track
-    an embedding was generated from. Needs the ID key for that embedding.
+    Parses a primary key string into its constituent parameters. This key allows for 
+    the exact reconstruction of the track slice and augmentation state used for a specific embedding.
 
     args:
-     - idx: embedding key given in the required format
-       ((class_idx)_(track hdf5 index)_(bucket number)_(round_)_(results number)).
+     - idx (str): The embedding key in format 'classIdx_hdf5Index_bucket_round_results'.
 
     returns:
-     - rep_params: dictionary containing all the parameters to reconstruct the track.
+     - rep_params (dict): Dictionary mapping parameter names to their parsed values.
     """
     rep_params = {}
     params = idx.split('_')
     param_names = [
-            "class_idx",
-            "hdf5_index",
-            "bucket",
-            "round_",
-            "results"
+            "class_idx",    # Global index of the class
+            "hdf5_index",   # Original index in the source audio HDF5
+            "bucket",       # Segment index within the track
+            "round_",       # Processing round (for offset calculation)
+            "results"       # Global counter (for deterministic noise)
         ]
     for param, name in zip(params, param_names):
         rep_params[name] = param
     return rep_params
 
+
 def reconstruct_tracks_from_embeddings(base_tracks_dir, hdf5_emb_path, idx_list):
     """
-    Reconstructs a bunch of tracks relative to a given group of embeddings from their unique
-    indexing. Indices are written in such a way to parse all the information needed for the
-    reconstruction through the function get_track_reproducibility_parameters.
+    Reconstructs the exact augmented audio waveforms (including noise and random offsets) 
+    that were used to generate a specific set of embeddings. This is critical for 
+    auditability and verification of the deterministic pipeline.
+
+    args:
+     - base_tracks_dir (str): Root directory containing the raw audio HDF5 files;
+     - hdf5_emb_path (str): Path to the embedding HDF5 containing processing attributes;
+     - idx_list (list): List of embedding primary keys (strings) to reconstruct.
+
+    returns:
+     - reconstr_tracks (dict): Mapping of embedding IDs to their reconstructed waveforms.
     """
+    # Open embedding file to retrieve global processing attributes
     hdf5_emb = HDF5EmbeddingDatasetsManager(hdf5_emb_path, 'r', ('splits',))
     audio_format = hdf5_emb.hf.attrs['audio_format']
     cut_secs = hdf5_emb.hf.attrs['cut_secs']
@@ -534,36 +564,41 @@ def reconstruct_tracks_from_embeddings(base_tracks_dir, hdf5_emb_path, idx_list)
     noise_perc = hdf5_emb.hf.attrs['noise_perc']
     seed = hdf5_emb.hf.attrs['seed']
     
-    # Mantenuta tua logica originale per le classi
-    classes_list = hdf5_emb.hf['embedding_dataset']['classes'].unique().sort()
+    # Retrieve and sort the class list to ensure index alignment
+    classes_list = sorted(np.unique(hdf5_emb.hf['embedding_dataset']['classes']))
     repr_params_list = [get_track_reproducibility_parameters(idx) for idx in idx_list]
-    repr_params_list = sorted(repr_params_list, key=lambda a : a['class_idx'])
+    repr_params_list = sorted(repr_params_list, key=lambda a : int(a['class_idx']))
+    
     curr_class = None
     reconstr_tracks = {}
 
-    for track_idx, repr_params in zip(idx_list, repr_params_list):
+    for track_idx_key, repr_params in zip(idx_list, repr_params_list):
+        # Open the source audio manager only when the class changes
         if repr_params['class_idx'] != curr_class:
-            if curr_class:
+            if curr_class is not None:
                 hdf5_class_tracks.close()
             curr_class = repr_params['class_idx']
-            class_seed = int(seed + hash(classes_list[curr_class]) % 10000000) # Cast int per sicurezza seed
-            hdf5_class_path = os.path.join(base_tracks_dir, f'raw_{audio_format}', f'{classes_list[curr_class]}_{audio_format}_dataset.h5')
+            # Recompute the class-specific seed for offset/noise RNGs
+            class_seed = int(seed + hash(classes_list[int(curr_class)]) % 10000000) 
+            hdf5_class_path = os.path.join(base_tracks_dir, f'raw_{audio_format}', f'{classes_list[int(curr_class)]}_{audio_format}_dataset.h5')
             hdf5_class_tracks = HDF5DatasetManager(hdf5_class_path, audio_format)
         
-        original_track = hdf5_class_tracks[repr_params['hdf5_index']]
+        # Load the original un-augmented track
+        original_track = hdf5_class_tracks.hf[f'audio_{audio_format}'][int(repr_params['hdf5_index'])]
 
-        # 1. Ricostruzione Offset (Mantenuta tua logica originale con offset_rng)
+        # 1. RECONSTRUCT OFFSET
+        # Replicate the random offset logic used during the initial processing
         offset_rng = np.random.default_rng(class_seed)
         offset = 0
         window_size = int(cut_secs * sample_rate)
-        if repr_params['round_'] > 1 and original_track.shape[0] > window_size:
+        if int(repr_params['round_']) > 1 and original_track.shape[0] > window_size:
             max_offset = original_track.shape[0] - window_size
             if max_offset > 0:
-                for _ in range(repr_params['round_'] + 1):
+                for _ in range(int(repr_params['round_'])):
                     offset = offset_rng.integers(0, max_offset)
 
-        # 2. Preparazione Cut
-        start = repr_params['bucket'] * window_size + offset
+        # 2. EXTRACT SEGMENT
+        start = int(repr_params['bucket']) * window_size + offset
         end = start + window_size
         cut_track = original_track[start:end]
 
@@ -571,67 +606,106 @@ def reconstruct_tracks_from_embeddings(base_tracks_dir, hdf5_emb_path, idx_list)
             pad_length = window_size - len(cut_track)
             cut_track = np.pad(cut_track, (0, pad_length), 'constant')
 
-        # 🎯 3. GENERAZIONE RUMORE DETERMINISTICA (Allineata a versione SLURM Batched)
-        # Calcoliamo la soglia come nel batch
+        # 🎯 3. RECONSTRUCT DETERMINISTIC NOISE
+        # Calculate amplitude-based noise threshold as done in the batch processing
         max_threshold = np.mean(np.abs(cut_track))
         
-        # Allineamento Seed: usiamo lo stesso seed calcolato nel flush_batch
-        # In batch era: class_seed + (results - len(batch)) + i
-        # Che semplificato per il singolo audio è: class_seed + results
-        audio_specific_seed = class_seed + repr_params['results']
-        noise_rng_batched = np.random.default_rng(audio_specific_byte_seed)
+        # Align noise RNG seed with the specific result index
+        audio_specific_seed = class_seed + int(repr_params['results'])
+        noise_rng_batched = np.random.default_rng(audio_specific_seed)
         
-        # Generiamo il rumore uniforme [-max_threshold, max_threshold]
+        # Generate and apply the noise mask
         noise = noise_rng_batched.uniform(-max_threshold, max_threshold, cut_track.shape)
-        
-        # Ricostruzione finale (Invariata)
         reconstr_track = (1 - noise_perc) * cut_track + noise_perc * noise
-        reconstr_tracks[track_idx] = reconstr_track
+        
+        reconstr_tracks[track_idx_key] = reconstr_track
 
     hdf5_emb.close()
-    hdf5_class_tracks.close()
+    if 'hdf5_class_tracks' in locals():
+        hdf5_class_tracks.close()
     return reconstr_tracks
 
-
 class TorchEmbeddingDataset(Dataset):
+    """
+    A standard PyTorch Dataset wrapper for CLAP embeddings. 
+    It handles the conversion of numpy arrays retrieved from HDF5 into 
+    Float32 and Long tensors, managing their placement on the target device.
+
+    args:
+     - embeddings (np.ndarray): The matrix of audio embeddings;
+     - labels (np.ndarray): The array of numerical class indices;
+     - classes (list): List of class names (strings) for reference;
+     - device (str/torch.device, default: 'cpu'): The hardware device where 
+                      tensors will be mapped.
+
+    returns:
+     - Instance: A dataset object compatible with torch.utils.data.DataLoader.
+    """
     def __init__(self, embeddings, labels, classes, device='cpu'):
         self.embeddings = torch.tensor(embeddings, dtype=torch.float32)
         self.labels = torch.tensor(labels, dtype=torch.long)
         self.classes = classes
         self.device = device
 
-    def __len__(self): return len(self.embeddings)
+    def __len__(self): 
+        return len(self.embeddings)
 
     def __getitem__(self, idx):
+        """
+        Retrieves a single embedding-label pair, mapped to the specified device.
+        """
         return self.embeddings[idx].to(self.device), self.labels[idx].to(self.device)
+
 
 def load_single_cut_secs_dataloaders(octaveband_dir, cut_secs, batch_size, device='cpu'):
     """
-    Carica gli embedding da HDF5 e crea i DataLoader per uno specifico cut_secs.
-    I percorsi seguono la struttura: {audio_format}/{n_octave}_octave/{cut_secs}_secs/combined_{split}.h5
+    High-level utility to load pre-calculated embeddings from HDF5 files and 
+    instantiate PyTorch DataLoaders for 'train', 'es' (early stopping), and 
+    'valid' splits for a specific segment duration.
+
+    The function performs automatic class-to-index encoding based on the 
+    sorted unique class names found in the datasets.
+
+    args:
+     - octaveband_dir (str): Root directory for the specific octave resolution;
+     - cut_secs (int/float): The duration of segments to load;
+     - batch_size (int): Number of samples per batch for the DataLoaders;
+     - device (str/torch.device, default: 'cpu'): Target device for tensors.
+
+    returns:
+     - dataloaders (dict): Dictionary mapping split names to their respective 
+                      torch.utils.data.DataLoader instances;
+     - classes (list): The sorted list of unique class names used for encoding.
     """
     splits = ['train', 'es', 'valid']
     dataloaders = {}
     classes = None
 
     for split in splits:
+        # Construct path following the established directory structure
         h5_path = os.path.join(octaveband_dir, f"{cut_secs}_secs", f"combined_{split}.h5")
         if not os.path.exists(h5_path):
-            raise FileNotFoundError(f"Dataset non trovato: {h5_path}")
+            raise FileNotFoundError(f"Dataset not found at: {h5_path}")
 
         with h5py.File(h5_path, 'r') as hf:
             data = hf['embedding_dataset']
+            # Load embeddings directly into memory
             embeddings = data['embeddings'][:]
-            # Decodifica classi per ottenere i label numerici
+            
+            # Decode class names from bytes to strings
             raw_classes = [c.decode('utf-8') if isinstance(c, bytes) else c for c in data['classes'][:]]
             
+            # Ensure consistent class ordering across all splits
             if classes is None:
                 classes = sorted(list(set(raw_classes)))
             
+            # Create numerical mapping
             class_to_idx = {cls: i for i, cls in enumerate(classes)}
             labels = np.array([class_to_idx[c] for c in raw_classes])
 
+            # Wrap in custom Dataset and create DataLoader
             dataset = TorchEmbeddingDataset(embeddings, labels, classes, device=device)
+            # Shuffle is enabled only for the training set
             dataloaders[split] = DataLoader(dataset, batch_size=batch_size, shuffle=(split == 'train'))
             
     return dataloaders, classes
@@ -640,46 +714,76 @@ def load_single_cut_secs_dataloaders(octaveband_dir, cut_secs, batch_size, devic
 ### Distributed environment functions ###
 
 def setup_environ_vars(slurm=True):
+    """
+    Configures the necessary environment variables (MASTER_ADDR and MASTER_PORT) 
+    required by PyTorch Distributed for process synchronization.
+
+    For SLURM environments, it uses the Job ID to generate a unique port, 
+    minimizing collisions between different concurrent jobs on the same cluster.
+
+    args:
+     - slurm (bool, default: True): If True, retrieves parameters from SLURM environment 
+                      variables. If False, configures variables for local execution.
+
+    returns:
+     - rank (int): The unique identifier of the current process within the group;
+     - world_size (int): Total number of processes in the distributed group.
+    """
     if slurm:
         rank = int(os.environ.get("SLURM_PROCID", 0))
         world_size = int(os.environ.get("SLURM_NTASKS", 4))
         
-        # 🎯 1. MASTER_ADDR: Mai usare localhost su SLURM. 
-        # Usiamo il nome del nodo che ospita il Rank 0.
+        # 🎯 MASTER_ADDR: For SLURM multi-node, this should ideally be the Rank 0 node.
+        # Here we default to localhost for single-node multi-GPU stability.
         if "MASTER_ADDR" not in os.environ:
-            # Se siamo su un nodo di login, hostname reale può dare problemi di routing
-            # Forziamo 127.0.0.1 che è l'indirizzo più sicuro per processi sullo stesso nodo
             os.environ["MASTER_ADDR"] = "127.0.0.1"
         
-        # 🎯 2. MASTER_PORT: Usiamo l'ID del Job SLURM come "seme" per la porta.
-        # In questo modo tutti i task dello STESSO JOB avranno la STESSA PORTA,
-        # ma job diversi avranno porte diverse. Geniale e sicuro.
+        # 🎯 MASTER_PORT: Deterministically generated from SLURM_JOB_ID.
+        # This ensures all tasks in the same job use the same port, but different 
+        # jobs use different ones.
         if "MASTER_PORT" not in os.environ:
             job_id = os.environ.get("SLURM_JOB_ID", "29500")
-            # Prendiamo le ultime 4 cifre del job_id e sommiamo a 20000
             base_port = 20000 + (int(job_id) % 10000)
             os.environ["MASTER_PORT"] = str(base_port)
             
         return rank, world_size
     else:
-        # Locale rimane invariato
+        # Local configuration using a random port for interactive sessions
         os.environ['MASTER_ADDR'] = 'localhost'
         os.environ['MASTER_PORT'] = str(np.random.randint(29500, 29999))
+        return 0, 1 # Default values for non-slurm sequential start
+
 
 def setup_distributed_environment(rank, world_size, slurm=True):
-    import datetime, time
+    """
+    Initializes the PyTorch distributed process group using the 'gloo' backend. 
+    It manages the rendezvous process via a shared synchronization file to 
+    ensure robust group initialization across multiple processes.
+
+    args:
+     - rank (int): The rank of the current process;
+     - world_size (int): The total number of processes in the group;
+     - slurm (bool, default: True): Whether the environment is SLURM-managed.
+
+    returns:
+     - device (torch.device): The specific hardware device (CPU or CUDA:rank) 
+                      assigned to this process.
+    """
+    import datetime
     sync_file = "/tmp_data/torch_sync_file"
     
+    # Rank 0 is responsible for cleaning up old synchronization files
     if rank == 0 and os.path.exists(sync_file):
         os.remove(sync_file)
 
     init_method = f"file://{sync_file}"
     
-    print(f"\n[RANK {rank}] >>> TENTATIVO RENDEZVOUS FILE-BASED (WS={world_size})", flush=True)
-    print(f"[RANK {rank}] Sync File: {sync_file}", flush=True)
+    # Diagnostic print visible only if the global VERBOSE flag is enabled
+    if VERBOSE:
+        print(f"[RANK {rank}] Attempting rendezvous on {sync_file} (WS={world_size})", flush=True)
 
     try:
-        # Usiamo GLOO per la massima compatibilità di rete nei test
+        # Initialize the group with a 60-second timeout
         dist.init_process_group(
             backend="gloo", 
             init_method=init_method,
@@ -687,18 +791,36 @@ def setup_distributed_environment(rank, world_size, slurm=True):
             world_size=world_size,
             timeout=datetime.timedelta(seconds=60)
         )
+        
+        # Map the process to a specific GPU if available, else CPU
         device = torch.device(f'cuda:{rank}') if torch.cuda.is_available() else torch.device('cpu')
-        print(f"[RANK {rank}] ✅ GRUPPO SINCRONIZZATO!", flush=True)
+        
+        # Only Rank 0 confirms successful synchronization to keep logs clean
+        if rank == 0:
+            print(f"🌐 [DIST] Group synchronized with {world_size} processes.", flush=True)
+            
         return device
     except Exception as e:
-        print(f"[RANK {rank}] ❌ ERRORE: {e}", flush=True)
+        # Critical errors are always printed regardless of VERBOSE flag
+        print(f"❌ [RANK {rank}] DISTRIBUTED ERROR: {e}", flush=True)
         raise e
 
+
 def cleanup_distributed_environment(rank):
-    """Cleanup con gestione errori per evitare crash a catena."""
+    """
+    Gracefully shuts down the distributed process group.
+
+    args:
+     - rank (int): The rank of the process being shut down.
+
+    returns:
+     - None
+    """
     try:
-        # Riduciamo il timeout del barrier o mettiamolo in un try
         dist.destroy_process_group()
+        if VERBOSE:
+            logging.info(f"Process {rank}: Group destroyed successfully.")
     except Exception as e:
-        logging.warning(f"Rank {rank}: Errore durante il cleanup dist: {e}")
-    logging.info(f"Processo {rank} ha terminato il suo lavoro.")
+        # Cleanup errors are typically non-fatal but logged in VERBOSE mode
+        if VERBOSE:
+            logging.warning(f"Rank {rank}: Error during dist cleanup: {e}")
