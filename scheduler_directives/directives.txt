@@ -7,6 +7,8 @@ ROBERTA_PATH      | /leonardo_scratch/large/userexternal/USER/SEC_pipeline/.clap
 SLURM_ACCOUNT     | IscrC_Pb-skite
 SLURM_PARTITION   | boost_usr_prod
 SLURM_TIME        | 23:59:59
+# Opzioni: sequential (default) | parallel
+SCHEDULING_MODE   | parallel
 
 # ==========================================================
 # EXECUTION LIST

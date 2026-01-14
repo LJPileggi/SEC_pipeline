@@ -61,6 +61,16 @@ run_interactive() {
             --n_octave "$N_OCTAVE" \
             --audio_format "$AUDIO_FORMAT"
 
+    echo "Joining HDF5 files..."
+    singularity exec --nv \\
+        --bind "/leonardo_scratch:/leonardo_scratch" \\
+        --bind "\$JOB_WORK_DIR:/tmp_data" \\
+        --bind "\$(pwd):/app" \\
+        --pwd "/app" \\
+        "$SIF_FILE" \\
+        python3 scripts/join_hdf5.py --config_file "$c_file" --n_octave "$oct" --audio_format "$fmt"
+
+
     # Workspace cleanup
     echo "🧹 Cleaning up temporary data..."
     rm -rf "$TEMP_BASE"
@@ -113,6 +123,15 @@ srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \\
     --pwd "/app" \\
     "\$SIF_FILE" \\
     python3 scripts/get_clap_embeddings.py --config_file "$CONFIG_FILE" --n_octave "$N_OCTAVE" --audio_format "$AUDIO_FORMAT"
+
+echo "Joining HDF5 files..."
+singularity exec --nv \\
+    --bind "/leonardo_scratch:/leonardo_scratch" \\
+    --bind "\$JOB_WORK_DIR:/tmp_data" \\
+    --bind "\$(pwd):/app" \\
+    --pwd "/app" \\
+    "$SIF_FILE" \\
+    python3 scripts/join_hdf5.py --config_file "$c_file" --n_octave "$oct" --audio_format "$fmt"
 
 rm -rf "\$JOB_WORK_DIR"
 EOF
