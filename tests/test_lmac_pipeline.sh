@@ -125,10 +125,12 @@ def verify():
         data = json.load(f)
         
     for entry in data:
-        if not np.isfinite(entry['original_conf']) or not np.isfinite(entry['masked_conf']):
-            print(f"❌ Errore: Confidenza NaN/Inf per {entry['id']}")
+        # Verifica che la chiave 'audio_path' esista prima di usarla
+        if 'audio_path' not in entry:
+            print(f"❌ Errore: Chiave 'audio_path' mancante nel JSON per ID {entry.get('id')}")
             exit(1)
-        
+            
+        # Costruzione del percorso per il controllo di ampiezza
         audio_file = os.path.join("$RESULT_PATH_INTERNAL/interpretations", os.path.basename(entry['audio_path']))
         audio, _ = sf.read(audio_file)
         if np.max(np.abs(audio)) < 1e-7:

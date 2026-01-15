@@ -124,7 +124,8 @@ def main():
             "id": emb_id,
             "original_class": classes[torch.argmax(orig_logits).item()],
             "original_conf": torch.softmax(orig_logits, dim=1).max().item(),
-            "masked_conf": torch.softmax(masked_logits, dim=1).max().item()
+            "masked_conf": torch.softmax(masked_logits, dim=1).max().item(),
+            "audio_path": save_path
         })
 
     with open(os.path.join(output_base, 'explainability_summary.json'), 'w') as f:
