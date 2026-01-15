@@ -31,7 +31,6 @@ import h5py
 import numpy as np
 import os
 import torch
-sys.path.append('.') 
 from src.utils import HDF5EmbeddingDatasetsManager
 
 def create_mock_data():
@@ -102,7 +101,6 @@ import json
 import os
 import soundfile as sf
 import numpy as np
-sys.path.append('.') 
 
 def verify():
     summary_path = "$RESULT_PATH/explainability_summary.json"
