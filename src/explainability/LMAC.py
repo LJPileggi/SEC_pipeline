@@ -41,10 +41,11 @@ class LMAC:
     Listenable Maps for Audio Classifiers (L-MAC).
     Core logic for generating and training audio interpretability masks.
     """
-    def __init__(self, classifier, decoder, clap_model, lambda_in=1.0, lambda_s=0.001):
+    def __init__(self, classifier, decoder, clap_model, audio_embedding, lambda_in=1.0, lambda_s=0.001):
         self.classifier = classifier # This is the FinetunedModel passed from the pipeline
         self.decoder = decoder
         self.clap_model = clap_model
+        self.audio_embedding = audio_embedding
         self.lambda_in = lambda_in
         self.lambda_s = lambda_s
         self.ce_loss = nn.CrossEntropyLoss()
@@ -83,7 +84,7 @@ class LMAC:
 
         # 3. Audio Loopback: Masked Spec -> Waveform -> New Embedding
         audio_in = self._apply_mask_to_audio(X_masked, sampling_rate)
-        h_in = self.clap_model.get_audio_embedding(audio_in)
+        h_in = self.audio_embedding(audio_in)
         
         # 4. Final classification of the "masked-in" part
         logits_in = self.classifier(h_in)

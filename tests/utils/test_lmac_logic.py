@@ -38,8 +38,8 @@ def test_full_pipeline():
 
     # 3. TEST: LMAC Masking Loss & Audio Loopback
     print("🧪 Testing LMAC Loss and Audio Reconstruction (Griffin-Lim)...")
-    clap_wrapper, _, _ = CLAP_initializer(device=device, use_cuda=torch.cuda.is_available())
-    lmac = LMAC(classifier=classifier, decoder=decoder, clap_model=clap_wrapper)
+    clap_wrapper, audio_embedding, _ = CLAP_initializer(device=device, use_cuda=torch.cuda.is_available())
+    lmac = LMAC(classifier=classifier, decoder=decoder, clap_model=clap_wrapper, audio_embedding=audio_embedding)
     
     # Simulate data from HDF5
     dummy_spec_linear = torch.abs(torch.randn(1, 1, 27, 256)).to(device)
