@@ -57,8 +57,9 @@ def create_mock_data():
     for i in range(10):
         emb_id = f"0_{i}_0_1_{i}"
         ids.append(emb_id)
-        manager.add_to_data_buffer(np.random.randn(1024), np.abs(np.random.randn(27, 256)), 
-                                 emb_id, f"track_{i}", first_class, "sub_1")
+        # Usiamo valori positivi più alti per lo spettrogramma sintetico
+        spec = np.abs(np.random.randn(27, 256)) * 10 
+        manager.add_to_data_buffer(np.random.randn(1024), spec, emb_id, f"track_{i}", first_class, "sub_1")
     manager.close()
     
     with open("$CONTAINER_WORK_DIR/test_ids.txt", "w") as f:

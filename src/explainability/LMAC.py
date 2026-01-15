@@ -52,22 +52,24 @@ class LMAC:
         self.ce_loss = nn.CrossEntropyLoss()
 
     def _apply_mask_to_audio(self, masked_spec, sampling_rate):
-        """
-        Internal helper to convert a masked spectrogram back to a waveform 
-        using Griffin-Lim. Necessary for feeding the result back into CLAP.
-        """
-        # Linear spectrogram reconstruction logic
         spec_np = masked_spec.detach().cpu().numpy().squeeze()
+        if spec_np.ndim == 1: spec_np = spec_np.reshape(-1, 1) # Safety for single frames
         
-        # Placeholder frequencies (should match your n-octave center frequencies)
-        # For training, we use an approximation to allow gradient flow via CLAP
         n_fft = 2048
         stft_approx = np.zeros((n_fft // 2 + 1, spec_np.shape[1]), dtype=np.float32)
         
-        # Map n-octave bands back to linear STFT bins (Simplified mapping)
-        # This allows the classifier to "hear" the masked content
-        recon_audio = librosa.griffinlim(stft_approx, n_iter=16) 
+        # 🎯 MAPPING: Distribuiamo le 27 bande sulle frequenze STFT
+        # In produzione useremo i center_freqs, qui facciamo uno stretching lineare
+        n_bins = stft_approx.shape[0]
+        n_bands = spec_np.shape[0]
+        hop = n_bins // n_bands
         
+        for i in range(n_bands):
+            start_bin = i * hop
+            end_bin = min((i + 1) * hop, n_bins)
+            stft_approx[start_bin:end_bin, :] = spec_np[i, :] # Spalmiamo l'energia
+
+        recon_audio = librosa.griffinlim(stft_approx, n_iter=16) 
         return torch.from_numpy(recon_audio).float().to(masked_spec.device).unsqueeze(0)
 
     def calculate_masking_loss(self, h_original, linear_spec_X, sampling_rate):
