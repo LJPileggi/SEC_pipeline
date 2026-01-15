@@ -84,7 +84,7 @@ class LMAC:
 
         # 3. Audio Loopback: Masked Spec -> Waveform -> New Embedding
         audio_in = self._apply_mask_to_audio(X_masked, sampling_rate)
-        h_in = self.audio_embedding(audio_in)
+        h_in = self.audio_embedding(audio_in)[0][0]
         
         # 4. Final classification of the "masked-in" part
         logits_in = self.classifier(h_in)
