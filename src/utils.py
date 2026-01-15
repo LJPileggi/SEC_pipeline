@@ -581,17 +581,8 @@ def get_track_reproducibility_parameters(idx):
 
 def reconstruct_tracks_from_embeddings(base_tracks_dir, hdf5_emb_path, idx_list):
     """
-    Reconstructs the exact augmented audio waveforms (including noise and random offsets) 
-    that were used to generate a specific set of embeddings. This is critical for 
-    auditability and verification of the deterministic pipeline.
-
-    args:
-     - base_tracks_dir (str): Root directory containing the raw audio HDF5 files;
-     - hdf5_emb_path (str): Path to the embedding HDF5 containing processing attributes;
-     - idx_list (list): List of embedding primary keys (strings) to reconstruct.
-
-    returns:
-     - reconstr_tracks (dict): Mapping of embedding IDs to their reconstructed waveforms.
+    Reconstructs the exact augmented audio waveforms used to generate embeddings.
+    FIX: Added UTF-8 decoding for class names to prevent 'b' prefix in file paths.
     """
     # Open embedding file to retrieve global processing attributes
     hdf5_emb = HDF5EmbeddingDatasetsManager(hdf5_emb_path, 'r', ('splits',))
@@ -601,8 +592,10 @@ def reconstruct_tracks_from_embeddings(base_tracks_dir, hdf5_emb_path, idx_list)
     noise_perc = hdf5_emb.hf.attrs['noise_perc']
     seed = hdf5_emb.hf.attrs['seed']
     
-    # Retrieve and sort the class list to ensure index alignment
-    classes_list = sorted(np.unique(hdf5_emb.hf['embedding_dataset']['classes']))
+    # --- FIX: Decode bytes from HDF5 classes dataset ---
+    raw_classes = np.unique(hdf5_emb.hf['embedding_dataset']['classes'])
+    classes_list = sorted([c.decode('utf-8') if isinstance(c, bytes) else str(c) for c in raw_classes])
+    
     repr_params_list = [get_track_reproducibility_parameters(idx) for idx in idx_list]
     repr_params_list = sorted(repr_params_list, key=lambda a : int(a['class_idx']))
     
@@ -610,21 +603,20 @@ def reconstruct_tracks_from_embeddings(base_tracks_dir, hdf5_emb_path, idx_list)
     reconstr_tracks = {}
 
     for track_idx_key, repr_params in zip(idx_list, repr_params_list):
-        # Open the source audio manager only when the class changes
         if repr_params['class_idx'] != curr_class:
             if curr_class is not None:
                 hdf5_class_tracks.close()
             curr_class = repr_params['class_idx']
-            # Recompute the class-specific seed for offset/noise RNGs
-            class_seed = int(seed + hash(classes_list[int(curr_class)]) % 10000000) 
-            hdf5_class_path = os.path.join(base_tracks_dir, f'raw_{audio_format}', f'{classes_list[int(curr_class)]}_{audio_format}_dataset.h5')
+            
+            # Recompute class seed and path using decoded class name
+            class_name = classes_list[int(curr_class)]
+            class_seed = int(seed + hash(class_name) % 10000000) 
+            hdf5_class_path = os.path.join(base_tracks_dir, f'raw_{audio_format}', f'{class_name}_{audio_format}_dataset.h5')
             hdf5_class_tracks = HDF5DatasetManager(hdf5_class_path, audio_format)
         
-        # Load the original un-augmented track
         original_track = hdf5_class_tracks.hf[f'audio_{audio_format}'][int(repr_params['hdf5_index'])]
 
         # 1. RECONSTRUCT OFFSET
-        # Replicate the random offset logic used during the initial processing
         offset_rng = np.random.default_rng(class_seed)
         offset = 0
         window_size = int(cut_secs * sample_rate)
@@ -644,14 +636,10 @@ def reconstruct_tracks_from_embeddings(base_tracks_dir, hdf5_emb_path, idx_list)
             cut_track = np.pad(cut_track, (0, pad_length), 'constant')
 
         # 🎯 3. RECONSTRUCT DETERMINISTIC NOISE
-        # Calculate amplitude-based noise threshold as done in the batch processing
         max_threshold = np.mean(np.abs(cut_track))
-        
-        # Align noise RNG seed with the specific result index
         audio_specific_seed = class_seed + int(repr_params['results'])
         noise_rng_batched = np.random.default_rng(audio_specific_seed)
         
-        # Generate and apply the noise mask
         noise = noise_rng_batched.uniform(-max_threshold, max_threshold, cut_track.shape)
         reconstr_track = (1 - noise_perc) * cut_track + noise_perc * noise
         

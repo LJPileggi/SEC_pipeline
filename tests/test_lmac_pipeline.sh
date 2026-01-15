@@ -6,17 +6,17 @@ SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/cl
 CLAP_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
 ROBERTA_PATH="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/roberta-base"
 
-# Workspace temporaneo isolato
+# Workspace temporaneo isolato per il test
 TEST_DIR="/leonardo_scratch/large/userexternal/$USER/tmp_expl_test_$$"
 mkdir -p "$TEST_DIR/work_dir/roberta-base" "$TEST_DIR/work_dir/weights"
-mkdir -p "$TEST_DIR/dataSEC/RAW_DATASET/raw_wav" # Path richiesto da reconstruct_tracks
+mkdir -p "$TEST_DIR/dataSEC/RAW_DATASET/raw_wav"
 mkdir -p "$TEST_DIR/numba_cache"
 
 # Mock assets per offline mode
 cp -r "$ROBERTA_PATH/." "$TEST_DIR/work_dir/roberta-base/"
 cp "$CLAP_WEIGHTS" "$TEST_DIR/work_dir/weights/CLAP_weights_2023.pth"
 
-# Esportazione variabili (Numba redirect fondamentale per quota disco)
+# Export variabili per redirect e cache
 export CLAP_TEXT_ENCODER_PATH="/tmp_data/work_dir/roberta-base"
 export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/weights/CLAP_weights_2023.pth"
 export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
@@ -35,11 +35,11 @@ sys.path.append('.')
 from src.utils import HDF5EmbeddingDatasetsManager, get_config_from_yaml
 
 def create_mock_data():
-    # Usiamo test_config.yaml come richiesto
+    # Usiamo test_config.yaml come riferimento
     classes, _, _, _, sr, _, _, _, _, _, _ = get_config_from_yaml("test_config.yaml")
     first_class = classes[0]
     
-    # A. Crea HDF5 di Preprocessed (Embedding + Spectrogram)
+    # A. Preprocessed HDF5 (Embedding + Spectrogram)
     base_path = "/tmp_data/dataSEC/PREPROCESSED_DATASET/wav/1_octave/3.0_secs"
     os.makedirs(base_path, exist_ok=True)
     h5_path = os.path.join(base_path, "combined_valid.h5")
@@ -53,7 +53,7 @@ def create_mock_data():
     
     ids = []
     for i in range(10):
-        emb_id = f"0_{i}_0_1_{i}" # classIdx_trackIdx_bucket_round_results
+        emb_id = f"0_{i}_0_1_{i}"
         ids.append(emb_id)
         manager.add_to_data_buffer(np.random.randn(1024), np.abs(np.random.randn(27, 256)), 
                                  emb_id, f"track_{i}", first_class, "sub_1")
@@ -62,16 +62,16 @@ def create_mock_data():
     with open("/tmp_data/test_ids.txt", "w") as f:
         for eid in ids: f.write(f"{eid}\n")
 
-    # B. Crea HDF5 di RAW_DATASET (necessario per reconstruct_tracks_from_embeddings)
+    # B. RAW Audio HDF5 (Necessario per reconstruction)
     raw_path = f"/tmp_data/dataSEC/RAW_DATASET/raw_wav/{first_class}_wav_dataset.h5"
     with h5py.File(raw_path, 'w') as f:
         f.attrs['class_idx'] = 0
         f.create_dataset('audio_wav', data=np.random.randn(20, sr*5))
         dt = np.dtype([('track_name', 'S100'), ('subclass', 'S100')])
-        meta = np.array([(f'track_{i}'.encode(), b'sub_1') for i in range(20)], dtype=dt)
+        meta = np.array([(f'track_{i}'.encode('utf-8'), b'sub_1') for i in range(20)], dtype=dt)
         f.create_dataset('metadata_wav', data=meta)
 
-    # C. Salva pesi coerenti con test_config.yaml (3 classi)
+    # C. Pesi Classifier coerenti con test_config (3 classi)
     from src.models import FinetunedModel
     model = FinetunedModel(classes=classes, device='cpu')
     torch.save(model.state_dict(), "/tmp_data/work_dir/weights/mock_classifier.pt")
@@ -80,7 +80,7 @@ if __name__ == '__main__':
     create_mock_data()
 EOF
 
-singularity exec --bind "$TEST_DIR:/tmp_data" "$SIF_FILE" python3 /tmp_data/prepare_test.py
+singularity exec --bind "$TEST_DIR:/tmp_data" "$SIF_FILE" python3 "$TEST_DIR/prepare_test.py"
 
 echo "--- 🚀 Lancio Pipeline di Explainability ---"
 
@@ -102,7 +102,7 @@ singularity exec --nv \
 
 echo "--- 🔍 Validazione Consistenza Risultati ---"
 
-# 4. VERIFICA INTEGRITÀ DATI [cite: 31, 305, 308]
+# 4. VERIFICA INTEGRITÀ DATI
 RESULT_PATH="$TEST_DIR/dataSEC/results/explainability/wav/1_octave/3.0_secs"
 
 cat << EOF > "$TEST_DIR/verify_integrity.py"
@@ -123,24 +123,24 @@ def verify():
         data = json.load(f)
         
     for entry in data:
-        # Check confidenze (non NaN) [cite: 139]
+        # Check consistenza numerica (non NaN)
         if not np.isfinite(entry['original_conf']) or not np.isfinite(entry['masked_conf']):
             print(f"❌ Errore: Confidenza non valida (NaN/Inf) per {entry['id']}")
             exit(1)
         
-        # Check audio non muto [cite: 30]
+        # Check audio non muto (consistenza fisica)
         audio_file = os.path.join("$RESULT_PATH/interpretations", os.path.basename(entry['audio_path']))
         audio, _ = sf.read(audio_file)
         if np.max(np.abs(audio)) < 1e-7:
              print(f"⚠️ Avviso: Audio silenzioso per {entry['id']}")
 
-    print(f"✅ Test superato: {len(data)} interpretazioni generate correttamente.")
+    print(f"✅ Test superato: {len(data)} interpretazioni verificate con successo.")
 
 if __name__ == '__main__':
     verify()
 EOF
 
-singularity exec --bind "$TEST_DIR:/tmp_data" "$SIF_FILE" python3 /tmp_data/verify_integrity.py
+singularity exec --bind "$TEST_DIR:/tmp_data" "$SIF_FILE" python3 "$TEST_DIR/verify_integrity.py"
 
 # 5. CLEANUP
 echo "🧹 Pulizia workspace: $TEST_DIR"
