@@ -204,11 +204,24 @@ class FinetunedModel(torch.nn.Module):
     """
     1024-unit classifier layer built on top of the CLAP embeddings.
     """
-    def __init__(self, classes, device='cpu'):
+    def __init__(self, classes, device='cpu', weights_path=None):
         super().__init__()
-        self.classifier = torch.nn.Linear(1024, len(classes)).to(device)
         self.classes = classes
         self.device = device
+        self.classifier = torch.nn.Linear(1024, len(classes)).to(device)
+        
+        if weights_path and os.path.exists(weights_path):
+            try:
+                checkpoint = torch.load(weights_path, map_location=device)
+                if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+                    self.load_state_dict(checkpoint['state_dict'])
+                else:
+                    self.load_state_dict(checkpoint)
+                print(f"✅ Models weights correctly loaded from: {weights_path}")
+            except Exception as e:
+                print(f"⚠️ Error during loading of weights: {e}")
+        
+        self.eval()
         
     def forward(self, x):
         if isinstance(x, np.ndarray):
