@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import librosa
-from .models import FinetunedModel
+from src.models import FinetunedModel
 
 class Decoder(nn.Module):
     """
