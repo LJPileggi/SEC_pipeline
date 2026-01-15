@@ -30,6 +30,7 @@ cat << EOF > "$TEST_DIR/prepare_test.py"
 import h5py
 import numpy as np
 import os
+import sys
 import torch
 sys.path.append('.') 
 from src.utils import HDF5EmbeddingDatasetsManager
@@ -100,6 +101,7 @@ RESULT_PATH="$TEST_DIR/dataSEC/results/explainability/wav/1_octave/3.0_secs"
 cat << EOF > "$TEST_DIR/verify_integrity.py"
 import json
 import os
+import sys
 import soundfile as sf
 import numpy as np
 sys.path.append('.') 
