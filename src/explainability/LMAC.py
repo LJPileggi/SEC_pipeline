@@ -13,7 +13,8 @@ class Decoder(nn.Module):
     """
     def __init__(self, latent_dim_input=1024, output_spectrogram_shape=(27, 256)):
         super(Decoder, self).__init__()
-        self.output_shape = output_spectrogram_shape
+        # 🎯 ASSICURIAMO che sia una tupla di int
+        self.output_shape = tuple(int(s) for s in output_spectrogram_shape)
         
         # Initial projection to spatial feature maps
         self.fc = nn.Linear(latent_dim_input, 128 * 8 * 8)

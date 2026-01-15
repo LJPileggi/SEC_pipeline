@@ -77,7 +77,10 @@ def main():
                            f"{args.cut_secs}_secs", f"combined_{args.split}.h5")
     
     emb_manager = HDF5EmbeddingDatasetsManager(h5_path, mode='r')
-    spec_shape = emb_manager.hf.attrs['spec_shape']
+    
+    # 🎯 CORREZIONE: Convertiamo l'attributo numpy in una tupla di interi standard
+    raw_spec_shape = emb_manager.hf.attrs['spec_shape']
+    spec_shape = tuple(int(s) for s in raw_spec_shape)
     
     decoder = Decoder(latent_dim_input=1024, output_spectrogram_shape=spec_shape).to(device)
     lmac = LMAC(classifier=classifier, decoder=decoder, clap_model=clap_model, audio_embedding=audio_embedding)
