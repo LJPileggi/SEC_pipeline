@@ -38,7 +38,7 @@ def parsing():
     parser.add_argument('--config_file', type=str, default='config0.yaml')
     parser.add_argument('--audio_format', type=str, required=True)
     parser.add_argument('--n_octave', type=int, required=True)
-    parser.add_argument('--cut_secs', type=float, required=True)
+    parser.add_argument('--cut_secs', type=int, required=True)
     parser.add_argument('--split', type=str, default='valid')
     parser.add_argument('--weights_path', type=str, required=True)
     return parser.parse_args()
