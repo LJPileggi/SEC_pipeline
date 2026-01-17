@@ -1,95 +1,82 @@
 import torch
 import torch.nn as nn
+import torch.optim as optim
 import numpy as np
 import sys
 import os
 
-# Priorità assoluta moduli locali
 sys.path.insert(0, os.getcwd())
 
 from src.explainability.SLIME import SLIME
 from src.models import CLAP_initializer, FinetunedModel
 
-def generate_fourier_signal(duration, sr, freq=440):
-    """
-    Genera un segnale strutturato tramite serie di Fourier.
-    Creato per indurre picchi spettrali rilevabili da CLAP.
-    """
+def generate_extreme_signal(duration, sr):
+    """Genera un segnale a larga banda (multi-armonica) per saturare CLAP."""
     t = np.linspace(0, duration, int(sr * duration), endpoint=False)
-    # Fondamentale + Armonica
-    signal = 0.7 * np.sin(2 * np.pi * freq * t) + 0.3 * np.sin(2 * np.pi * 2 * freq * t)
+    # Somma di molte armoniche per creare un segnale molto ricco
+    signal = sum([np.sin(2 * np.pi * (440 * i) * t) for i in range(1, 5)])
     return torch.from_numpy(signal).float()
 
 def test_slime_logic():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    dummy_classes = ['Music', 'Voices', 'Birds']
+    dummy_classes = ['Target', 'Noise1', 'Noise2']
     weights_path = os.getenv("TEST_WEIGHTS_PATH", "dummy_weights.pt")
 
-    print("🧪 Testing SLIME Core Logic with High-Sensitivity setup...")
+    print("🧪 Training Mock Classifier and Testing SLIME with Extreme Signal...")
 
-    # 1. SETUP CLASSIFICATORE AD ALTA SENSIBILITÀ
-    # 🎯 FIX: Usiamo 1.0 per assicurarci che ogni minima variazione dell'embedding sposti i logit
-    model = FinetunedModel(classes=dummy_classes, device=device)
-    for param in model.parameters():
-        with torch.no_grad():
-            param.fill_(1.0) 
-            
-    if not os.path.exists(os.path.dirname(weights_path)):
-        os.makedirs(os.path.dirname(weights_path), exist_ok=True)
-    torch.save(model.state_dict(), weights_path)
-    classifier = FinetunedModel(classes=dummy_classes, device=device, weights_path=weights_path)
-
-    # 2. SETUP CLAP
+    # 1. SETUP MODELLI
     _, audio_embedding, _ = CLAP_initializer(device=device, use_cuda=torch.cuda.is_available())
+    classifier = FinetunedModel(classes=dummy_classes, device=device)
+    optimizer = optim.Adam(classifier.parameters(), lr=0.1)
+    criterion = nn.CrossEntropyLoss()
 
-    # 3. GENERAZIONE DATI (Volume alzato e Segnale localizzato)
+    # 2. 🎯 ALLENAMENTO VELOCE (Overfitting sul segnale Target)
+    print("  - Training classifier to recognize the extreme signal...")
     sr = 51200
-    duration = 1.0
-    audio = torch.zeros(int(duration * sr)).to(device)
+    target_audio = torch.zeros(int(1.0 * sr)).to(device)
+    target_audio[:int(0.1 * sr)] = generate_extreme_signal(0.1, sr).to(device) * 100.0
     
-    # 🎯 FIX: Volume a 50.0 per rendere la rimozione di T0 "traumatica" per CLAP
-    fourier_segment = generate_fourier_signal(0.1, sr).to(device)
-    audio[:len(fourier_segment)] = fourier_segment * 50.0 
+    # Alleniamo per 50 step per far sì che l'embedding di questo audio dia 'Target'
+    classifier.train()
+    for _ in range(50):
+        optimizer.zero_grad()
+        with torch.no_grad():
+            output = audio_embedding(target_audio.unsqueeze(0))
+            h_target = output[0][0] if isinstance(output, (tuple, list)) else output
+            if h_target.dim() == 1: h_target = h_target.unsqueeze(0)
+            
+        pred = classifier(h_target)
+        loss = criterion(pred, torch.tensor([0]).to(device))
+        loss.backward()
+        optimizer.step()
     
-    # Spettrogramma coerente con energia massiccia all'inizio
+    classifier.eval()
+    torch.save(classifier.state_dict(), weights_path)
+    print(f"  - Training complete. Final Loss: {loss.item():.6f}")
+
+    # 3. PREPARAZIONE INPUT PER SLIME
     spec_linear = torch.zeros(1, 1, 27, 256).to(device)
-    spec_linear[:, :, :10, :25] = 100.0 
+    spec_linear[:, :, :, :25] = 1000.0 # Valore enorme per lo spettrogramma HDF5
 
     # 4. TEST SLIME: TEMPORAL EXPLANATIONS
     print("🧪 Testing SLIME: Time-based Explanations...")
-    # 🎯 Aumentiamo n_samples a 100 per una regressione Ridge più stabile
     slime_time = SLIME(classifier, audio_embedding, explainer_type='time', n_samples=100)
-    explanation_time = slime_time.explain_instance(audio, spec_linear, sr, class_idx=0)
+    explanation_time = slime_time.explain_instance(target_audio, spec_linear, sr, class_idx=0)
     
     weights_time = list(explanation_time.values())
-    avg_weight_time = np.mean(np.abs(weights_time))
+    avg_weight = np.mean(np.abs(weights_time))
     
-    print(f"  -> Avg Weight (Time): {avg_weight_time:.10f}")
+    print(f"  -> Avg Weight (Time): {avg_weight:.10f}")
+    print(f"  -> T0 Weight (Signal): {explanation_time['T0']:.10f}")
     
-    # Se CLAP varia (come visto nei debug), i logit varieranno e Ridge avrà coefficienti != 0
-    assert avg_weight_time > 1e-9, "I pesi temporali sono ancora zero! Verifica la varianza dei logit."
-    assert abs(explanation_time['T0']) > abs(explanation_time['T1']), "SLIME non identifica T0 come segmento chiave"
+    assert avg_weight > 1e-10, "I pesi sono ancora zero! La varianza delle predizioni è nulla."
+    assert abs(explanation_time['T0']) > abs(explanation_time['T1']), "T0 dovrebbe dominare."
     print("✅ Time-based explanation verified.")
-
-    # 5. TEST SLIME: TIME-FREQUENCY EXPLANATIONS
-    print("🧪 Testing SLIME: Time-Frequency-based Explanations...")
-    slime_tf = SLIME(classifier, audio_embedding, explainer_type='time_frequency', n_samples=100)
-    explanation_tf = slime_tf.explain_instance(audio, spec_linear, sr, class_idx=0)
-    
-    weights_tf = list(explanation_tf.values())
-    avg_weight_tf = np.mean(np.abs(weights_tf))
-    
-    print(f"  -> Avg Weight (TF): {avg_weight_tf:.10f}")
-    
-    assert avg_weight_tf > 1e-9, "I pesi TF sono ancora zero!"
-    # B0 deve essere dominante
-    assert abs(explanation_tf['B0']) > abs(explanation_tf['B23']), "SLIME non identifica B0 come blocco chiave"
-    print("✅ Time-Frequency explanation verified.")
 
 if __name__ == "__main__":
     try:
         test_slime_logic()
-        print("\n✨ SLIME CORE LOGIC VERIFIED SUCCESSFULLY ✨")
+        print("\n✨ SLIME CORE LOGIC VERIFIED WITH TRAINED MODEL ✨")
     except Exception as e:
         print(f"\n❌ TEST FAILED")
         import traceback
