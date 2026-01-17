@@ -55,11 +55,25 @@ class SLIME:
                                             synthetic_interpretable[i], sampling_rate)
             
             with torch.no_grad():
-                # Loopback via CLAP and Classifier [cite: 168]
+                # Loopback via CLAP e Classifier
                 output = self.audio_embedding(masked_audio)
                 h_in = output[0][0] if isinstance(output, (tuple, list)) else output
-                probs = torch.softmax(self.classifier(h_in), dim=-1)
-                predictions.append(probs[0, class_idx].item())
+                
+                # Assicuriamoci che h_in abbia la dimensione del batch per il classificatore
+                if h_in.dim() == 1:
+                    h_in = h_in.unsqueeze(0)
+                
+                logits = self.classifier(h_in)
+                probs = torch.softmax(logits, dim=-1)
+                
+                # 🎯 CORREZIONE: Gestione flessibile della forma del tensore
+                # Se probs è [1, N], prendiamo [0, class_idx]. Se è [N], prendiamo [class_idx].
+                if probs.dim() > 1:
+                    val = probs[0, class_idx].item()
+                else:
+                    val = probs[class_idx].item()
+                
+                predictions.append(val)
 
         # 3. Kernel weighting based on distance to original instance [cite: 152, 168, 171]
         distances = np.linalg.norm(synthetic_interpretable - 1, axis=1)
