@@ -48,9 +48,19 @@ EOF
 singularity exec --bind "$SCRATCH_TEMP_DIR:$CONTAINER_WORK_DIR" "$SIF_FILE" python3 "$CONTAINER_WORK_DIR/prepare_test.py"
 
 echo "--- 🚀 Lancio Pipeline SLIME ---"
-singularity exec --nv --bind "$SCRATCH_TEMP_DIR:$CONTAINER_WORK_DIR" --bind "$(pwd):/app" --pwd "/app" "$SIF_FILE" \
-    python3 scripts/SLIME_pipeline.py --ids_file "$CONTAINER_WORK_DIR/test_ids.txt" --config_file "test_config.yaml" \
-    --audio_format "wav" --n_octave 1 --cut_secs 3 --weights_path "$CONTAINER_WORK_DIR/work_dir/weights/mock_classifier.pt"
+singularity exec --nv \
+    --bind "$SCRATCH_TEMP_DIR:$CONTAINER_WORK_DIR" \
+    --bind "$(pwd):/app" \
+    --env NODE_TEMP_BASE_DIR="$CONTAINER_WORK_DIR/dataSEC" \
+    --pwd "/app" \
+    "$SIF_FILE" \
+    python3 scripts/SLIME_pipeline.py \
+        --ids_file "$CONTAINER_WORK_DIR/test_ids.txt" \
+        --config_file "test_config.yaml" \
+        --audio_format "wav" \
+        --n_octave 1 \
+        --cut_secs 3 \
+        --weights_path "$CONTAINER_WORK_DIR/work_dir/weights/mock_classifier.pt"
 
 echo "--- 🔍 Verifica Risultati SLIME ---"
 # Verifica che il JSON contenga le chiavi della spiegazione
