@@ -58,6 +58,10 @@ class SLIME:
                 # Loopback via CLAP e Classifier
                 output = self.audio_embedding(masked_audio)
                 h_in = output[0][0] if isinstance(output, (tuple, list)) else output
+
+                # 🎯 DEBUG: Vediamo se l'embedding cambia!
+                if i < 3:
+                    print(f"DEBUG Sample {i} - Embedding Mean: {h_in.mean().item():.8f}, Std: {h_in.std().item():.8f}")
                 
                 # Assicuriamoci che h_in abbia la dimensione del batch per il classificatore
                 if h_in.dim() == 1:
