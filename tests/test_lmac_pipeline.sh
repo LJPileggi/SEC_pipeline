@@ -106,7 +106,7 @@ echo "--- 🔍 Validazione Consistenza Risultati ---"
 
 # 4. VERIFICA INTEGRITÀ DATI
 # Il path di verifica deve puntare alla cartella interna del container
-RESULT_PATH_INTERNAL="$CONTAINER_WORK_DIR/dataSEC/results/explainability/wav/1_octave/3_secs"
+RESULT_PATH_INTERNAL="$CONTAINER_WORK_DIR/dataSEC/results/explainability/LMAC/wav/1_octave/3_secs"
 
 cat << EOF > "$SCRATCH_TEMP_DIR/verify_integrity.py"
 import json
