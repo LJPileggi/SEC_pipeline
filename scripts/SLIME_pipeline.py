@@ -111,6 +111,14 @@ def main():
             "explainer_type": args.expl_type
         })
 
+        # 🎯 CRITICAL CLEANUP: Libera i grafi di torch di questa iterazione
+        del spec_linear
+        del audio_waveform
+        del h_orig
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
+
     # 6. Export Finale
     output_path = os.path.join(output_base, 'slime_summary.json')
     with open(output_path, 'w') as f:
