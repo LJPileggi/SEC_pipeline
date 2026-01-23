@@ -27,10 +27,10 @@ SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/cl
 CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
 ROBERTA_PATH="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/roberta-base"
 
-# Physical path of data on the host
+# Correct hierarchy: dataSEC is a sibling of SEC_pipeline
 DATASEC_BASE="/leonardo_scratch/large/userexternal/$USER/dataSEC"
 
-# Ensure the physical directories exist on the host to prevent mount errors
+# Ensure host directories exist to prevent mount errors
 mkdir -p "$DATASEC_BASE/RAW_DATASET"
 mkdir -p "$DATASEC_BASE/PREPROCESSED_DATASET"
 mkdir -p "$DATASEC_BASE/results"
@@ -43,19 +43,25 @@ run_interactive() {
     mkdir -p "$TEMP_BASE/roberta-base"
     mkdir -p "$TEMP_BASE/numba_cache"
 
-    # Preparing local weights for the container
     cp "$CLAP_SCRATCH_WEIGHTS" "$TEMP_BASE/work_dir/huggingface/hub/models--microsoft--msclap/snapshots/main/CLAP_weights_2023.pth"
     cp -r "$ROBERTA_PATH/." "$TEMP_BASE/roberta-base/"
 
-    # Environment variables for firewall-safe processing
+    # --- STABILITY EXPORTS (from test_get_clap_embeddings_slurm.sh) ---
     export HF_HOME="$TEMP_BASE/work_dir/huggingface"
     export HF_HUB_OFFLINE=1
     export CLAP_TEXT_ENCODER_PATH="/tmp_data/roberta-base"
     export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/huggingface/hub/models--microsoft--msclap/snapshots/main/CLAP_weights_2023.pth"
+    export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
     export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
     
-    # NODE_TEMP_BASE_DIR points to the internal mount point
-    export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
+    # Critical optimizations for Leonardo/Singularity
+    export PYTHONUNBUFFERED=1
+    export NCCL_P2P_DISABLE=1
+    export NCCL_IB_DISABLE=1
+    export VERBOSE=True 
+
+    # Dynamic port to avoid rendezvous collisions
+    export MASTER_PORT=$(expr 29500 + $$ % 100)
 
     echo "🚀 Launching Singularity container..."
     singularity exec --nv \
@@ -83,7 +89,6 @@ run_interactive() {
             --n_octave "$N_OCTAVE" \
             --audio_format "$AUDIO_FORMAT"
 
-    echo "🧹 Cleaning up temporary data..."
     rm -rf "$TEMP_BASE"
 }
 
@@ -113,6 +118,7 @@ mkdir -p "\$JOB_WORK_DIR/numba_cache"
 cp "$CLAP_SCRATCH_WEIGHTS" "\$JOB_WORK_DIR/work_dir/huggingface/hub/models--microsoft--msclap/snapshots/main/CLAP_weights_2023.pth"
 cp -r "$ROBERTA_PATH/." "\$JOB_WORK_DIR/roberta-base/"
 
+# --- STABILITY EXPORTS ---
 export HF_HOME="\$JOB_WORK_DIR/work_dir/huggingface"
 export HF_HUB_OFFLINE=1
 export CLAP_TEXT_ENCODER_PATH="/tmp_data/roberta-base"
@@ -120,6 +126,16 @@ export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/huggingface/hub/models--micro
 export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
 export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
 
+# System-level optimizations for Leonardo Cluster
+export PYTHONUNBUFFERED=1
+export NCCL_P2P_DISABLE=1
+export NCCL_IB_DISABLE=1
+export VERBOSE=True
+
+# Deterministic MASTER_PORT based on JOB_ID to prevent collisions
+export MASTER_PORT=\$(expr 20000 + \${SLURM_JOB_ID} % 10000)
+
+echo "🚀 Starting Parallel Embedding Pipeline..."
 srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \\
     singularity exec --nv \\
     --bind "/leonardo_scratch:/leonardo_scratch" \\
