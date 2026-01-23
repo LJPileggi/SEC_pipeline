@@ -83,7 +83,7 @@ def process_audio_dir_to_hdf5(base_dir: Path, target_dir: Path, audio_format: st
 
 if __name__ == '__main__':
     user = os.environ.get('USER')
-    BASE_DIR = Path(f'/leonardo/home/userexternal/{user}/dataSEC/RAW_DATASET')
+    BASE_DIR = Path(f'/leonardo/home/userexternal/{user}/SEC/dataSEC/RAW_DATASET')
     TARGET_DIR = Path(f'/leonardo_scratch/large/userexternal/{user}/dataSEC/RAW_DATASET')
     if not os.path.exists(TARGET_DIR)
         os.makedir(TARGET_DIR)
