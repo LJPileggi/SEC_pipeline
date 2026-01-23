@@ -1,17 +1,15 @@
 #!/bin/bash
 # run_pipeline.sh
 
-"""
-Manual pipeline orchestrator for Leonardo.
-Supports both interactive execution on allocated nodes and single Slurm job submission.
-Replicates the production environment: offline mode, local weights, and isolated cache.
+# Manual pipeline orchestrator for Leonardo.
+# Supports both interactive execution on allocated nodes and single Slurm job submission.
+# Replicates the production environment: offline mode, local weights, and isolated cache.
 
-Args:
- - config_file (str): YAML configuration file;
- - audio_format (str): Audio format (wav, mp3, flac);
- - n_octave (int): Octave resolution;
- - mode (str): 'interactive' or 'slurm'.
-"""
+# Args:
+#  - config_file (str): YAML configuration file;
+#  - audio_format (str): Audio format (wav, mp3, flac);
+#  - n_octave (int): Octave resolution;
+#  - mode (str): 'interactive' or 'slurm'.
 
 if [ "$#" -lt 4 ]; then
     echo "Usage: $0 <config_file> <audio_format> <n_octave> <mode>"
@@ -68,7 +66,7 @@ run_interactive() {
         --bind "\$(pwd):/app" \\
         --pwd "/app" \\
         "$SIF_FILE" \\
-        python3 scripts/join_hdf5.py --config_file "$c_file" --n_octave "$oct" --audio_format "$fmt"
+        python3 scripts/join_hdf5.py --config_file "$CONFIG_FILE" --n_octave "$N_OCTAVE" --audio_format "$AUDIO_FORMAT"
 
 
     # Workspace cleanup
@@ -131,7 +129,7 @@ singularity exec --nv \\
     --bind "\$(pwd):/app" \\
     --pwd "/app" \\
     "$SIF_FILE" \\
-    python3 scripts/join_hdf5.py --config_file "$c_file" --n_octave "$oct" --audio_format "$fmt"
+    python3 scripts/join_hdf5.py --config_file "$CONFIG_FILE" --n_octave "$N_OCTAVE" --audio_format "$AUDIO_FORMAT"
 
 rm -rf "\$JOB_WORK_DIR"
 EOF

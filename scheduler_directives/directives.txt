@@ -16,13 +16,20 @@ SCHEDULING_MODE   | parallel
 # ==========================================================
 config0.yaml | wav  | 1
 config0.yaml | wav  | 3
-config0.yaml | wav  | 8
+config0.yaml | wav  | 6
+config0.yaml | wav  | 12
 config0.yaml | wav  | 16
+config0.yaml | wav  | 24
+config0.yaml | wav  | 32
 config0.yaml | mp3  | 1
 config0.yaml | mp3  | 3
-config0.yaml | mp3  | 8
+config0.yaml | mp3  | 12
 config0.yaml | mp3  | 16
+config0.yaml | mp3  | 24
+config0.yaml | mp3  | 32
 config0.yaml | flac  | 1
 config0.yaml | flac  | 3
-config0.yaml | flac  | 8
+config0.yaml | flac  | 12
 config0.yaml | flac  | 16
+config0.yaml | flac  | 24
+config0.yaml | flac  | 32
