@@ -86,7 +86,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     # SOURCE MANAGER INITIALIZATION
     own_manager = False
     if audio_dataset_manager is None:
-        audio_dataset_manager = HDF5DatasetManager(os.path.join(root_source, class_to_process, f'{class_to_process}_{audio_format}_dataset.h5'))
+        audio_dataset_manager = HDF5DatasetManager(os.path.join(root_source, f'{class_to_process}_{audio_format}_dataset.h5'))
         own_manager = True
 
     split_emb_dataset_manager = None
@@ -288,8 +288,7 @@ def process_class_with_cut_secs(clap_model, audio_embedding, class_to_process, c
     # SOURCE DATA MANAGER INITIALIZATION
     own_manager = False
     if audio_dataset_manager is None:
-        audio_dataset_manager = HDF5DatasetManager(os.path.join(root_source, class_to_process,
-                                                    f'{class_to_process}_{audio_format}_dataset.h5'))
+        audio_dataset_manager = HDF5DatasetManager(os.path.join(root_source, f'{class_to_process}_{audio_format}_dataset.h5'))
         own_manager = True
 
     split_emb_dataset_manager = None
@@ -477,7 +476,7 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
 
     # --- MAIN TASK LOOP ---
     for class_idx, (class_name, assigned_cuts) in enumerate(tasks_by_class.items()):
-        h5_path = os.path.join(config['dirs']['root_source'], class_name, f'{class_name}_{audio_format}_dataset.h5')
+        h5_path = os.path.join(config['dirs']['root_source'], f'{class_name}_{audio_format}_dataset.h5')
         
         try:
             # 🎯 CLASS MILESTONE: Inform about the current class being processed
@@ -580,7 +579,7 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
 
     # --- PROCESSING LOOP ---
     for class_idx, (class_name, assigned_cuts) in enumerate(tasks_by_class.items()):
-        h5_path = os.path.join(config['dirs']['root_source'], class_name, f'{class_name}_{audio_format}_dataset.h5')
+        h5_path = os.path.join(config['dirs']['root_source'], f'{class_name}_{audio_format}_dataset.h5')
         
         try:
             # CLASS MILESTONE: Feedback on which class is being handled
