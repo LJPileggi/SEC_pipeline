@@ -26,18 +26,22 @@ MODE=$4
 SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/clap_pipeline.sif"
 CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
 ROBERTA_PATH="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/roberta-base"
-# Define the physical path to the dataset on the host
-REAL_DATA_BASE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/dataSEC"
+
+# Physical path of data on the host
+DATASEC_BASE="/leonardo_scratch/large/userexternal/$USER/dataSEC"
+
+# Ensure the physical directories exist on the host to prevent mount errors
+mkdir -p "$DATASEC_BASE/RAW_DATASET"
+mkdir -p "$DATASEC_BASE/PREPROCESSED_DATASET"
+mkdir -p "$DATASEC_BASE/results"
 
 run_interactive() {
     echo "🎬 Starting INTERACTIVE execution on local node..."
     
-    # Setup temporary directory based on PID to avoid resource contention
     TEMP_BASE="/leonardo_scratch/large/userexternal/$USER/tmp_interactive_$$"
     mkdir -p "$TEMP_BASE/work_dir/huggingface/hub/models--microsoft--msclap/snapshots/main"
     mkdir -p "$TEMP_BASE/roberta-base"
-    # Ensure the mount source exists
-    mkdir -p "$REAL_DATA_BASE"
+    mkdir -p "$TEMP_BASE/numba_cache"
 
     # Preparing local weights for the container
     cp "$CLAP_SCRATCH_WEIGHTS" "$TEMP_BASE/work_dir/huggingface/hub/models--microsoft--msclap/snapshots/main/CLAP_weights_2023.pth"
@@ -48,13 +52,16 @@ run_interactive() {
     export HF_HUB_OFFLINE=1
     export CLAP_TEXT_ENCODER_PATH="/tmp_data/roberta-base"
     export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/huggingface/hub/models--microsoft--msclap/snapshots/main/CLAP_weights_2023.pth"
+    export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
+    
+    # NODE_TEMP_BASE_DIR points to the internal mount point
     export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
 
     echo "🚀 Launching Singularity container..."
     singularity exec --nv \
         --bind "/leonardo_scratch:/leonardo_scratch" \
         --bind "$TEMP_BASE:/tmp_data" \
-        --bind "$REAL_DATA_BASE:/tmp_data/dataSEC" \
+        --bind "$DATASEC_BASE:/tmp_data/dataSEC" \
         --bind "$(pwd):/app" \
         --pwd "/app" \
         "$SIF_FILE" \
@@ -63,11 +70,11 @@ run_interactive() {
             --n_octave "$N_OCTAVE" \
             --audio_format "$AUDIO_FORMAT"
 
-    echo "Joining HDF5 files..."
+    echo "🔗 Joining HDF5 files..."
     singularity exec --nv \
         --bind "/leonardo_scratch:/leonardo_scratch" \
         --bind "$TEMP_BASE:/tmp_data" \
-        --bind "$REAL_DATA_BASE:/tmp_data/dataSEC" \
+        --bind "$DATASEC_BASE:/tmp_data/dataSEC" \
         --bind "$(pwd):/app" \
         --pwd "/app" \
         "$SIF_FILE" \
@@ -76,7 +83,6 @@ run_interactive() {
             --n_octave "$N_OCTAVE" \
             --audio_format "$AUDIO_FORMAT"
 
-    # Workspace cleanup
     echo "🧹 Cleaning up temporary data..."
     rm -rf "$TEMP_BASE"
 }
@@ -102,6 +108,7 @@ run_slurm() {
 JOB_WORK_DIR="/leonardo_scratch/large/userexternal/\$USER/tmp_job_\${SLURM_JOB_ID}"
 mkdir -p "\$JOB_WORK_DIR/work_dir/huggingface/hub/models--microsoft--msclap/snapshots/main"
 mkdir -p "\$JOB_WORK_DIR/roberta-base"
+mkdir -p "\$JOB_WORK_DIR/numba_cache"
 
 cp "$CLAP_SCRATCH_WEIGHTS" "\$JOB_WORK_DIR/work_dir/huggingface/hub/models--microsoft--msclap/snapshots/main/CLAP_weights_2023.pth"
 cp -r "$ROBERTA_PATH/." "\$JOB_WORK_DIR/roberta-base/"
@@ -111,22 +118,23 @@ export HF_HUB_OFFLINE=1
 export CLAP_TEXT_ENCODER_PATH="/tmp_data/roberta-base"
 export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/huggingface/hub/models--microsoft--msclap/snapshots/main/CLAP_weights_2023.pth"
 export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
+export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
 
 srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \\
     singularity exec --nv \\
     --bind "/leonardo_scratch:/leonardo_scratch" \\
     --bind "\$JOB_WORK_DIR:/tmp_data" \\
-    --bind "$REAL_DATA_BASE:/tmp_data/dataSEC" \\
+    --bind "$DATASEC_BASE:/tmp_data/dataSEC" \\
     --bind "\$(pwd):/app" \\
     --pwd "/app" \\
     "$SIF_FILE" \\
     python3 scripts/get_clap_embeddings.py --config_file "$CONFIG_FILE" --n_octave "$N_OCTAVE" --audio_format "$AUDIO_FORMAT"
 
-echo "Joining HDF5 files..."
+echo "🔗 Joining HDF5 files..."
 singularity exec --nv \\
     --bind "/leonardo_scratch:/leonardo_scratch" \\
     --bind "\$JOB_WORK_DIR:/tmp_data" \\
-    --bind "$REAL_DATA_BASE:/tmp_data/dataSEC" \\
+    --bind "$DATASEC_BASE:/tmp_data/dataSEC" \\
     --bind "\$(pwd):/app" \\
     --pwd "/app" \\
     "$SIF_FILE" \\
@@ -137,10 +145,8 @@ EOF
 
     chmod +x "$script"
     sbatch "$script"
-    echo "✅ Job submitted successfully."
 }
 
-# Execution Dispatcher
 case $MODE in
     "interactive") run_interactive ;;
     "slurm") run_slurm ;;
