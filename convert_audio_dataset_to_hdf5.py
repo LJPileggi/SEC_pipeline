@@ -20,7 +20,7 @@ def extract_metadata_from_path(file_path: Path):
     track_name = file_path.name
     return class_name, subclass_name, track_name
 
-def process_audio_dir_to_hdf5(base_dir: Path, audio_format: str):
+def process_audio_dir_to_hdf5(base_dir: Path, target_dir: Path, audio_format: str):
     """
     Converte i file audio in HDF5 rispettando il mantra: 'non toccare quello che già funziona'.
     Corregge solo il posizionamento della creazione del dataset metadati.
@@ -55,7 +55,7 @@ def process_audio_dir_to_hdf5(base_dir: Path, audio_format: str):
             })
 
         df = pd.DataFrame(metadata_list)
-        h5_path = base_dir / f'{class_dir_name}_{audio_format}_dataset.h5'
+        h5_path = target_dir / f'{class_dir_name}_{audio_format}_dataset.h5'
 
         with h5py.File(h5_path, 'w') as hf:
             audio_dtype = h5py.vlen_dtype(np.dtype('float32'))
@@ -83,9 +83,13 @@ def process_audio_dir_to_hdf5(base_dir: Path, audio_format: str):
 
 if __name__ == '__main__':
     user = os.environ.get('USER')
-    BASE_DIR = Path(f'/leonardo_scratch/large/userexternal/{user}/dataSEC/RAW_DATASET') 
+    BASE_DIR = Path(f'/leonardo/home/userexternal/{user}/dataSEC/RAW_DATASET')
+    TARGET_DIR = Path(f'/leonardo_scratch/large/userexternal/{user}/dataSEC/RAW_DATASET')
+    if not os.path.exists(TARGET_DIR)
+        os.makedir(TARGET_DIR)
     
     for fmt in ['wav', 'mp3', 'flac']:
         basedir_format = BASE_DIR / f'raw_{fmt}'
+        targetdir_format = TARGET_DIR / f'raw_{fmt}'
         if basedir_format.exists():
-            process_audio_dir_to_hdf5(basedir_format, fmt)
+            process_audio_dir_to_hdf5(basedir_format, targetdir_format, fmt)
