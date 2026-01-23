@@ -85,7 +85,7 @@ if __name__ == '__main__':
     user = os.environ.get('USER')
     BASE_DIR = Path(f'/leonardo/home/userexternal/{user}/SEC/dataSEC/RAW_DATASET')
     TARGET_DIR = Path(f'/leonardo_scratch/large/userexternal/{user}/dataSEC/RAW_DATASET')
-    if not os.path.exists(TARGET_DIR)
+    if not os.path.exists(TARGET_DIR):
         os.makedir(TARGET_DIR)
     
     for fmt in ['wav', 'mp3', 'flac']:
