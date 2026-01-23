@@ -105,19 +105,19 @@ run_slurm() {
 #SBATCH -A IscrC_Pb-skite
 #SBATCH --output=%x_%j.out
 
-# 🎯 1. LOCAL NVMe SETUP
+# 🎯 1. LOCAL PATH DEFINITION (valido per ogni task)
 LOCAL_JOB_DIR="/scratch_local/job_\${SLURM_JOB_ID}"
-mkdir -p "\$LOCAL_JOB_DIR/dataSEC/RAW_DATASET"
-mkdir -p "\$LOCAL_JOB_DIR/dataSEC/PREPROCESSED_DATASET"
-mkdir -p "\$LOCAL_JOB_DIR/work_dir/roberta-base"
-mkdir -p "\$LOCAL_JOB_DIR/work_dir/weights"
-mkdir -p "\$LOCAL_JOB_DIR/numba_cache"
 
-# 🎯 2. STAGE-IN
-echo "📦 Staging-in: Global -> NVMe..."
-cp -r "$DATASEC_GLOBAL/RAW_DATASET/raw_$AUDIO_FORMAT" "\$LOCAL_JOB_DIR/dataSEC/RAW_DATASET/"
-cp -r "$ROBERTA_PATH/." "\$LOCAL_JOB_DIR/work_dir/roberta-base/"
-cp "$CLAP_SCRATCH_WEIGHTS" "\$LOCAL_JOB_DIR/work_dir/weights/CLAP_weights_2023.pth"
+# 🎯 2. PREPARATION: NODE AND STAGE-IN
+echo "📦 Staging-in data to local NVMe on all tasks..."
+srun --ntasks=\$SLURM_NTASKS bash -c "mkdir -p \$LOCAL_JOB_DIR/dataSEC/RAW_DATASET && \
+    mkdir -p \$LOCAL_JOB_DIR/dataSEC/PREPROCESSED_DATASET && \
+    mkdir -p \$LOCAL_JOB_DIR/work_dir/roberta-base && \
+    mkdir -p \$LOCAL_JOB_DIR/work_dir/weights && \
+    mkdir -p \$LOCAL_JOB_DIR/numba_cache && \
+    cp -r $DATASEC_GLOBAL/RAW_DATASET/raw_$AUDIO_FORMAT \$LOCAL_JOB_DIR/dataSEC/RAW_DATASET/ && \
+    cp -r $ROBERTA_PATH/. \$LOCAL_JOB_DIR/work_dir/roberta-base/ && \
+    cp $CLAP_SCRATCH_WEIGHTS \$LOCAL_JOB_DIR/work_dir/weights/CLAP_weights_2023.pth"
 
 # 🎯 3. EXPORTS
 export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
@@ -130,7 +130,7 @@ export NCCL_P2P_DISABLE=1
 export NCCL_IB_DISABLE=1
 export MASTER_PORT=\$(expr 20000 + \${SLURM_JOB_ID} % 10000)
 
-echo "🚀 Starting Parallel Pipeline on local NVMe..."
+echo "🚀 Starting Parallel Embedding Pipeline..."
 srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \\
     singularity exec --nv \\
     --bind "\$LOCAL_JOB_DIR:/tmp_data" \\
@@ -139,7 +139,7 @@ srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \\
     "$SIF_FILE" \\
     python3 scripts/get_clap_embeddings.py --config_file "$CONFIG_FILE" --n_octave "$N_OCTAVE" --audio_format "$AUDIO_FORMAT"
 
-echo "🔗 Joining HDF5 files on NVMe..."
+echo "🔗 Joining HDF5 files..."
 singularity exec --nv \\
     --bind "\$LOCAL_JOB_DIR:/tmp_data" \\
     --bind "\$(pwd):/app" \\
@@ -147,13 +147,14 @@ singularity exec --nv \\
     "$SIF_FILE" \\
     python3 scripts/join_hdf5.py --config_file "$CONFIG_FILE" --n_octave "$N_OCTAVE" --audio_format "$AUDIO_FORMAT"
 
-# 🎯 4. STAGE-OUT: Copy Preprocessed Data back to Global Scratch
-echo "📦 Staging-out: NVMe -> Global..."
+# 🎯 4. STAGE-OUT
+echo "📦 Staging-out results to global scratch..."
 TARGET_GLOBAL="$DATASEC_GLOBAL/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave"
 mkdir -p "\$TARGET_GLOBAL"
 cp -r "\$LOCAL_JOB_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave/." "\$TARGET_GLOBAL/"
 
-rm -rf "\$LOCAL_JOB_DIR"
+# Final cleanup
+srun --ntasks=\$SLURM_NTASKS rm -rf "\$LOCAL_JOB_DIR"
 EOF
 
     chmod +x "$script"
