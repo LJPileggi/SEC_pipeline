@@ -91,5 +91,7 @@ if __name__ == '__main__':
     for fmt in ['wav', 'mp3', 'flac']:
         basedir_format = BASE_DIR / f'raw_{fmt}'
         targetdir_format = TARGET_DIR / f'raw_{fmt}'
+        if not os.path.exists(targetdir_format):
+            os.makedir(targetdir_format)
         if basedir_format.exists():
             process_audio_dir_to_hdf5(basedir_format, targetdir_format, fmt)
