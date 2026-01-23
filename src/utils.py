@@ -71,6 +71,7 @@ def get_config_from_yaml(config_file="config0.yaml"):
     noise_perc = configs["noise_perc"]
     seed = configs["seed"]
     
+    # center_freqs to be removed completely at some point
     center_freqs = np.array(configs["center_freqs"]) if configs.get("center_freqs") else None
     
     valid_cut_secs = configs["valid_cut_secs"]
