@@ -26,6 +26,8 @@ MODE=$4
 SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/clap_pipeline.sif"
 CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
 ROBERTA_PATH="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/roberta-base"
+# Define the physical path to the dataset on the host
+REAL_DATA_BASE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/dataSEC"
 
 run_interactive() {
     echo "🎬 Starting INTERACTIVE execution on local node..."
@@ -34,6 +36,8 @@ run_interactive() {
     TEMP_BASE="/leonardo_scratch/large/userexternal/$USER/tmp_interactive_$$"
     mkdir -p "$TEMP_BASE/work_dir/huggingface/hub/models--microsoft--msclap/snapshots/main"
     mkdir -p "$TEMP_BASE/roberta-base"
+    # Ensure the mount source exists
+    mkdir -p "$REAL_DATA_BASE"
 
     # Preparing local weights for the container
     cp "$CLAP_SCRATCH_WEIGHTS" "$TEMP_BASE/work_dir/huggingface/hub/models--microsoft--msclap/snapshots/main/CLAP_weights_2023.pth"
@@ -50,7 +54,7 @@ run_interactive() {
     singularity exec --nv \
         --bind "/leonardo_scratch:/leonardo_scratch" \
         --bind "$TEMP_BASE:/tmp_data" \
-        --bind "${NODE_TEMP_BASE_DIR:-"../dataSEC"}:/tmp_data/dataSEC" \
+        --bind "$REAL_DATA_BASE:/tmp_data/dataSEC" \
         --bind "$(pwd):/app" \
         --pwd "/app" \
         "$SIF_FILE" \
@@ -60,14 +64,17 @@ run_interactive() {
             --audio_format "$AUDIO_FORMAT"
 
     echo "Joining HDF5 files..."
-    singularity exec --nv \\
-        --bind "/leonardo_scratch:/leonardo_scratch" \\
-        --bind "\$JOB_WORK_DIR:/tmp_data" \\
-        --bind "\$(pwd):/app" \\
-        --pwd "/app" \\
-        "$SIF_FILE" \\
-        python3 scripts/join_hdf5.py --config_file "$CONFIG_FILE" --n_octave "$N_OCTAVE" --audio_format "$AUDIO_FORMAT"
-
+    singularity exec --nv \
+        --bind "/leonardo_scratch:/leonardo_scratch" \
+        --bind "$TEMP_BASE:/tmp_data" \
+        --bind "$REAL_DATA_BASE:/tmp_data/dataSEC" \
+        --bind "$(pwd):/app" \
+        --pwd "/app" \
+        "$SIF_FILE" \
+        python3 scripts/join_hdf5.py \
+            --config_file "$CONFIG_FILE" \
+            --n_octave "$N_OCTAVE" \
+            --audio_format "$AUDIO_FORMAT"
 
     # Workspace cleanup
     echo "🧹 Cleaning up temporary data..."
@@ -76,11 +83,9 @@ run_interactive() {
 
 run_slurm() {
     echo "📤 Dispatching single Slurm job..."
-    # This calls the same logic used in the scheduler for a single instance
     local j_name="manual_${AUDIO_FORMAT}_oct${N_OCTAVE}"
     local script="submit_${j_name}.sh"
 
-    # Reuse the submit_job logic here to maintain environment consistency
     cat << EOF > "$script"
 #!/bin/bash
 #SBATCH --job-name=$j_name
@@ -94,38 +99,34 @@ run_slurm() {
 #SBATCH -A IscrC_Pb-skite
 #SBATCH --output=%x_%j.out
 
-SIF_FILE="$SIF_FILE"
-CLAP_SCRATCH_WEIGHTS="$CLAP_SCRATCH_WEIGHTS"
-ROBERTA_PATH="$ROBERTA_PATH"
-
 JOB_WORK_DIR="/leonardo_scratch/large/userexternal/\$USER/tmp_job_\${SLURM_JOB_ID}"
 mkdir -p "\$JOB_WORK_DIR/work_dir/huggingface/hub/models--microsoft--msclap/snapshots/main"
 mkdir -p "\$JOB_WORK_DIR/roberta-base"
 
-cp "\$CLAP_SCRATCH_WEIGHTS" "\$JOB_WORK_DIR/work_dir/huggingface/hub/models--microsoft--msclap/snapshots/main/CLAP_weights_2023.pth"
-cp -r "\$ROBERTA_PATH/." "\$JOB_WORK_DIR/roberta-base/"
+cp "$CLAP_SCRATCH_WEIGHTS" "\$JOB_WORK_DIR/work_dir/huggingface/hub/models--microsoft--msclap/snapshots/main/CLAP_weights_2023.pth"
+cp -r "$ROBERTA_PATH/." "\$JOB_WORK_DIR/roberta-base/"
 
 export HF_HOME="\$JOB_WORK_DIR/work_dir/huggingface"
 export HF_HUB_OFFLINE=1
 export CLAP_TEXT_ENCODER_PATH="/tmp_data/roberta-base"
 export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/huggingface/hub/models--microsoft--msclap/snapshots/main/CLAP_weights_2023.pth"
 export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
-export VERBOSE=False
 
 srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \\
     singularity exec --nv \\
     --bind "/leonardo_scratch:/leonardo_scratch" \\
     --bind "\$JOB_WORK_DIR:/tmp_data" \\
-    --bind "\${NODE_TEMP_BASE_DIR:-"../dataSEC"}:/tmp_data/dataSEC" \\
+    --bind "$REAL_DATA_BASE:/tmp_data/dataSEC" \\
     --bind "\$(pwd):/app" \\
     --pwd "/app" \\
-    "\$SIF_FILE" \\
+    "$SIF_FILE" \\
     python3 scripts/get_clap_embeddings.py --config_file "$CONFIG_FILE" --n_octave "$N_OCTAVE" --audio_format "$AUDIO_FORMAT"
 
 echo "Joining HDF5 files..."
 singularity exec --nv \\
     --bind "/leonardo_scratch:/leonardo_scratch" \\
     --bind "\$JOB_WORK_DIR:/tmp_data" \\
+    --bind "$REAL_DATA_BASE:/tmp_data/dataSEC" \\
     --bind "\$(pwd):/app" \\
     --pwd "/app" \\
     "$SIF_FILE" \\

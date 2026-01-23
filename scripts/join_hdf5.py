@@ -24,7 +24,7 @@ def main():
     octaveband_dir = os.path.join(basedir_preprocessed if args.test_mode=='n' else basedir_preprocessed_test,
                                                                   f'{args.audio_format}', f'{args.n_octave}')
     combine_hdf5_files(octaveband_dir, valid_cut_secs, 1024, None, args.audio_format,
-                          valid_cut_secs, args.n_octave, sample_rate, seed, noise_perc, splits_list))
+                          valid_cut_secs, args.n_octave, sample_rate, seed, noise_perc, splits_list)
 
 if __name__ == "__main__":
     main()
