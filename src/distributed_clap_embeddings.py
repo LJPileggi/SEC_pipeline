@@ -463,7 +463,7 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
 
     # Update local config with process-specific paths and device info
     config['rank'] = rank
-    config['dirs']['root_source'] = os.path.join(basedir_raw, f'{audio_format}')
+    config['dirs']['root_source'] = os.path.join(basedir_raw, f'raw_{audio_format}')
     config['dirs']['root_target'] = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave')
     config['audio']['audio_format'] = audio_format
     config['audio']['n_octave'] = n_octave
@@ -563,7 +563,7 @@ def local_worker_process(audio_format, n_octave, config, rank, world_size, my_ta
     
     # Configure local paths and device strings for the current process
     config['rank'] = rank
-    config['dirs']['root_source'] = os.path.join(basedir_raw, f'{audio_format}')
+    config['dirs']['root_source'] = os.path.join(basedir_raw, f'raw_{audio_format}')
     config['dirs']['root_target'] = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave')
     config['audio']['audio_format'] = audio_format
     config['audio']['n_octave'] = n_octave
