@@ -1,8 +1,8 @@
 #!/bin/bash
 # run_pipeline.sh
 
-# Manual pipeline orchestrator for Leonardo.
-# Supports both interactive execution on allocated nodes and single Slurm job submission.
+# Manual pipeline orchestrator for Leonardo Cluster.
+# Implements NVMe Local Staging to maximize I/O throughput.
 # Replicates the production environment: offline mode, local weights, and isolated cache.
 
 # Args:
@@ -27,74 +27,69 @@ SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/cl
 CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
 ROBERTA_PATH="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/roberta-base"
 
-# Correct hierarchy: dataSEC is a sibling of SEC_pipeline
-DATASEC_BASE="/leonardo_scratch/large/userexternal/$USER/dataSEC"
-
-# Ensure host directories exist to prevent mount errors
-mkdir -p "$DATASEC_BASE/RAW_DATASET"
-mkdir -p "$DATASEC_BASE/PREPROCESSED_DATASET"
-mkdir -p "$DATASEC_BASE/results"
+# Permanent global storage (Sibling of SEC_pipeline)
+DATASEC_GLOBAL="/leonardo_scratch/large/userexternal/$USER/dataSEC"
 
 run_interactive() {
-    echo "🎬 Starting INTERACTIVE execution on local node..."
+    echo "🎬 Starting INTERACTIVE execution on local node with NVMe staging..."
     
-    TEMP_BASE="/leonardo_scratch/large/userexternal/$USER/tmp_interactive_$$"
-    mkdir -p "$TEMP_BASE/work_dir/huggingface/hub/models--microsoft--msclap/snapshots/main"
-    mkdir -p "$TEMP_BASE/roberta-base"
-    mkdir -p "$TEMP_BASE/numba_cache"
+    # 🎯 1. LOCAL STORAGE SETUP (Host-side)
+    # Using local scratch if available, otherwise falling back to temporary global scratch
+    LOCAL_JOB_DIR="/scratch_local/interactive_$$"
+    if [ ! -d "/scratch_local" ]; then
+        LOCAL_JOB_DIR="/leonardo_scratch/large/userexternal/$USER/tmp_interactive_$$"
+    fi
+    
+    mkdir -p "$LOCAL_JOB_DIR/dataSEC/RAW_DATASET"
+    mkdir -p "$LOCAL_JOB_DIR/dataSEC/PREPROCESSED_DATASET"
+    mkdir -p "$LOCAL_JOB_DIR/work_dir/roberta-base"
+    mkdir -p "$LOCAL_JOB_DIR/work_dir/weights"
+    mkdir -p "$LOCAL_JOB_DIR/numba_cache"
 
-    cp "$CLAP_SCRATCH_WEIGHTS" "$TEMP_BASE/work_dir/huggingface/hub/models--microsoft--msclap/snapshots/main/CLAP_weights_2023.pth"
-    cp -r "$ROBERTA_PATH/." "$TEMP_BASE/roberta-base/"
+    # 🎯 2. STAGE-IN: Copy assets to local NVMe
+    echo "📦 Staging-in data to local NVMe..."
+    cp -r "$DATASEC_GLOBAL/RAW_DATASET/raw_$AUDIO_FORMAT" "$LOCAL_JOB_DIR/dataSEC/RAW_DATASET/"
+    cp -r "$ROBERTA_PATH/." "$LOCAL_JOB_DIR/work_dir/roberta-base/"
+    cp "$CLAP_SCRATCH_WEIGHTS" "$LOCAL_JOB_DIR/work_dir/weights/CLAP_weights_2023.pth"
 
-    # --- STABILITY EXPORTS (from test_get_clap_embeddings_slurm.sh) ---
-    export HF_HOME="$TEMP_BASE/work_dir/huggingface"
-    export HF_HUB_OFFLINE=1
-    export CLAP_TEXT_ENCODER_PATH="/tmp_data/roberta-base"
-    export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/huggingface/hub/models--microsoft--msclap/snapshots/main/CLAP_weights_2023.pth"
+    # 🎯 3. EXPORTS: Redirect Python using NODE_TEMP_BASE_DIR
     export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
+    export HF_HUB_OFFLINE=1
+    export CLAP_TEXT_ENCODER_PATH="/tmp_data/work_dir/roberta-base"
+    export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/weights/CLAP_weights_2023.pth"
     export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
-    
-    # Critical optimizations for Leonardo/Singularity
     export PYTHONUNBUFFERED=1
     export NCCL_P2P_DISABLE=1
     export NCCL_IB_DISABLE=1
-    export VERBOSE=True 
-
-    # Dynamic port to avoid rendezvous collisions
     export MASTER_PORT=$(expr 29500 + $$ % 100)
 
-    echo "🚀 Launching Singularity container..."
+    echo "🚀 Launching Singularity container on NVMe..."
     singularity exec --nv \
-        --bind "/leonardo_scratch:/leonardo_scratch" \
-        --bind "$TEMP_BASE:/tmp_data" \
-        --bind "$DATASEC_BASE:/tmp_data/dataSEC" \
+        --bind "$LOCAL_JOB_DIR:/tmp_data" \
         --bind "$(pwd):/app" \
         --pwd "/app" \
         "$SIF_FILE" \
-        python3 scripts/get_clap_embeddings.py \
-            --config_file "$CONFIG_FILE" \
-            --n_octave "$N_OCTAVE" \
-            --audio_format "$AUDIO_FORMAT"
+        python3 scripts/get_clap_embeddings.py --config_file "$CONFIG_FILE" --n_octave "$N_OCTAVE" --audio_format "$AUDIO_FORMAT"
 
-    echo "🔗 Joining HDF5 files..."
+    echo "🔗 Joining HDF5 files on NVMe..."
     singularity exec --nv \
-        --bind "/leonardo_scratch:/leonardo_scratch" \
-        --bind "$TEMP_BASE:/tmp_data" \
-        --bind "$DATASEC_BASE:/tmp_data/dataSEC" \
+        --bind "$LOCAL_JOB_DIR:/tmp_data" \
         --bind "$(pwd):/app" \
         --pwd "/app" \
         "$SIF_FILE" \
-        python3 scripts/join_hdf5.py \
-            --config_file "$CONFIG_FILE" \
-            --n_octave "$N_OCTAVE" \
-            --audio_format "$AUDIO_FORMAT"
+        python3 scripts/join_hdf5.py --config_file "$CONFIG_FILE" --n_octave "$N_OCTAVE" --audio_format "$AUDIO_FORMAT"
 
-    rm -rf "$TEMP_BASE"
+    # 🎯 4. STAGE-OUT: Persistent save
+    echo "📦 Staging-out results to global scratch..."
+    mkdir -p "$DATASEC_GLOBAL/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave"
+    cp -r "$LOCAL_JOB_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave/." "$DATASEC_GLOBAL/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave/"
+
+    rm -rf "$LOCAL_JOB_DIR"
 }
 
 run_slurm() {
-    echo "📤 Dispatching single Slurm job..."
-    local j_name="manual_${AUDIO_FORMAT}_oct${N_OCTAVE}"
+    echo "📤 Dispatching SLURM job with NVMe staging..."
+    local j_name="prod_${AUDIO_FORMAT}_oct${N_OCTAVE}"
     local script="submit_${j_name}.sh"
 
     cat << EOF > "$script"
@@ -110,53 +105,55 @@ run_slurm() {
 #SBATCH -A IscrC_Pb-skite
 #SBATCH --output=%x_%j.out
 
-JOB_WORK_DIR="/leonardo_scratch/large/userexternal/\$USER/tmp_job_\${SLURM_JOB_ID}"
-mkdir -p "\$JOB_WORK_DIR/work_dir/huggingface/hub/models--microsoft--msclap/snapshots/main"
-mkdir -p "\$JOB_WORK_DIR/roberta-base"
-mkdir -p "\$JOB_WORK_DIR/numba_cache"
+# 🎯 1. LOCAL NVMe SETUP
+LOCAL_JOB_DIR="/scratch_local/job_\${SLURM_JOB_ID}"
+mkdir -p "\$LOCAL_JOB_DIR/dataSEC/RAW_DATASET"
+mkdir -p "\$LOCAL_JOB_DIR/dataSEC/PREPROCESSED_DATASET"
+mkdir -p "\$LOCAL_JOB_DIR/work_dir/roberta-base"
+mkdir -p "\$LOCAL_JOB_DIR/work_dir/weights"
+mkdir -p "\$LOCAL_JOB_DIR/numba_cache"
 
-cp "$CLAP_SCRATCH_WEIGHTS" "\$JOB_WORK_DIR/work_dir/huggingface/hub/models--microsoft--msclap/snapshots/main/CLAP_weights_2023.pth"
-cp -r "$ROBERTA_PATH/." "\$JOB_WORK_DIR/roberta-base/"
+# 🎯 2. STAGE-IN
+echo "📦 Staging-in: Global -> NVMe..."
+cp -r "$DATASEC_GLOBAL/RAW_DATASET/raw_$AUDIO_FORMAT" "\$LOCAL_JOB_DIR/dataSEC/RAW_DATASET/"
+cp -r "$ROBERTA_PATH/." "\$LOCAL_JOB_DIR/work_dir/roberta-base/"
+cp "$CLAP_SCRATCH_WEIGHTS" "\$LOCAL_JOB_DIR/work_dir/weights/CLAP_weights_2023.pth"
 
-# --- STABILITY EXPORTS ---
-export HF_HOME="\$JOB_WORK_DIR/work_dir/huggingface"
-export HF_HUB_OFFLINE=1
-export CLAP_TEXT_ENCODER_PATH="/tmp_data/roberta-base"
-export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/huggingface/hub/models--microsoft--msclap/snapshots/main/CLAP_weights_2023.pth"
+# 🎯 3. EXPORTS
 export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
+export HF_HUB_OFFLINE=1
+export CLAP_TEXT_ENCODER_PATH="/tmp_data/work_dir/roberta-base"
+export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/weights/CLAP_weights_2023.pth"
 export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
-
-# System-level optimizations for Leonardo Cluster
 export PYTHONUNBUFFERED=1
 export NCCL_P2P_DISABLE=1
 export NCCL_IB_DISABLE=1
-export VERBOSE=True
-
-# Deterministic MASTER_PORT based on JOB_ID to prevent collisions
 export MASTER_PORT=\$(expr 20000 + \${SLURM_JOB_ID} % 10000)
 
-echo "🚀 Starting Parallel Embedding Pipeline..."
+echo "🚀 Starting Parallel Pipeline on local NVMe..."
 srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \\
     singularity exec --nv \\
-    --bind "/leonardo_scratch:/leonardo_scratch" \\
-    --bind "\$JOB_WORK_DIR:/tmp_data" \\
-    --bind "$DATASEC_BASE:/tmp_data/dataSEC" \\
+    --bind "\$LOCAL_JOB_DIR:/tmp_data" \\
     --bind "\$(pwd):/app" \\
     --pwd "/app" \\
     "$SIF_FILE" \\
     python3 scripts/get_clap_embeddings.py --config_file "$CONFIG_FILE" --n_octave "$N_OCTAVE" --audio_format "$AUDIO_FORMAT"
 
-echo "🔗 Joining HDF5 files..."
+echo "🔗 Joining HDF5 files on NVMe..."
 singularity exec --nv \\
-    --bind "/leonardo_scratch:/leonardo_scratch" \\
-    --bind "\$JOB_WORK_DIR:/tmp_data" \\
-    --bind "$DATASEC_BASE:/tmp_data/dataSEC" \\
+    --bind "\$LOCAL_JOB_DIR:/tmp_data" \\
     --bind "\$(pwd):/app" \\
     --pwd "/app" \\
     "$SIF_FILE" \\
     python3 scripts/join_hdf5.py --config_file "$CONFIG_FILE" --n_octave "$N_OCTAVE" --audio_format "$AUDIO_FORMAT"
 
-rm -rf "\$JOB_WORK_DIR"
+# 🎯 4. STAGE-OUT: Copy Preprocessed Data back to Global Scratch
+echo "📦 Staging-out: NVMe -> Global..."
+TARGET_GLOBAL="$DATASEC_GLOBAL/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave"
+mkdir -p "\$TARGET_GLOBAL"
+cp -r "\$LOCAL_JOB_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave/." "\$TARGET_GLOBAL/"
+
+rm -rf "\$LOCAL_JOB_DIR"
 EOF
 
     chmod +x "$script"
@@ -166,5 +163,5 @@ EOF
 case $MODE in
     "interactive") run_interactive ;;
     "slurm") run_slurm ;;
-    *) echo "❌ Error: Invalid mode. Use 'interactive' or 'slurm'." && exit 1 ;;
+    *) echo "❌ Error: Invalid mode." && exit 1 ;;
 esac
