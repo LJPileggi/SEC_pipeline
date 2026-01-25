@@ -36,8 +36,8 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     It manages dataset splits (train/es/valid/test) and uses a buffered HDF5 writing system 
     to minimize I/O overhead.
 
-    🎯 FIXED: Implements intermediate VRAM cleanup to prevent OOM on long segments and 
-    uses flat raw paths for source HDF5 files.
+    🎯 FIXED: Implements intermediate VRAM cleanup and dynamic batching to prevent OOM 
+    on long segments (up to 30s) and uses flat raw paths for source HDF5 files.
 
     args:
      - clap_model (msclap.CLAP): The initialized CLAP model wrapper;
@@ -66,7 +66,8 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
 
     # 📊 PERFORMANCE & MONITORING SETUP
     stats = {"load": 0, "gpu_total": 0, "save": 0, "count": 0}
-    BATCH_SIZE = 128 
+    # 🎯 DYNAMIC BATCH SIZE: Reduce batch for long segments to prevent OOM
+    BATCH_SIZE = 128 if cut_secs <= 15 else 64 
     
     def write_perf_log():
         """Writes performance statistics to a rank-specific text file to keep stdout clean."""
@@ -111,6 +112,11 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
         if not batch_audio: return
         
         t_gpu_start = time.perf_counter()
+        
+        # 🎯 ANTI-OOM: Pre-inference cache cleaning
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         # Transfer batch to GPU as Float32 and pin memory for faster transfer
         raw_batch = torch.stack(batch_audio).pin_memory().to(device, non_blocking=True).float()
         
@@ -129,8 +135,8 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
             specs_gpu = spectrogram_n_octaveband_generator_gpu(batch_tensor, sr, n_octave, 
                                                                center_freqs=center_freqs, ref=ref, device=device)
             
-            # 🎯 ANTI-OOM MILESTONE: Intermediate VRAM Cleanup
-            # Explicitly clear cache after spectrogram filters to leave room for CLAP
+            # 🎯 ANTI-OOM MILESTONE: Release intermediate buffers before CLAP inference
+            del raw_batch, noise, means
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             
@@ -145,6 +151,9 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
         specs_cpu = specs_gpu.float().cpu().numpy()
         stats["gpu_total"] += (time.perf_counter() - t_gpu_start)
 
+        # 🎯 ANTI-OOM: Explicitly delete GPU tensors
+        del batch_tensor, specs_gpu, embeddings
+        
         t_save_start = time.perf_counter()
         for i in range(len(embeddings_cpu)):
             # Initialize or update the split-specific HDF5 manager
@@ -171,6 +180,10 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
             write_perf_log()
             
         batch_audio.clear(); batch_meta.clear()
+        
+        # Final batch cleanup
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     # --- MAIN PROCESSING LOOP ---
     try:
