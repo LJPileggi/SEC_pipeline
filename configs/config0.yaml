@@ -15,7 +15,7 @@ classes:
  - Sirens_and_alarms
  - Thunder_fireworks_and_gunshot
  - Train
- - Vacuum_cleaner_fan_and_hair_dryer
+ - Vacuum_cleaner_fan_and_hairdryer
  - Vehicle_idling
  - Vehicle_pass-by
  - Voices
@@ -34,6 +34,14 @@ valid_cut_secs:
  - 3
  - 4
  - 5
+ - 6
+ - 7
+ - 8
+ - 9
+ - 10
+ - 15
+ - 20
+ - 30
 train_size: 500
 es_size: 100
 valid_size: 100

@@ -442,80 +442,82 @@ class HDF5EmbeddingDatasetsManager(Dataset):
 def combine_hdf5_files(root_dir, cut_secs_list, embedding_dim, spec_shape, audio_format, cut_secs, n_octave, 
                        sample_rate, seed, noise_perc, splits_list):
     """
-    Consolidates individual class-specific HDF5 files into unified files for each dataset split 
-    (e.g., combined_train.h5). It iterates through all processed classes and segments, 
-    efficiently appending data to the master files while injecting class labels.
+    Consolidates individual class-specific HDF5 files into unified files for each dataset split.
+    This version dynamically detects the spectrogram shape for each segment duration to prevent
+    broadcasting errors when merging classes with different temporal dimensions.
 
     args:
-     - root_dir (str): The base directory containing processed segment folders;
-     - cut_secs_list (list): List of segment durations processed;
-     - embedding_dim (int): Dimension of the audio embeddings;
-     - spec_shape (tuple): Shape of the generated spectrograms;
+     - root_dir (str): Base directory containing processed segment folders;
+     - cut_secs_list (list): List of segment durations processed (e.g., [1, 3, 5]);
+     - embedding_dim (int): Dimension of the audio embeddings (e.g., 1024);
+     - spec_shape (tuple): Global shape (unused here as it is detected dynamically);
      - audio_format (str): Original audio format (e.g., 'wav');
-     - cut_secs (int/float): Current segment duration being merged;
+     - cut_secs (int/float): Current segment duration being merged (from orchestrator);
      - n_octave (int): Octave band resolution;
      - sample_rate (int): Audio sampling rate;
      - seed (int): Global seed used for processing;
      - noise_perc (float): Noise percentage used for augmentation;
      - splits_list (list): List of tuples containing split names (e.g., [('train', size), ...]).
-
-    returns:
-     - None: The combined files are written directly to the filesystem.
     """
 
-    # --- DYNAMIC DETERMINATION OF SPEC_SHAPE ---
-    # We look for any existing .h5 file to infer the spectrogram dimensions
-    # This prevents hardcoding spec_shape in the main script
-    detected_spec_shape = None
-    first_duration_path = os.path.join(root_dir, f'{cut_secs_list[0]}_secs')
-    
-    # Walk through the first available duration directory to find a sample file
-    for root, dirs, files in os.walk(first_duration_path):
-        for file in files:
-            # Exclude source audio datasets or already combined files
-            if file.endswith(".h5") and "_dataset" not in file and "combined_" not in file:
-                try:
-                    sample_path = os.path.join(root, file)
-                    with h5py.File(sample_path, 'r') as hf:
-                        # Attempt to read spec_shape from global attributes first
-                        detected_spec_shape = hf.attrs.get('spec_shape')
-                        # Fallback: inspect the dtype of the embedding dataset if attribute is missing
-                        if detected_spec_shape is None and 'embedding_dataset' in hf:
-                            detected_spec_shape = hf['embedding_dataset'].dtype['spectrograms'].shape
-                        
-                        if detected_spec_shape is not None:
-                            print(f"DEBUG: Found spec_shape {detected_spec_shape} in {sample_path}")
-                            break
-                except Exception:
-                    continue
-        if detected_spec_shape is not None: break
-
-    # Raise error if no valid data is found to prevent corrupted combined files
-    if detected_spec_shape is None:
-        raise ValueError(f"CRITICAL: Could not determine spec_shape in {first_duration_path}")
-    
-    # Update the local spec_shape variable for use in initialization
-    spec_shape = detected_spec_shape
-
-    # Identify all processed classes based on folder structure
-    classes_list = sorted([d for d in os.listdir(os.path.join(root_dir, f'{cut_secs_list[0]}_secs')) 
-                            if os.path.isdir(os.path.join(root_dir, f'{cut_secs_list[0]}_secs', d))])
-    
-    # Iterate through each segment duration (e.g., 1s, 3s, 8s)
+    # --- ITERATE THROUGH EACH DURATION ---
+    # 🎯 FIX: Move the shape detection inside the duration loop to handle variable segment lengths.
     for current_cut_secs in cut_secs_list:
-        # Process each dataset split (train, es, valid, test) separately
+        
+        # 1. DYNAMIC SHAPE DETECTION
+        # We must find the specific spectrogram shape for the current duration (e.g., 1s vs 5s)
+        detected_spec_shape = None
+        current_duration_path = os.path.join(root_dir, f'{current_cut_secs}_secs')
+        
+        # Guard check: Ensure the duration directory exists
+        if not os.path.exists(current_duration_path):
+            continue
+
+        # Walk through directories to find a valid class-level HDF5 file
+        for root, dirs, files in os.walk(current_duration_path):
+            for file in files:
+                # Identify intermediate embedding files, excluding master or raw datasets
+                if file.endswith(".h5") and "_dataset" not in file and "combined_" not in file:
+                    try:
+                        sample_path = os.path.join(root, file)
+                        with h5py.File(sample_path, 'r') as hf:
+                            # Attempt to read spec_shape from global attributes
+                            detected_spec_shape = hf.attrs.get('spec_shape')
+                            # Fallback: inspect the dtype if the attribute is missing
+                            if detected_spec_shape is None and 'embedding_dataset' in hf:
+                                detected_spec_shape = hf['embedding_dataset'].dtype['spectrograms'].shape
+                            
+                            if detected_spec_shape is not None:
+                                break
+                    except Exception:
+                        continue
+            if detected_spec_shape is not None: break
+
+        # If no data is found for this duration, skip to the next one
+        if detected_spec_shape is None:
+            print(f"⚠️ Warning: Could not find any valid .h5 to merge in {current_duration_path}. Skipping.")
+            continue
+        
+        # Assign the detected shape for initializing the master file for this specific duration
+        current_spec_shape = detected_spec_shape
+
+        # Identify all processed classes for the current duration
+        classes_list = sorted([d for d in os.listdir(current_duration_path) 
+                                if os.path.isdir(os.path.join(current_duration_path, d))])
+        
+        # 2. DATASET SPLIT MERGING
         for split_tuple in splits_list:
             split_name = split_tuple[0]
             output_h5_path = os.path.join(root_dir, f'{current_cut_secs}_secs', f'combined_{split_name}.h5')
             
-            # Initialize the output master file manager with the dynamic spec_shape
+            # Initialize the output master file manager with the duration-specific spec_shape
             out_h5 = HDF5EmbeddingDatasetsManager(output_h5_path, mode='a', partitions=set(('splits',)))
-            out_h5.initialize_hdf5(embedding_dim, spec_shape, audio_format, current_cut_secs, n_octave,
+            out_h5.initialize_hdf5(embedding_dim, current_spec_shape, audio_format, current_cut_secs, n_octave,
                                    sample_rate, seed, noise_perc, split_name)
 
-            # Collect data from every class directory for the current split
+            # Accumulate data from every class directory for the current split
             for class_name in classes_list:
-                # Target the specific file generated by distributed_clap_embeddings.py
+                # Target the file generated by the distributed pipeline
                 class_h5_path = os.path.join(root_dir, f'{current_cut_secs}_secs', class_name, 
                                              f'{class_name}_{split_name}_{audio_format}_emb.h5')
                         
@@ -527,31 +529,29 @@ def combine_hdf5_files(root_dir, cut_secs_list, embedding_dim, spec_shape, audio
                 try:
                     # Open class-specific file in read mode
                     in_h5 = HDF5EmbeddingDatasetsManager(class_h5_path, 'r', set(('splits', 'classes')))
-                    # Load all records into memory for bulk writing
                     class_data = in_h5.hf['embedding_dataset'][:]
                     
-                    # Create a buffer array matching the output manager's structured dtype
+                    # Create an array matching the master file's structured dtype for this duration
                     class_data_extended = np.empty(class_data.shape, dtype=out_h5.dt)
                     
-                    # Map fields from class-level HDF5 to the combined structure
+                    # Map common fields between structures
                     for name in class_data_extended.dtype.names:
                         if name in class_data.dtype.names: 
                             class_data_extended[name] = class_data[name]
 
-                    # Inject class name into the 'classes' column (S100 string)
+                    # Inject the class label into the master dataset
                     if 'classes' in class_data_extended.dtype.names:
                         class_data_extended['classes'] = np.array([class_name.encode('utf-8')] * len(class_data),
                                                                     dtype=class_data_extended.dtype['classes'])
                         
-                    # Efficiently extend the combined dataset using bulk I/O
+                    # Bulk extend the master HDF5 dataset
                     out_h5.extend_dataset(class_data_extended)
                     in_h5.close()
                     
                 except Exception as e:
                     print(f"ERROR: Failed to merge {class_name} ({split_name}): {e}")
-                    traceback.print_exc() 
                     
-            # Ensure final flush and closure of the combined file
+            # Ensure final flush and closure of the master file
             out_h5.close()
 
 
