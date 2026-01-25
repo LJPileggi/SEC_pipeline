@@ -36,24 +36,27 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     It manages dataset splits (train/es/valid/test) and uses a buffered HDF5 writing system 
     to minimize I/O overhead.
 
+    🎯 FIXED: Implements intermediate VRAM cleanup to prevent OOM on long segments and 
+    uses flat raw paths for source HDF5 files.
+
     args:
      - clap_model (msclap.CLAP): The initialized CLAP model wrapper;
      - audio_embedding (torch.nn.Module): The specific sub-model for audio encoding;
      - class_to_process (str): Name of the audio class to process;
      - cut_secs (int/float): Duration of the audio segments in seconds;
      - n_octave (int): Number of bands per octave for spectrogram generation;
-     - config (dict): Global configuration dictionary containing directory paths, audio 
-                      parameters, and dataset split sizes;
-     - audio_dataset_manager (HDF5DatasetManager, default: None): Manager for the source 
-                      audio HDF5. If None, it will be instantiated locally.
+     - config (dict): Global configuration dictionary;
+     - audio_dataset_manager (HDF5DatasetManager, default: None): Manager for the source audio HDF5.
 
     returns:
-     - n_embeddings_per_run (int): Total number of embeddings successfully generated in this session;
+     - n_embeddings_per_run (int): Total number of embeddings successfully generated;
      - success (bool): True if the class was processed entirely, False if an exception occurred.
     """
     # --- INITIAL SETUP ---
     # Retrieve directory paths and audio parameters from configuration
     root_source, root_target = config['dirs']['root_source'], config['dirs']['root_target']
+    
+    # 🎯 OUTPUT STRUCTURE: Maintained as nested for combine_hdf5_files compatibility
     target_class_dir = os.path.join(root_target, f'{cut_secs}_secs', class_to_process)
     os.makedirs(target_class_dir, exist_ok=True)
     
@@ -62,7 +65,6 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     device, rank = config['device'], config.get('rank', 0)
 
     # 📊 PERFORMANCE & MONITORING SETUP
-    # stats dictionary tracks timing for I/O and GPU operations
     stats = {"load": 0, "gpu_total": 0, "save": 0, "count": 0}
     BATCH_SIZE = 128 
     
@@ -83,10 +85,12 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     division_names = [d[0] for d in config['data']['divisions_xc_sizes_names']]
     target_counts_list = np.cumsum([d[1] for d in config['data']['divisions_xc_sizes_names']])
 
-    # SOURCE MANAGER INITIALIZATION
+    # 🎯 SOURCE MANAGER INITIALIZATION (Flat Path Logic)
+    # Following the stage-in logic: files are directly in root_source/
     own_manager = False
     if audio_dataset_manager is None:
-        audio_dataset_manager = HDF5DatasetManager(os.path.join(root_source, f'{class_to_process}_{audio_format}_dataset.h5'))
+        h5_raw_path = os.path.join(root_source, f'{class_to_process}_{audio_format}_dataset.h5')
+        audio_dataset_manager = HDF5DatasetManager(h5_raw_path, audio_format)
         own_manager = True
 
     split_emb_dataset_manager = None
@@ -121,8 +125,14 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
             noise = (torch.rand(raw_batch.shape, generator=g, device=device) * 2 - 1) * means
             batch_tensor = (1 - noise_perc) * raw_batch + noise_perc * noise
             
-            # Step 1: Generate Spectrograms in FP32 for stability
-            specs_gpu = spectrogram_n_octaveband_generator_gpu(batch_tensor, sr, n_octave, center_freqs=center_freqs, ref=ref, device=device)
+            # Step 1: Generate Spectrograms (Memory-safe GPU generator)
+            specs_gpu = spectrogram_n_octaveband_generator_gpu(batch_tensor, sr, n_octave, 
+                                                               center_freqs=center_freqs, ref=ref, device=device)
+            
+            # 🎯 ANTI-OOM MILESTONE: Intermediate VRAM Cleanup
+            # Explicitly clear cache after spectrogram filters to leave room for CLAP
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             
             # Step 2: Perform CLAP Inference in Mixed Precision (FP16)
             with torch.cuda.amp.autocast():
@@ -141,10 +151,12 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
             if split_emb_dataset_manager is None:
                 h5_path = os.path.join(target_class_dir, f'{class_to_process}_{division_names[di]}_{audio_format}_emb.h5')
                 split_emb_dataset_manager = HDF5EmbeddingDatasetsManager(h5_path, 'a', buffer_size=adaptive_buffer_size)
-                split_emb_dataset_manager.initialize_hdf5(1024, specs_cpu[i].shape, audio_format, cut_secs, n_octave, sr, seed, noise_perc, division_names[di], class_to_process)
+                split_emb_dataset_manager.initialize_hdf5(1024, specs_cpu[i].shape, audio_format, cut_secs, n_octave, 
+                                                          sr, seed, noise_perc, division_names[di], class_to_process)
 
-            # Add data to the manager's buffer
-            split_emb_dataset_manager.add_to_data_buffer(embeddings_cpu[i], specs_cpu[i], batch_meta[i]['pkey'], batch_meta[i]['name'], class_to_process, batch_meta[i]['sub'])
+            # Add data to the manager's buffer with Resumability support
+            split_emb_dataset_manager.add_to_data_buffer(embeddings_cpu[i], specs_cpu[i], batch_meta[i]['pkey'], 
+                                                        batch_meta[i]['name'], class_to_process, batch_meta[i]['sub'])
         
         stats["save"] += (time.perf_counter() - t_save_start)
         cur_batch_len = len(batch_audio)
@@ -178,7 +190,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
                 n_buckets = math.ceil((track.shape[0] - offset) / window_size)
 
                 for b in range(n_buckets):
-                    # Transition to next split (e.g., train -> valid) when threshold is reached
+                    # Transition to next split (e.g., train -> es) when threshold is reached
                     if results >= target_counts_list[di]:
                         flush_batch()
                         if split_emb_dataset_manager:
@@ -192,7 +204,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
                     # Generate unique primary key for the embedding
                     emb_pkey = f"{class_idx_attr}_{track_idx}_{b}_{round_}_{results}"
                     
-                    # Resumability check: Skip if embedding already exists in the target file
+                    # 🎯 RESUMABILITY CHECK: Skip if embedding already exists in the target file
                     if split_emb_dataset_manager and emb_pkey in split_emb_dataset_manager:
                         results += 1; continue
 
@@ -640,22 +652,20 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
     It manages the global setup, identifies incomplete tasks by inspecting existing logs, 
     and assigns a deterministic subset of work to the current rank.
 
-    This function relies on the environment variables provided by SLURM (e.g., SLURM_PROCID) 
-    to synchronize the distributed group.
+    FIXED: Now correctly searches for log.json within duration-specific subdirectories 
+    to support correct task resumption.
 
     args:
      - config_file (str): Name of the YAML configuration file to load;
      - audio_format (str): Audio format to process (e.g., 'wav', 'mp3');
      - n_octave (int): Octave band resolution for the spectrograms.
-
-    returns:
-     - None: Dispatches the work to 'worker_process_slurm'.
     """
     # 1. Environment and Variable Setup
     # Initializes rank and world_size based on SLURM environmental variables
     rank, world_size = setup_environ_vars(slurm=True)
 
     # Create the target directory and initialize the logging system
+    # Path: <preprocessed_dir>/<format>/<n_octave>_octave/
     embed_folder = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave')
     os.makedirs(embed_folder, exist_ok=True)
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s',
@@ -676,25 +686,29 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
     config['audio'].update({'noise_perc': noise_perc, 'seed': seed})
 
     # 2. Resumability Check: Identify active classes and tasks
-    log_data = {}
-    log_path = os.path.join(embed_folder, 'log.json')
-    if os.path.exists(log_path):
-        try:
-            with open(log_path, 'r') as f:
-                log_data = json.load(f)
-        except Exception as e:
-            logging.error(f"Error reading log for resumability: {e}")
-
-    # Filter classes that still have incomplete segments
+    # 🎯 FIX: We now iterate through each duration folder to find the corresponding log.json.
     active_classes = []
     for class_name in classes_list:
-        needs_work = False
+        class_needs_work = False
         for cut_secs in cut_secs_list:
-            log_key_str = str((cut_secs, class_name))
-            if not log_data.get(log_key_str, {}).get('completed', False):
-                needs_work = True
+            # Logs are stored in subfolders like '1_secs/', '3_secs/', etc.
+            duration_log_path = os.path.join(embed_folder, f'{cut_secs}_secs', 'log.json')
+            
+            is_completed = False
+            if os.path.exists(duration_log_path):
+                try:
+                    with open(duration_log_path, 'r') as f:
+                        log_data = json.load(f)
+                        log_key = str((cut_secs, class_name))
+                        is_completed = log_data.get(log_key, {}).get('completed', False)
+                except Exception:
+                    is_completed = False # Process anyway if log is corrupted
+            
+            if not is_completed:
+                class_needs_work = True
                 break
-        if needs_work:
+        
+        if class_needs_work:
             active_classes.append(class_name)
 
     active_classes.sort()
@@ -705,8 +719,17 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
     my_tasks = []
     for class_name in my_assigned_classes:
         for cut_secs in cut_secs_list:
-            log_key_str = str((cut_secs, class_name))
-            if not log_data.get(log_key_str, {}).get('completed'):
+            duration_log_path = os.path.join(embed_folder, f'{cut_secs}_secs', 'log.json')
+            log_key = str((cut_secs, class_name))
+            
+            is_completed = False
+            if os.path.exists(duration_log_path):
+                try:
+                    with open(duration_log_path, 'r') as f:
+                        is_completed = json.load(f).get(log_key, {}).get('completed', False)
+                except Exception: pass
+            
+            if not is_completed:
                 my_tasks.append((cut_secs, class_name))
 
     # Log task distribution for the current rank
@@ -718,8 +741,14 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
     message_queue = manager.Queue() if world_size > 1 else None
     pbar = None
     if rank == 0:
-        total_active_tasks = sum(1 for c in active_classes for s in cut_secs_list 
-                                 if not log_data.get(str((s, c)), {}).get('completed'))
+        # Recalculate total pending tasks across all duration subdirectories
+        total_active_tasks = 0
+        for c in active_classes:
+            for s in cut_secs_list:
+                d_log = os.path.join(embed_folder, f'{s}_secs', 'log.json')
+                if not os.path.exists(d_log) or not json.load(open(d_log)).get(str((s,c)), {}).get('completed', False):
+                    total_active_tasks += 1
+        
         if total_active_tasks > 0:
             pbar = MultiProcessTqdm(message_queue, "main_pbar", desc="SLURM Global Progress", total=total_active_tasks)
 
@@ -747,14 +776,10 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
      - audio_format (str): Audio format to process;
      - n_octave (int): Octave band resolution for spectrograms;
      - world_size (int): Requested number of parallel processes.
-
-    returns:
-     - None: Spawns local worker processes.
     """
     # 1. Local Environment Initialization
     setup_environ_vars(slurm=False)
     
-    # 🎯 DYNAMIC PORT: Avoid 'Address already in use' errors during repeated local tests
     import random
     os.environ['MASTER_PORT'] = str(random.randint(29500, 29999))
 
@@ -776,35 +801,36 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
     config['spectrogram'].update({'sr': sampling_rate, 'ref': ref, 'center_freqs': center_freqs})
     config['audio'].update({'noise_perc': noise_perc, 'seed': seed})
 
-    log_data = {}
-    log_path = os.path.join(embed_folder, 'log.json')
-    if os.path.exists(log_path):
-        try:
-            with open(log_path, 'r') as f:
-                log_data = json.load(f)
-        except Exception as e:
-            logging.error(f"Error reading local log: {e}")
-
     # 3. Active Class Identification
+    # 🎯 FIX: Corrected log path for task resumption.
     active_classes = []
     for class_name in classes_list:
-        needs_work = False
+        class_needs_work = False
         for cut_secs in cut_secs_list:
-            log_key_str = str((cut_secs, class_name))
-            if not log_data.get(log_key_str, {}).get('completed', False):
-                needs_work = True
+            duration_log_path = os.path.join(embed_folder, f'{cut_secs}_secs', 'log.json')
+            
+            is_completed = False
+            if os.path.exists(duration_log_path):
+                try:
+                    with open(duration_log_path, 'r') as f:
+                        log_key = str((cut_secs, class_name))
+                        is_completed = json.load(f).get(log_key, {}).get('completed', False)
+                except Exception: pass
+            
+            if not is_completed:
+                class_needs_work = True
                 break
-        if needs_work:
+        
+        if class_needs_work:
             active_classes.append(class_name)
 
     active_classes.sort()
 
     # 🎯 DYNAMIC WORLD SIZE ADJUSTMENT
-    # Ensures we don't spawn more processes than active classes to avoid rendezvous issues
     actual_world_size = min(len(active_classes), world_size)
     
     if actual_world_size == 0:
-        logging.info("All tasks are already completed according to log.json.")
+        logging.info("All tasks are already completed according to duration-specific logs.")
         return
 
     print(f"Local Environment: {len(active_classes)} active classes. Starting with {actual_world_size} processes.")
@@ -818,14 +844,23 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
     total_tasks_to_run = 0
 
     for rank in range(actual_world_size):
-        # Round-robin class assignment based on the adjusted world size
+        # Round-robin class assignment
         my_assigned_classes = active_classes[rank::actual_world_size]
         
         my_rank_tasks = []
         for class_name in my_assigned_classes:
             for cut_secs in cut_secs_list:
-                log_key_str = str((cut_secs, class_name))
-                if not log_data.get(log_key_str, {}).get('completed'):
+                duration_log_path = os.path.join(embed_folder, f'{cut_secs}_secs', 'log.json')
+                log_key = str((cut_secs, class_name))
+                
+                is_completed = False
+                if os.path.exists(duration_log_path):
+                    try:
+                        with open(duration_log_path, 'r') as f:
+                            is_completed = json.load(f).get(log_key, {}).get('completed', False)
+                    except Exception: pass
+                
+                if not is_completed:
                     my_rank_tasks.append((cut_secs, class_name))
         
         if my_rank_tasks:
@@ -840,7 +875,6 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
     # 6. Process Spawning
     try:
         for rank, my_tasks in tasks_distribution:
-            # Dispatch the local worker process
             p = mp.Process(
                 target=local_worker_process, 
                 args=(audio_format, n_octave, config, rank, actual_world_size, my_tasks, pbar)
@@ -849,11 +883,10 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
             processes.append(p)
             
         for p in processes:
-            p.join() # Wait for all local workers to finish
+            p.join()
             
     except Exception as e:
         logging.error(f"Critical error in local parent process: {e}")
-        traceback.print_exc()
         raise e
     finally:
         if pbar:
