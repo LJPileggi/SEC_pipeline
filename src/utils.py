@@ -818,7 +818,7 @@ def setup_distributed_environment(rank, world_size, slurm=True):
             init_method=init_method,
             rank=rank, 
             world_size=world_size,
-            timeout=datetime.timedelta(seconds=300)
+            timeout=datetime.timedelta(seconds=60)
         )
         
         device = torch.device(f'cuda:{rank}') if torch.cuda.is_available() else torch.device('cpu')
