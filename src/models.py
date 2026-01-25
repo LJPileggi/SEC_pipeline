@@ -135,6 +135,7 @@ def spectrogram_n_octaveband_generator_gpu(wav_batch, sampling_rate, n_octave=3,
     if wav_batch.dim() == 1:
         wav_batch = wav_batch.unsqueeze(0)
     
+    batch_size = wav_batch.shape[0]
     nyquist = sampling_rate / 2.0
     
     if center_freqs is None:
@@ -143,15 +144,12 @@ def spectrogram_n_octaveband_generator_gpu(wav_batch, sampling_rate, n_octave=3,
         n_max = int(np.round(n_octave * np.log2(f_max / f_ref)))
         n_indices = torch.arange(n_min, n_max + 1, device=device)
         center_freqs = f_ref * (2**(n_indices / n_octave))
-        # 🎯 FIX 1: Margine di sicurezza preventivo per Nyquist
         center_freqs = center_freqs[center_freqs < f_max - 100.0]
 
     n_bands = len(center_freqs)
     factor = 2 ** (1 / (2 * n_octave))
     freq_d, freq_u = center_freqs / factor, center_freqs * factor
     
-    # 🎯 FIX 2: Clamping prima della conversione SOS in Scipy
-    # Spostiamo in CPU e clampiamo per assicurarci che 0 < Wn < 1
     low_np = np.clip(freq_d.cpu().numpy(), 1.0, nyquist - 1.0)
     high_np = np.clip(freq_u.cpu().numpy(), 2.0, nyquist - 1.0)
     
@@ -162,18 +160,44 @@ def spectrogram_n_octaveband_generator_gpu(wav_batch, sampling_rate, n_octave=3,
         sos_coeffs.append(torch.from_numpy(sos).float())
     
     sos_tensor = torch.stack(sos_coeffs).to(device).to(torch.float32)
-    x = wav_batch.repeat_interleave(n_bands, dim=0)
     
-    for s in range(sos_tensor.shape[1]):
-        b = sos_tensor[:, s, :3].repeat(wav_batch.shape[0], 1).to(torch.float32)
-        a = sos_tensor[:, s, 3:].repeat(wav_batch.shape[0], 1).to(torch.float32)
-        x = F.lfilter(x, a, b, clamp=False)
+    # 🎯 MEMORY MANAGEMENT: Define micro-batch size for filtering
+    # 1024 is a safe compromise between speed and memory for 10s segments
+    MICRO_BATCH_SIZE = 1024 
+    full_expanded_size = batch_size * n_bands
     
-    filtered = x.reshape(wav_batch.shape[0], n_bands, -1)
+    # Repeat audio for each band
+    x_full = wav_batch.repeat_interleave(n_bands, dim=0)
+    filtered_results = []
+
+    # 🎯 CHUNKED FILTERING LOOP
+    # We process subsets of (batch_sample * band) combinations
+    for i in range(0, full_expanded_size, MICRO_BATCH_SIZE):
+        end_i = min(i + MICRO_BATCH_SIZE, full_expanded_size)
+        x_chunk = x_full[i:end_i]
+        
+        # Get the corresponding SOS coefficients for the bands in this chunk
+        # Each sample in wav_batch is repeated n_bands times
+        band_indices = torch.arange(i, end_i, device=device) % n_bands
+        sos_chunk = sos_tensor[band_indices]
+
+        # Apply the 6-step SOS filtering (4th order = 2 sections)
+        # Note: Scipy output='sos' returns [N_sections, 6]
+        for s in range(sos_tensor.shape[1]):
+            b = sos_chunk[:, s, :3]
+            a = sos_chunk[:, s, 3:]
+            x_chunk = F.lfilter(x_chunk, a, b, clamp=False)
+        
+        filtered_results.append(x_chunk)
+        
+    # Reassemble filtered signals
+    x = torch.cat(filtered_results, dim=0)
+    
+    filtered = x.reshape(batch_size, n_bands, -1)
     
     window = int(sampling_rate * 0.1)
     n_windows = filtered.shape[2] // window
-    filtered = filtered[:, :, :n_windows*window].reshape(wav_batch.shape[0], n_bands, n_windows, window)
+    filtered = filtered[:, :, :n_windows*window].reshape(batch_size, n_bands, n_windows, window)
     
     rms = torch.sqrt(torch.mean(filtered**2, dim=-1))
     rms = torch.clamp(rms, min=torch.finfo(torch.float32).eps)

@@ -52,6 +52,7 @@ export CLAP_TEXT_ENCODER_PATH="/tmp_data/roberta-base"
 export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/weights/CLAP_weights_2023.pth"
 export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
 export PYTHONUNBUFFERED=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export NCCL_P2P_DISABLE=1
 export NCCL_IB_DISABLE=1
 export MASTER_PORT=\$(expr 20000 + \${SLURM_JOB_ID} % 10000)
@@ -68,6 +69,31 @@ srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \\
     "$SIF_FILE" \\
     python3 scripts/get_clap_embeddings.py --config_file "$CONFIG_FILE" --n_octave "$N_OCTAVE" --audio_format "$AUDIO_FORMAT"
 
+# 🎯 5. LOG MERGING (Added from Test Script)
+echo "🔗 Merging rank-specific logs..."
+cat << 'INNER_EOF' > "\$TEMP_DIR/work_dir/join_logs_wrapper.py"
+import sys, os
+sys.path.append('/app')
+from src.utils import join_logs
+from src.dirs_config import basedir_preprocessed
+def main():
+    # Construct path based on the preprocessed base directory and format
+    base_path = os.path.join(basedir_preprocessed, "$AUDIO_FORMAT", "${N_OCTAVE}_octave")
+    if not os.path.exists(base_path): 
+        print(f"Path not found for log merging: {base_path}")
+        return
+    for entry in os.listdir(base_path):
+        target_dir = os.path.join(base_path, entry)
+        if os.path.isdir(target_dir) and entry.endswith("_secs"):
+            print(f"Merging logs in: {entry}")
+            join_logs(target_dir)
+if __name__ == '__main__': main()
+INNER_EOF
+
+singularity exec --bind "\$TEMP_DIR:/tmp_data" --bind "\$(pwd):/app" --pwd "/app" "$SIF_FILE" \\
+    python3 "/tmp_data/work_dir/join_logs_wrapper.py"
+
+# 🎯 6. FINAL JOINING
 echo "🔗 Joining HDF5 files..."
 singularity exec --nv \\
     --bind "/leonardo_scratch:/leonardo_scratch" \\
@@ -77,7 +103,7 @@ singularity exec --nv \\
     "$SIF_FILE" \\
     python3 scripts/join_hdf5.py --config_file "$CONFIG_FILE" --n_octave "$N_OCTAVE" --audio_format "$AUDIO_FORMAT"
 
-# 🎯 5. STAGE-OUT
+# 🎯 5.7 STAGE-OUT
 echo "📦 Staging-out results..."
 TARGET_GLOBAL="$DATASEC_GLOBAL/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave"
 mkdir -p "\$TARGET_GLOBAL"
