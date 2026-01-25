@@ -33,14 +33,15 @@ run_slurm() {
 # 🎯 1. PATH DEFINITION (Absolute scratch paths)
 # We use a temporary directory on the node's local storage or high-speed scratch.
 TEMP_DIR="/leonardo_scratch/large/userexternal/\$USER/tmp_job_\$SLURM_JOB_ID"
-mkdir -p "\$TEMP_DIR/dataSEC/RAW_DATASET"
+mkdir -p "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT"
 mkdir -p "\$TEMP_DIR/work_dir/weights"
 mkdir -p "\$TEMP_DIR/roberta-base"
 mkdir -p "\$TEMP_DIR/numba_cache"
 
 # 🎯 2. STAGE-IN: Move data to the temporary workspace
 echo "📦 Staging-in data..."
-cp -r "$DATASEC_GLOBAL/RAW_DATASET/raw_$AUDIO_FORMAT" "\$TEMP_DIR/dataSEC/RAW_DATASET/"
+cp "$DATASEC_GLOBAL/RAW_DATASET/raw_$AUDIO_FORMAT"/*.h5 "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT/" 2>/dev/null || \\
+cp "$DATASEC_GLOBAL/RAW_DATASET/raw_$AUDIO_FORMAT"/*/*.h5 "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT/"
 cp -r "$ROBERTA_PATH/." "\$TEMP_DIR/roberta-base/"
 cp "$CLAP_SCRATCH_WEIGHTS" "\$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth"
 
@@ -103,7 +104,7 @@ singularity exec --nv \\
     "$SIF_FILE" \\
     python3 scripts/join_hdf5.py --config_file "$CONFIG_FILE" --n_octave "$N_OCTAVE" --audio_format "$AUDIO_FORMAT"
 
-# 🎯 5.7 STAGE-OUT
+# 🎯 7. STAGE-OUT
 echo "📦 Staging-out results..."
 TARGET_GLOBAL="$DATASEC_GLOBAL/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave"
 mkdir -p "\$TARGET_GLOBAL"
