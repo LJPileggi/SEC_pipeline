@@ -796,38 +796,38 @@ def setup_distributed_environment(rank, world_size, slurm=True):
                       assigned to this process.
     """
     import datetime
-    sync_file = "/tmp_data/torch_sync_file"
     
-    # Rank 0 is responsible for cleaning up old synchronization files
+    # 🎯 FIX 1: Unique sync file per Job to avoid collisions
+    job_id = os.environ.get("SLURM_JOB_ID", "local")
+    sync_file = f"/tmp_data/torch_sync_file_{job_id}"
+    
     if rank == 0 and os.path.exists(sync_file):
-        os.remove(sync_file)
+        try:
+            os.remove(sync_file)
+        except Exception: pass
 
     init_method = f"file://{sync_file}"
     
-    # Diagnostic print visible only if the global VERBOSE flag is enabled
     if VERBOSE:
-        print(f"[RANK {rank}] Attempting rendezvous on {sync_file} (WS={world_size})", flush=True)
+        print(f"[RANK {rank}] Rendezvous on {sync_file} (WS={world_size})", flush=True)
 
     try:
-        # Initialize the group with a 60-second timeout
+        # 🎯 FIX 2: Extended timeout (300s) for heavy cluster starts
         dist.init_process_group(
             backend="gloo", 
             init_method=init_method,
             rank=rank, 
             world_size=world_size,
-            timeout=datetime.timedelta(seconds=60)
+            timeout=datetime.timedelta(seconds=300)
         )
         
-        # Map the process to a specific GPU if available, else CPU
         device = torch.device(f'cuda:{rank}') if torch.cuda.is_available() else torch.device('cpu')
         
-        # Only Rank 0 confirms successful synchronization to keep logs clean
         if rank == 0:
             print(f"🌐 [DIST] Group synchronized with {world_size} processes.", flush=True)
             
         return device
     except Exception as e:
-        # Critical errors are always printed regardless of VERBOSE flag
         print(f"❌ [RANK {rank}] DISTRIBUTED ERROR: {e}", flush=True)
         raise e
 
