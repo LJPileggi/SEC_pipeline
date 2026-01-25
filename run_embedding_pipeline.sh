@@ -33,55 +33,49 @@ run_slurm() {
 #SBATCH -A IscrC_Pb-skite
 #SBATCH --output=%x_%j.out
 
-# 🎯 1. PATH DEFINITION (Absolute scratch paths)
+# 🎯 1. PATH DEFINITION
 TEMP_DIR="/leonardo_scratch/large/userexternal/\$USER/tmp_job_\$SLURM_JOB_ID"
+# Scappiamo il dollaro per far espandere le variabili globali del chiamante ORA
 TARGET_GLOBAL="$DATASEC_GLOBAL/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave"
 
-# Create exact hierarchy for staging
 mkdir -p "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT"
 mkdir -p "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave"
 mkdir -p "\$TEMP_DIR/work_dir/weights"
 mkdir -p "\$TEMP_DIR/roberta-base"
 mkdir -p "\$TEMP_DIR/numba_cache"
 
-# 🎯 2. SIGNAL TRAP (Resilience for scancel/timeout)
+# 🎯 2. SIGNAL TRAP (Emergency only)
+# NON mettiamo EXIT qui, o cancellerà tutto prima del merging!
 cleanup_and_stageout() {
-    echo "⚠️ Signal caught or Job ending! Starting Stage-out..."
+    echo "⚠️ Signal caught! Starting emergency Stage-out..."
     mkdir -p "$TARGET_GLOBAL"
-    # rsync ensures only new/modified embeddings are pushed back
     rsync -au "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave/." "$TARGET_GLOBAL/"
     rm -rf "\$TEMP_DIR"
-    echo "✅ Stage-out and cleanup completed."
+    echo "✅ Emergency Stage-out completed."
+    exit 0
 }
-trap 'cleanup_and_stageout' SIGTERM SIGINT EXIT
+trap 'cleanup_and_stageout' SIGTERM SIGINT
 
-# 🎯 3. STAGE-IN (Data Locality for Resume & Speed)
+# 🎯 3. STAGE-IN
 echo "📦 Staging-in data and weights..."
-
-# Copy weights first to ensure they are ready for model initialization
 cp "$CLAP_SCRATCH_WEIGHTS" "\$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth"
 cp -r "$ROBERTA_PATH/." "\$TEMP_DIR/roberta-base/"
 
-# Sync existing embeddings to enable fast local resumability check
 if [ -d "$TARGET_GLOBAL" ]; then
     cp -r "$TARGET_GLOBAL/." "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave/"
 fi
 
-# Copy targeted raw dataset (Flat logic)
 cp "$DATASEC_GLOBAL/RAW_DATASET/raw_$AUDIO_FORMAT"/*.h5 "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT/" 2>/dev/null || \\
 cp "$DATASEC_GLOBAL/RAW_DATASET/raw_$AUDIO_FORMAT"/*/*.h5 "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT/"
 
-# 🎯 4. ENVIRONMENT REDIRECTION (The Mantra)
+# 🎯 4. ENVIRONMENT
 export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
 export HF_HUB_OFFLINE=1
 export CLAP_TEXT_ENCODER_PATH="/tmp_data/roberta-base"
-# FIXED: Absolute path matching the container mount for weights
 export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/weights/CLAP_weights_2023.pth"
 export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
 export PYTHONUNBUFFERED=1
 export PYTORCH_ALLOC_CONF=expandable_segments:True
-export NCCL_P2P_DISABLE=1
-export NCCL_IB_DISABLE=1
 export MASTER_ADDR=\$(hostname)
 export MASTER_PORT=\$(expr 20000 + \${SLURM_JOB_ID} % 10000)
 
@@ -96,7 +90,7 @@ srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \\
     "$SIF_FILE" \\
     python3 scripts/get_clap_embeddings.py --config_file "$CONFIG_FILE" --n_octave "$N_OCTAVE" --audio_format "$AUDIO_FORMAT"
 
-# 🎯 6. LOG MERGING
+# 🎯 6. LOG MERGING (Ora TEMP_DIR esiste ancora!)
 echo "🔗 Merging rank-specific logs..."
 cat << 'INNER_EOF' > "\$TEMP_DIR/work_dir/join_logs_wrapper.py"
 import sys, os
@@ -104,6 +98,7 @@ sys.path.append('/app')
 from src.utils import join_logs
 from src.dirs_config import basedir_preprocessed
 def main():
+    # Passiamo esplicitamente le variabili tramite l'ambiente o stringhe espanse
     base_path = os.path.join(basedir_preprocessed, "$AUDIO_FORMAT", "${N_OCTAVE}_octave")
     if not os.path.exists(base_path): return
     for entry in os.listdir(base_path):
@@ -126,7 +121,12 @@ singularity exec --nv \\
     "$SIF_FILE" \\
     python3 scripts/join_hdf5.py --config_file "$CONFIG_FILE" --n_octave "$N_OCTAVE" --audio_format "$AUDIO_FORMAT"
 
-# Exit will trigger cleanup_and_stageout via trap
+# 🎯 8. FINAL STAGE-OUT (Normal exit)
+echo "🏁 Job finished. Consolidating final results..."
+mkdir -p "$TARGET_GLOBAL"
+rsync -au "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave/." "$TARGET_GLOBAL/"
+rm -rf "\$TEMP_DIR"
+echo "✅ All done."
 EOF
 
     chmod +x "$script"
