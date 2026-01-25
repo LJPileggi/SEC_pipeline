@@ -70,43 +70,29 @@ def spectrogram_n_octaveband_generator(
     returns:
      - np.array: 1/n-octave band spectrogram.
     """
-    # --- GESTIONE E CALCOLO DELLE FREQUENZE CENTRALI (se center_freqs è None) ---
     if center_freqs is None:
-        # Frequenza centrale di riferimento (es. 1000 Hz)
-        f_ref = 1000.0
-        # Frequenza minima per audio processing standard
-        f_min = 20.0
-        # Limite superiore: frequenza di Nyquist (metà del sampling rate)
-        f_max = sampling_rate / 2.0
-        
-        # Calcoliamo gli indici 'n' necessari per coprire il range (secondo ISO 266: fc = 1000 * 2^(n/N))
-        
-        # Troviamo l'indice 'n' minimo e massimo
+        f_ref, f_min, f_max = 1000.0, 20.0, sampling_rate / 2.0
         n_min = int(np.round(n_octave * np.log2(f_min / f_ref)))
         n_max = int(np.round(n_octave * np.log2(f_max / f_ref)))
-        
-        # Generiamo gli indici e calcoliamo le frequenze centrali
         n_indices = np.arange(n_min, n_max + 1)
         center_freqs = f_ref * (2**(n_indices / n_octave))
-        
-        # Filtriamo le frequenze che superano il limite di Nyquist
-        center_freqs = center_freqs[center_freqs <= f_max]
-        
-        # Se non si genera nessuna frequenza (caso limite), usiamo solo la ref.
-        if len(center_freqs) == 0:
-            center_freqs = np.array([f_ref]) 
+        # 🎯 FIX 1: Filtro preventivo bande eccessive
+        center_freqs = center_freqs[center_freqs < f_max - 50.0]
 
-    # --- FINE LOGICA center_freqs ---
-    
     # octave band factor
     factor = 2 ** (1 / (2 * n_octave))
     freq_d = center_freqs / factor
     freq_u = center_freqs * factor
 
+    # 🎯 FIX 2: Clamping di sicurezza per Scipy (Wn deve essere 0 < Wn < 1)
+    nyquist = sampling_rate / 2.0
+    freq_d = np.clip(freq_d, 1.0, nyquist - 1.0)
+    freq_u = np.clip(freq_u, 2.0, nyquist - 1.0)
+
     bands = [
         scipy.signal.butter(
             N=order,
-            Wn=np.array([lower, upper]) / (sampling_rate / 2),
+            Wn=np.array([lower, upper]) / nyquist,
             btype='bandpass',
             analog=False,
             output='sos'
@@ -116,7 +102,6 @@ def spectrogram_n_octaveband_generator(
     window = int(sampling_rate * integration_seconds)
     filtered = np.array([scipy.signal.sosfilt(band, wav_data) for band in bands])
 
-    # handling of signals shorter than integration window
     if filtered.shape[1] < window:
         spectrogram = np.zeros((filtered.shape[0], 1, window))
     else:
@@ -124,8 +109,6 @@ def spectrogram_n_octaveband_generator(
         spectrogram = filtered.reshape(filtered.shape[0], -1, window)
 
     rms = np.sqrt(np.mean(spectrogram ** 2, axis=-1))
-    
-    # handling of rms == 0 to avoid log(0)
     rms[rms == 0] = np.finfo(float).eps
 
     spectrogram = 20 * np.log10(rms / ref)
@@ -133,38 +116,52 @@ def spectrogram_n_octaveband_generator(
 
 def spectrogram_n_octaveband_generator_gpu(wav_batch, sampling_rate, n_octave=3, center_freqs=None, ref=2e-5, device='cuda'):
     """
-    Calcolo 1/n ottava totalmente vettorizzato su GPU.
-    Forza Float32 per evitare il crash di torchaudio.functional.lfilter.
+    Spectrogram generator for 1/n-octave band vectorised for GPU usage.
+
+    args:
+     - wav_batch (np.array): batch of input audio data;
+     - sampling_rate (int): sampling rate of the input audio data;
+     - n_octave (int): specifies 1/n octave band (e.g., 3 for 1/3 octave, 1 for 1 octave);
+     - center_freqs (np.array): center frequencies of the 1/n-octave bands;
+     - ref (float): reference value for the spectrogram;
+     - device (str): device to run generation on (default 'cuda').
+
+    returns:
+     - np.array: 1/n-octave band spectrogram batch.
     """
     import torchaudio.functional as F
     
-    # 🎯 Forza Float32 per la stabilità del filtro
     wav_batch = wav_batch.to(torch.float32) 
-    
     if wav_batch.dim() == 1:
         wav_batch = wav_batch.unsqueeze(0)
     
+    nyquist = sampling_rate / 2.0
+    
     if center_freqs is None:
-        f_ref, f_min, f_max = 1000.0, 20.0, sampling_rate / 2.0
+        f_ref, f_min, f_max = 1000.0, 20.0, nyquist
         n_min = int(np.round(n_octave * np.log2(f_min / f_ref)))
         n_max = int(np.round(n_octave * np.log2(f_max / f_ref)))
         n_indices = torch.arange(n_min, n_max + 1, device=device)
         center_freqs = f_ref * (2**(n_indices / n_octave))
-        center_freqs = center_freqs[center_freqs <= f_max]
+        # 🎯 FIX 1: Margine di sicurezza preventivo per Nyquist
+        center_freqs = center_freqs[center_freqs < f_max - 100.0]
 
     n_bands = len(center_freqs)
     factor = 2 ** (1 / (2 * n_octave))
     freq_d, freq_u = center_freqs / factor, center_freqs * factor
     
+    # 🎯 FIX 2: Clamping prima della conversione SOS in Scipy
+    # Spostiamo in CPU e clampiamo per assicurarci che 0 < Wn < 1
+    low_np = np.clip(freq_d.cpu().numpy(), 1.0, nyquist - 1.0)
+    high_np = np.clip(freq_u.cpu().numpy(), 2.0, nyquist - 1.0)
+    
     sos_coeffs = []
-    for lower, upper in zip(freq_d.cpu().numpy(), freq_u.cpu().numpy()):
-        sos = scipy.signal.butter(N=4, Wn=np.array([lower, upper]) / (sampling_rate / 2), 
+    for lower, upper in zip(low_np, high_np):
+        sos = scipy.signal.butter(N=4, Wn=np.array([lower, upper]) / nyquist, 
                                  btype='bandpass', output='sos')
         sos_coeffs.append(torch.from_numpy(sos).float())
     
-    # sos_tensor forzato a float32
     sos_tensor = torch.stack(sos_coeffs).to(device).to(torch.float32)
-    
     x = wav_batch.repeat_interleave(n_bands, dim=0)
     
     for s in range(sos_tensor.shape[1]):
