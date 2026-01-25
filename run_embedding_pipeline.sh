@@ -30,37 +30,53 @@ run_slurm() {
 #SBATCH -A IscrC_Pb-skite
 #SBATCH --output=%x_%j.out
 
-# 🎯 1. PATH DEFINITION (Absolute scratch paths)
-# We use a temporary directory on the node's local storage or high-speed scratch.
+# 🎯 1. PATH DEFINITION
 TEMP_DIR="/leonardo_scratch/large/userexternal/\$USER/tmp_job_\$SLURM_JOB_ID"
+TARGET_GLOBAL="$DATASEC_GLOBAL/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave"
+
+# Create the internal structure for both RAW and PREPROCESSED on NVMe
 mkdir -p "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT"
+mkdir -p "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave"
 mkdir -p "\$TEMP_DIR/work_dir/weights"
 mkdir -p "\$TEMP_DIR/roberta-base"
-mkdir -p "\$TEMP_DIR/numba_cache"
 
-# 🎯 2. STAGE-IN: Move data to the temporary workspace
-echo "📦 Staging-in data..."
+# 🎯 2. SIGNAL TRAP (Handling scancel and timeout)
+# Ensures that even if the job is interrupted, progress is flushed to global scratch.
+cleanup_and_stageout() {
+    echo "⚠️ Signal/End-of-job caught! Flushing results to global storage..."
+    mkdir -p "$TARGET_GLOBAL"
+    # 'rsync -au' copies only new or updated files (archive + update mode)
+    rsync -au "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave/." "$TARGET_GLOBAL/"
+    rm -rf "\$TEMP_DIR"
+    echo "✅ Stage-out and cleanup completed."
+}
+# Trap SIGTERM (scancel), SIGINT (Ctrl+C), and EXIT (normal completion)
+trap 'cleanup_and_stageout' SIGTERM SIGINT EXIT
+
+# 🎯 3. STAGE-IN (Data Locality)
+echo "📦 Staging-in data to NVMe..."
+# Sync existing embeddings to the node to enable fast O(1) resumability checks
+if [ -d "$TARGET_GLOBAL" ]; then
+    echo "   - Pre-loading existing embeddings..."
+    cp -r "$TARGET_GLOBAL/." "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave/"
+fi
+
+# Copy raw audio (Flat logic)
 cp "$DATASEC_GLOBAL/RAW_DATASET/raw_$AUDIO_FORMAT"/*.h5 "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT/" 2>/dev/null || \\
 cp "$DATASEC_GLOBAL/RAW_DATASET/raw_$AUDIO_FORMAT"/*/*.h5 "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT/"
+
 cp -r "$ROBERTA_PATH/." "\$TEMP_DIR/roberta-base/"
 cp "$CLAP_SCRATCH_WEIGHTS" "\$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth"
 
-# 🎯 3. ENVIRONMENT REDIRECTION (The Mantra)
-# We point everything to /tmp_data which is our container mount point.
+# 🎯 4. ENVIRONMENT & EXECUTION
 export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
-export HF_HUB_OFFLINE=1
-export CLAP_TEXT_ENCODER_PATH="/tmp_data/roberta-base"
-export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/weights/CLAP_weights_2023.pth"
-export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
-export PYTHONUNBUFFERED=1
 export PYTORCH_ALLOC_CONF=expandable_segments:True
-export NCCL_P2P_DISABLE=1
-export NCCL_IB_DISABLE=1
+export MASTER_ADDR=\$(hostname)
 export MASTER_PORT=\$(expr 20000 + \${SLURM_JOB_ID} % 10000)
 
-# 🎯 4. EXECUTION
 echo "🚀 Starting Parallel Embedding Pipeline..."
-# We bind the pre-existing TEMP_DIR to /tmp_data inside the container
+# Binds: we map our entire TEMP_DIR to /tmp_data.
+# This makes both /tmp_data/dataSEC/RAW_DATASET and /tmp_data/dataSEC/PREPROCESSED_DATASET visible.
 srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \\
     singularity exec --nv \\
     --bind "/leonardo_scratch:/leonardo_scratch" \\
