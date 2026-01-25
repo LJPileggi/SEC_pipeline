@@ -37,7 +37,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     to minimize I/O overhead.
 
     🎯 FIXED: Implements intermediate VRAM cleanup and dynamic batching to prevent OOM 
-    on long segments (up to 30s) and uses flat raw paths for source HDF5 files.
+    on long segments (up to 30s) and high spectral resolution (up to 1/32 octave).
 
     args:
      - clap_model (msclap.CLAP): The initialized CLAP model wrapper;
@@ -66,8 +66,16 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
 
     # 📊 PERFORMANCE & MONITORING SETUP
     stats = {"load": 0, "gpu_total": 0, "save": 0, "count": 0}
-    # 🎯 DYNAMIC BATCH SIZE: Reduce batch for long segments to prevent OOM
-    BATCH_SIZE = 128 if cut_secs <= 15 else 64 
+    
+    # 🎯 DYNAMIC BATCH SIZE: Adjusted for both duration AND spectral granularity
+    # Memory footprint scales linearly with n_octave. We reduce the batch size to
+    # maintain a stable VRAM peak during spectrogram generation.
+    base_batch = 128 if cut_secs <= 15 else 64 
+    # Scaling factor based on standard 1/3 octave baseline
+    BATCH_SIZE = max(8, int(base_batch * (3 / n_octave)))
+    
+    if VERBOSE and rank == 0:
+        print(f"[RANK {rank}] Dynamic Batch set to {BATCH_SIZE} (n_octave={n_octave}, cut={cut_secs}s)", flush=True)
     
     def write_perf_log():
         """Writes performance statistics to a rank-specific text file to keep stdout clean."""
@@ -113,7 +121,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
         
         t_gpu_start = time.perf_counter()
         
-        # 🎯 ANTI-OOM: Pre-inference cache cleaning
+        # 🎯 ANTI-OOM: Pre-inference cleanup
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
@@ -135,7 +143,8 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
             specs_gpu = spectrogram_n_octaveband_generator_gpu(batch_tensor, sr, n_octave, 
                                                                center_freqs=center_freqs, ref=ref, device=device)
             
-            # 🎯 ANTI-OOM MILESTONE: Release intermediate buffers before CLAP inference
+            # 🎯 ANTI-OOM MILESTONE: Intermediate VRAM Cleanup
+            # Explicitly delete temporary noise tensors and clear cache before CLAP inference
             del raw_batch, noise, means
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -151,7 +160,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
         specs_cpu = specs_gpu.float().cpu().numpy()
         stats["gpu_total"] += (time.perf_counter() - t_gpu_start)
 
-        # 🎯 ANTI-OOM: Explicitly delete GPU tensors
+        # 🎯 ANTI-OOM: Immediate deletion of GPU tensors
         del batch_tensor, specs_gpu, embeddings
         
         t_save_start = time.perf_counter()
@@ -172,16 +181,15 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
         stats["count"] += cur_batch_len
         n_embeddings_per_run += cur_batch_len
         
-        # 🎯 EXECUTION HEARTBEAT: Standard output milestone
+        # 🎯 EXECUTION HEARTBEAT
         print(f"[RANK {rank}] {class_to_process} | {cut_secs}s: {results}/{target_counts_list[di]} ({division_names[di]})", flush=True)
 
-        # Periodically log performance stats to file
         if stats["count"] % (BATCH_SIZE * 4) == 0: 
             write_perf_log()
             
         batch_audio.clear(); batch_meta.clear()
         
-        # Final batch cleanup
+        # 🎯 ANTI-OOM: Post-batch cleanup
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
@@ -193,17 +201,14 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
             round_ += 1
             for track_idx in permuted_indices:
                 t_load_s = time.perf_counter()
-                # Load raw audio track and its metadata
                 track, metadata = audio_dataset_manager.get_audio_and_metadata(track_idx)
                 stats["load"] += (time.perf_counter() - t_load_s)
                 
                 window_size = int(cut_secs * sr)
-                # Calculate random offset for augmentation in rounds > 1
                 offset = offset_rng.integers(0, track.shape[0]-window_size) if round_>1 and track.shape[0]>window_size else 0
                 n_buckets = math.ceil((track.shape[0] - offset) / window_size)
 
                 for b in range(n_buckets):
-                    # Transition to next split (e.g., train -> es) when threshold is reached
                     if results >= target_counts_list[di]:
                         flush_batch()
                         if split_emb_dataset_manager:
@@ -214,33 +219,28 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
                             if own_manager: audio_dataset_manager.close()
                             return n_embeddings_per_run, True
 
-                    # Generate unique primary key for the embedding
                     emb_pkey = f"{class_idx_attr}_{track_idx}_{b}_{round_}_{results}"
                     
-                    # 🎯 RESUMABILITY CHECK: Skip if embedding already exists in the target file
+                    # 🎯 RESUMABILITY CHECK: Skip if already exists
                     if split_emb_dataset_manager and emb_pkey in split_emb_dataset_manager:
                         results += 1; continue
 
-                    # Slicing and padding logic
                     start, end = b*window_size+offset, (b+1)*window_size+offset
                     cut_data = track[start:end]
                     if len(cut_data) < window_size: 
                         cut_data = np.pad(cut_data, (0, window_size - len(cut_data)), 'constant')
                     
-                    # Accumulate audio data in the batch
                     batch_audio.append(torch.from_numpy(cut_data).float())
                     batch_meta.append({'pkey': emb_pkey, 'name': metadata['track_name'], 'sub': metadata['subclass']})
 
                     results += 1
                     if len(batch_audio) >= BATCH_SIZE: flush_batch()
 
-                # Memory house-keeping: Clear cache and trim malloc after processing batches
                 if results % 100 == 0: 
                     gc.collect(); ctypes.CDLL('libc.so.6').malloc_trim(0)
             flush_batch()
             
     except Exception:
-        # Ensure managers are closed safely in case of failure
         if split_emb_dataset_manager: split_emb_dataset_manager.close()
         if own_manager: audio_dataset_manager.close()
         logging.error(f"❌ CRITICAL ERROR: {traceback.format_exc()}")
