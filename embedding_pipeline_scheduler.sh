@@ -1,11 +1,10 @@
 #!/bin/bash
 # ==========================================================
 # RIGOROUS SEQUENTIAL SCHEDULER FOR LEONARDO CLUSTER
-# Strategy: "Absolute Environment Parity & Path Resolution"
+# Mantra: "Strict Parsing & Environment Parity"
 # ==========================================================
 
 DIRECTIVES_FILE=$1
-# Securely capture the actual username for internal fallback
 CURRENT_USER=$(whoami)
 
 if [ ! -f "$DIRECTIVES_FILE" ]; then
@@ -13,15 +12,13 @@ if [ ! -f "$DIRECTIVES_FILE" ]; then
     exit 1
 fi
 
-# --- 1. HEADER PARSING (With literal $USER replacement) ---
+# --- 1. HEADER PARSING (Explicit Path Resolution) ---
 echo "📖 Parsing Global Header..."
 
 parse_path() {
     local raw_val=$(grep "$1" "$DIRECTIVES_FILE" | cut -d'|' -f2 | xargs)
-    # 🎯 FIX: We force the expansion by replacing literal USER string with the actual variable if necessary,
-    # then we use eval to resolve any existing $USER variables.
-    local fixed_val=$(echo "$raw_val" | sed "s/large\/userexternal\/USER/large\/userexternal\/$CURRENT_USER/g")
-    eval echo "$fixed_val"
+    # Replaces literal USER string with current username to fix pathing [cite: 2]
+    echo "$raw_val" | sed "s/large\/userexternal\/USER/large\/userexternal\/$CURRENT_USER/g"
 }
 
 SIF_FILE=$(parse_path "SIF_FILE")
@@ -36,9 +33,9 @@ SLURM_TIME=$(grep "SLURM_TIME" "$DIRECTIVES_FILE" | cut -d'|' -f2 | xargs)
 # --- 2. TASK SUBMISSION FUNCTION ---
 submit_and_wait_task() {
     local c_file=$1; local fmt=$2; local oct=$3
-    local j_name="emb_${fmt}_o${oct}"
+    # Description-rich job and output names 
+    local j_name="emb_${fmt}_oct${oct}"
     local script="submit_${j_name}.sh"
-    # Resolve the destination globally to prevent empty variable errors
     local FINAL_DEST="$DATASEC_GLOBAL/PREPROCESSED_DATASET/$fmt/${oct}_octave"
 
     cat << EOF > "$script"
@@ -52,34 +49,30 @@ submit_and_wait_task() {
 #SBATCH --gres=gpu:4
 #SBATCH -p $SLURM_PARTITION
 #SBATCH -A $SLURM_ACCOUNT
-#SBATCH --output=%x_%j.out
+#SBATCH --output=${j_name}_%j.out
 
-# 🎯 PATH DEFINITION
+# 🎯 PATH DEFINITION (Absolute resolution) [cite: 2]
 TEMP_DIR="/leonardo_scratch/large/userexternal/$CURRENT_USER/tmp_job_\$SLURM_JOB_ID"
 TARGET_GLOBAL="$FINAL_DEST"
 
-# 🛠️ DIRECTORY SETUP (Mirroring run_embedding_pipeline.sh logic)
 mkdir -p "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$fmt"
 mkdir -p "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$fmt/${oct}_octave"
 mkdir -p "\$TEMP_DIR/work_dir/weights"
 mkdir -p "\$TEMP_DIR/roberta-base"
 mkdir -p "\$TEMP_DIR/numba_cache"
 
-# 🛡️ SIGNAL HANDLING & CONSOLIDATION
 finalize_and_cleanup() {
     trap - SIGTERM SIGINT
-    echo "⚠️ Signal or End-of-Run caught! Starting consolidation..."
+    echo "⚠️ Signal caught! Starting consolidation..."
     if [ -d "\$TEMP_DIR" ]; then
-        # 🔗 LOG MERGING
+        # 🔗 LOG MERGING 
         singularity exec --no-home --bind "\$TEMP_DIR:/tmp_data" --bind "\$(pwd):/app" --pwd "/app" "$SIF_FILE" \\
             python3 "/tmp_data/work_dir/join_logs_wrapper.py"
-        
-        # 🔗 HDF5 JOINING
+        # 🔗 HDF5 JOINING 
         singularity exec --nv --no-home --bind "/leonardo_scratch:/leonardo_scratch" --bind "\$TEMP_DIR:/tmp_data" \\
             --bind "\$(pwd):/app" --pwd "/app" "$SIF_FILE" \\
             python3 scripts/join_hdf5.py --config_file "$c_file" --n_octave "$oct" --audio_format "$fmt"
-        
-        # 📦 FINAL STAGE-OUT
+        # 📦 STAGE-OUT [cite: 1, 9]
         mkdir -p "\$TARGET_GLOBAL"
         rsync -rlt "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$fmt/${oct}_octave/" "\$TARGET_GLOBAL/"
         rm -rf "\$TEMP_DIR"
@@ -88,14 +81,14 @@ finalize_and_cleanup() {
 }
 trap 'finalize_and_cleanup' SIGTERM SIGINT
 
-# 📦 STAGE-IN (Restored full logic from run_embedding_pipeline.sh)
+# 📦 STAGE-IN 
 echo "📦 Staging data..."
 cp "$CLAP_SCRATCH_WEIGHTS" "\$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth"
 cp -r "$ROBERTA_PATH/." "\$TEMP_DIR/roberta-base/"
 [ -d "\$TARGET_GLOBAL" ] && cp -r "\$TARGET_GLOBAL/." "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$fmt/${oct}_octave/"
 cp "$DATASEC_GLOBAL/RAW_DATASET/raw_$fmt"/*.h5 "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$fmt/" 2>/dev/null
 
-# 📝 LOG WRAPPER GENERATION
+# 📝 LOG WRAPPER 
 cat << 'INNER_EOF' > "\$TEMP_DIR/work_dir/join_logs_wrapper.py"
 import sys, os
 sys.path.append('/app')
@@ -111,7 +104,7 @@ def main():
 if __name__ == '__main__': main()
 INNER_EOF
 
-# 🚀 ENVIRONMENT & EXECUTION (Parity restored with all original variables)
+# 🚀 ENVIRONMENT (Full Parity) 
 export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
 export HF_HUB_OFFLINE=1
 export CLAP_TEXT_ENCODER_PATH="/tmp_data/roberta-base"
@@ -122,7 +115,6 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True
 export MASTER_ADDR=\$(hostname)
 export MASTER_PORT=\$(expr 20000 + \${SLURM_JOB_ID} % 10000)
 
-echo "🚀 Starting Parallel Embedding Pipeline..."
 srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \\
     singularity exec --nv --no-home --bind "/leonardo_scratch:/leonardo_scratch" --bind "\$TEMP_DIR:/tmp_data" \\
     --bind "\$(pwd):/app" --pwd "/app" "$SIF_FILE" \\
@@ -133,20 +125,23 @@ EOF
 
     chmod +x "$script"
     echo "⏳ Submitting $j_name and waiting for completion..."
-    # --wait ensures sequential campaign execution
     sbatch --wait "$script"
 }
 
-# --- 3. TASK DISPATCHER ---
+# --- 3. TASK DISPATCHER (Robust Parsing) ---
 echo "🚀 Dispatching tasks SEQUENTIALLY..."
-sed -n '/^[^#]/p' "$DIRECTIVES_FILE" | grep "|" | while IFS='|' read -r cfg fmt oct; do
-    cfg=$(echo $cfg | xargs); fmt=$(echo $fmt | xargs); oct=$(echo $oct | xargs)
-    
-    # Filter header metadata from task execution
-    [[ "$cfg" == *"SIF_FILE"* || "$cfg" == *"CLAP_WEIGHTS"* || "$cfg" == *"ROBERTA_PATH"* || "$cfg" == *"SLURM_"* || "$cfg" == *"DATASEC_GLOBAL"* ]] && continue
-    [ -z "$cfg" ] && continue
 
-    echo "➡️ Current Task: $cfg | $fmt | $oct"
+# Use a specific IFS to handle pipes and trim whitespace correctly 
+sed -n '/^[^#]/p' "$DIRECTIVES_FILE" | grep "|" | while IFS='|' read -r raw_cfg raw_fmt raw_oct; do
+    # Trim leading/trailing whitespace from each parsed argument 
+    cfg=$(echo "$raw_cfg" | xargs)
+    fmt=$(echo "$raw_fmt" | xargs)
+    oct=$(echo "$raw_oct" | xargs)
+    
+    # Ignore header keywords [cite: 1, 2, 3, 4]
+    [[ "$cfg" == *"SIF_FILE"* || "$cfg" == *"CLAP_WEIGHTS"* || "$cfg" == *"ROBERTA_PATH"* || "$cfg" == *"SLURM_"* || "$cfg" == *"SCHEDULING_MODE"* || "$cfg" == *"DATASEC_GLOBAL"* ]] && continue
+    [ -z "$cfg" ] || [ -z "$fmt" ] || [ -z "$oct" ] && continue
+
+    echo "➡️ Processing: $cfg | Format: $fmt | Octave: $oct"
     submit_and_wait_task "$cfg" "$fmt" "$oct"
-    echo "✅ Task finished."
 done
