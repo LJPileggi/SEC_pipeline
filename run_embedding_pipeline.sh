@@ -19,8 +19,6 @@ DATASEC_GLOBAL="/leonardo_scratch/large/userexternal/$USER/dataSEC"
 run_slurm() {
     local j_name="prod_${AUDIO_FORMAT}_oct${N_OCTAVE}"
     local script="submit_${j_name}.sh"
-    
-    # 🎯 FIX: Risolviamo il percorso globale prima del cat per iniettarlo correttamente
     local FINAL_DEST="$DATASEC_GLOBAL/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave"
 
     cat << EOF > "$script"
@@ -47,14 +45,51 @@ mkdir -p "\$TEMP_DIR/roberta-base"
 mkdir -p "\$TEMP_DIR/numba_cache"
 
 # 🎯 2. MODULAR SHUTDOWN FUNCTION (Signal Trap & Final Exit)
-# Consolidates logs, joins HDF5s and performs stage-out.
 finalize_and_cleanup() {
+    # Disable trap to avoid recursion if multiple signals arrive
+    trap - SIGTERM SIGINT
     echo "🏁 Starting final consolidation (Signal or End-of-Run)..."
     
     if [ -d "\$TEMP_DIR" ]; then
-        # A. LOG MERGING
+        # A. LOG MERGING: Uses the pre-created wrapper
         echo "🔗 Merging rank-specific logs..."
-        cat << 'INNER_EOF' > "\$TEMP_DIR/work_dir/join_logs_wrapper.py"
+        singularity exec --bind "\$TEMP_DIR:/tmp_data" --bind "\$(pwd):/app" --pwd "/app" "$SIF_FILE" \\
+            python3 "/tmp_data/work_dir/join_logs_wrapper.py"
+
+        # B. HDF5 JOINING
+        echo "🔗 Joining HDF5 files..."
+        singularity exec --nv --bind "/leonardo_scratch:/leonardo_scratch" --bind "\$TEMP_DIR:/tmp_data" \\
+            --bind "\$(pwd):/app" --pwd "/app" "$SIF_FILE" \\
+            python3 scripts/join_hdf5.py --config_file "$CONFIG_FILE" --n_octave "$N_OCTAVE" --audio_format "$AUDIO_FORMAT"
+
+        # C. FINAL STAGE-OUT
+        echo "📦 Consolidating results to global storage..."
+        mkdir -p "\$TARGET_GLOBAL"
+        rsync -rlt "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave/" "\$TARGET_GLOBAL/"
+        
+        # D. CLEANUP
+        rm -rf "\$TEMP_DIR"
+    fi
+    echo "✅ Pipeline consolidation completed."
+    exit 0
+}
+
+# Trap signals
+trap 'finalize_and_cleanup' SIGTERM SIGINT
+
+# 🎯 3. STAGE-IN (Data Locality & Helper Creation)
+echo "📦 Staging-in data and weights..."
+cp "$CLAP_SCRATCH_WEIGHTS" "\$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth"
+cp -r "$ROBERTA_PATH/." "\$TEMP_DIR/roberta-base/"
+
+if [ -d "\$TARGET_GLOBAL" ]; then
+    cp -r "\$TARGET_GLOBAL/." "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave/"
+fi
+
+cp "$DATASEC_GLOBAL/RAW_DATASET/raw_$AUDIO_FORMAT"/*.h5 "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT/" 2>/dev/null
+
+# 🎯 PRE-CREATE JOIN WRAPPER: To avoid here-doc issues during trap
+cat << 'INNER_EOF' > "\$TEMP_DIR/work_dir/join_logs_wrapper.py"
 import sys, os
 sys.path.append('/app')
 from src.utils import join_logs
@@ -68,42 +103,6 @@ def main():
             join_logs(target_dir)
 if __name__ == '__main__': main()
 INNER_EOF
-        singularity exec --bind "\$TEMP_DIR:/tmp_data" --bind "\$(pwd):/app" --pwd "/app" "$SIF_FILE" \\
-            python3 "/tmp_data/work_dir/join_logs_wrapper.py"
-
-        # B. HDF5 JOINING
-        echo "🔗 Joining HDF5 files..."
-        singularity exec --nv --bind "/leonardo_scratch:/leonardo_scratch" --bind "\$TEMP_DIR:/tmp_data" \\
-            --bind "\$(pwd):/app" --pwd "/app" "$SIF_FILE" \\
-            python3 scripts/join_hdf5.py --config_file "$CONFIG_FILE" --n_octave "$N_OCTAVE" --audio_format "$AUDIO_FORMAT"
-
-        # C. FINAL STAGE-OUT
-        echo "📦 Consolidating results to global storage..."
-        mkdir -p "\$TARGET_GLOBAL"
-        # Usiamo -rlt per evitare errori di permessi/gruppo su Leonardo
-        rsync -rlt "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave/" "\$TARGET_GLOBAL/"
-        
-        # D. CLEANUP
-        rm -rf "\$TEMP_DIR"
-    fi
-    echo "✅ Pipeline consolidation completed."
-    exit 0
-}
-
-# Trap signals for emergency shutdown
-trap 'finalize_and_cleanup' SIGTERM SIGINT
-
-# 🎯 3. STAGE-IN (Data Locality)
-echo "📦 Staging-in data and weights..."
-cp "$CLAP_SCRATCH_WEIGHTS" "\$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth"
-cp -r "$ROBERTA_PATH/." "\$TEMP_DIR/roberta-base/"
-
-if [ -d "\$TARGET_GLOBAL" ]; then
-    cp -r "\$TARGET_GLOBAL/." "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave/"
-fi
-
-cp "$DATASEC_GLOBAL/RAW_DATASET/raw_$AUDIO_FORMAT"/*.h5 "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT/" 2>/dev/null || \\
-cp "$DATASEC_GLOBAL/RAW_DATASET/raw_$AUDIO_FORMAT"/*/*.h5 "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT/"
 
 # 🎯 4. ENVIRONMENT REDIRECTION (The Mantra)
 export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
@@ -119,15 +118,11 @@ export MASTER_PORT=\$(expr 20000 + \${SLURM_JOB_ID} % 10000)
 # 🎯 5. EXECUTION
 echo "🚀 Starting Parallel Embedding Pipeline..."
 srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \\
-    singularity exec --nv \\
-    --bind "/leonardo_scratch:/leonardo_scratch" \\
-    --bind "\$TEMP_DIR:/tmp_data" \\
-    --bind "\$(pwd):/app" \\
-    --pwd "/app" \\
-    "$SIF_FILE" \\
+    singularity exec --nv --bind "/leonardo_scratch:/leonardo_scratch" --bind "\$TEMP_DIR:/tmp_data" \\
+    --bind "\$(pwd):/app" --pwd "/app" "$SIF_FILE" \\
     python3 scripts/get_clap_embeddings.py --config_file "$CONFIG_FILE" --n_octave "$N_OCTAVE" --audio_format "$AUDIO_FORMAT"
 
-# 🎯 6. NATURAL END (Final Consolidation)
+# 🎯 6. NATURAL END
 finalize_and_cleanup
 EOF
 
@@ -137,5 +132,5 @@ EOF
 
 case $MODE in
     "slurm") run_slurm ;;
-    *) echo "Usage: $0 <config> <format> <oct> slurm" && exit 1 ;;
+    *) exit 1 ;;
 esac
