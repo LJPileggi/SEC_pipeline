@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==========================================================
 # RIGOROUS SEQUENTIAL SCHEDULER FOR LEONARDO CLUSTER
-# Mantra: "Strict Parsing & Environment Parity"
+# Mantra: "Strict Parsing, Absolute Environment Parity, & Hard Staging"
 # ==========================================================
 
 DIRECTIVES_FILE=$1
@@ -17,7 +17,7 @@ echo "📖 Parsing Global Header..."
 
 parse_path() {
     local raw_val=$(grep "$1" "$DIRECTIVES_FILE" | cut -d'|' -f2 | xargs)
-    # Replaces literal USER string with current username to fix pathing [cite: 2]
+    # Replaces literal USER string with current username to fix pathing 
     echo "$raw_val" | sed "s/large\/userexternal\/USER/large\/userexternal\/$CURRENT_USER/g"
 }
 
@@ -33,7 +33,6 @@ SLURM_TIME=$(grep "SLURM_TIME" "$DIRECTIVES_FILE" | cut -d'|' -f2 | xargs)
 # --- 2. TASK SUBMISSION FUNCTION ---
 submit_and_wait_task() {
     local c_file=$1; local fmt=$2; local oct=$3
-    # Description-rich job and output names 
     local j_name="emb_${fmt}_oct${oct}"
     local script="submit_${j_name}.sh"
     local FINAL_DEST="$DATASEC_GLOBAL/PREPROCESSED_DATASET/$fmt/${oct}_octave"
@@ -51,10 +50,11 @@ submit_and_wait_task() {
 #SBATCH -A $SLURM_ACCOUNT
 #SBATCH --output=${j_name}_%j.out
 
-# 🎯 PATH DEFINITION (Absolute resolution) [cite: 2]
+# 🎯 PATH DEFINITION (Absolute resolution) 
 TEMP_DIR="/leonardo_scratch/large/userexternal/$CURRENT_USER/tmp_job_\$SLURM_JOB_ID"
 TARGET_GLOBAL="$FINAL_DEST"
 
+# 🛠️ DIRECTORY SETUP (Mirroring run_embedding_pipeline.sh) 
 mkdir -p "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$fmt"
 mkdir -p "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$fmt/${oct}_octave"
 mkdir -p "\$TEMP_DIR/work_dir/weights"
@@ -63,16 +63,16 @@ mkdir -p "\$TEMP_DIR/numba_cache"
 
 finalize_and_cleanup() {
     trap - SIGTERM SIGINT
-    echo "⚠️ Signal caught! Starting consolidation..."
+    echo "⚠️ Signal caught! Settling I/O..."
+    sleep 5
     if [ -d "\$TEMP_DIR" ]; then
-        # 🔗 LOG MERGING 
+        echo "🔗 Merging logs & Joining HDF5..."
         singularity exec --no-home --bind "\$TEMP_DIR:/tmp_data" --bind "\$(pwd):/app" --pwd "/app" "$SIF_FILE" \\
             python3 "/tmp_data/work_dir/join_logs_wrapper.py"
-        # 🔗 HDF5 JOINING 
         singularity exec --nv --no-home --bind "/leonardo_scratch:/leonardo_scratch" --bind "\$TEMP_DIR:/tmp_data" \\
             --bind "\$(pwd):/app" --pwd "/app" "$SIF_FILE" \\
             python3 scripts/join_hdf5.py --config_file "$c_file" --n_octave "$oct" --audio_format "$fmt"
-        # 📦 STAGE-OUT [cite: 1, 9]
+        echo "📦 Stage-out..." 
         mkdir -p "\$TARGET_GLOBAL"
         rsync -rlt "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$fmt/${oct}_octave/" "\$TARGET_GLOBAL/"
         rm -rf "\$TEMP_DIR"
@@ -81,14 +81,27 @@ finalize_and_cleanup() {
 }
 trap 'finalize_and_cleanup' SIGTERM SIGINT
 
-# 📦 STAGE-IN 
+# 📦 STAGE-IN (Restored full logic and added verification) 
 echo "📦 Staging data..."
-cp "$CLAP_SCRATCH_WEIGHTS" "\$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth"
-cp -r "$ROBERTA_PATH/." "\$TEMP_DIR/roberta-base/"
-[ -d "\$TARGET_GLOBAL" ] && cp -r "\$TARGET_GLOBAL/." "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$fmt/${oct}_octave/"
-cp "$DATASEC_GLOBAL/RAW_DATASET/raw_$fmt"/*.h5 "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$fmt/" 2>/dev/null
+cp "$CLAP_SCRATCH_WEIGHTS" "\$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth" || exit 1
+cp -r "$ROBERTA_PATH/." "\$TEMP_DIR/roberta-base/" || exit 1
 
-# 📝 LOG WRAPPER 
+# Sync existing progress from global to local NVMe 
+if [ -d "\$TARGET_GLOBAL" ]; then
+    echo "🔄 Resuming: copying existing embeddings..."
+    cp -r "\$TARGET_GLOBAL/." "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$fmt/${oct}_octave/"
+fi
+
+# 🎯 CRITICAL FIX: Explicitly copy raw audio H5 files 
+RAW_SOURCE="$DATASEC_GLOBAL/RAW_DATASET/raw_$fmt"
+if [ -d "\$RAW_SOURCE" ]; then
+    cp "\$RAW_SOURCE"/*.h5 "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$fmt/"
+else
+    echo "❌ ERROR: Raw source \$RAW_SOURCE not found!"
+    exit 1
+fi
+
+# 📝 LOG WRAPPER (Mirroring run_embedding_pipeline.sh) 
 cat << 'INNER_EOF' > "\$TEMP_DIR/work_dir/join_logs_wrapper.py"
 import sys, os
 sys.path.append('/app')
@@ -115,6 +128,7 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True
 export MASTER_ADDR=\$(hostname)
 export MASTER_PORT=\$(expr 20000 + \${SLURM_JOB_ID} % 10000)
 
+echo "🚀 Starting Parallel Embedding Pipeline..."
 srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \\
     singularity exec --nv --no-home --bind "/leonardo_scratch:/leonardo_scratch" --bind "\$TEMP_DIR:/tmp_data" \\
     --bind "\$(pwd):/app" --pwd "/app" "$SIF_FILE" \\
@@ -128,20 +142,17 @@ EOF
     sbatch --wait "$script"
 }
 
-# --- 3. TASK DISPATCHER (Robust Parsing) ---
+# --- 3. TASK DISPATCHER (Robust Parsing) --- 
 echo "🚀 Dispatching tasks SEQUENTIALLY..."
-
-# Use a specific IFS to handle pipes and trim whitespace correctly 
 sed -n '/^[^#]/p' "$DIRECTIVES_FILE" | grep "|" | while IFS='|' read -r raw_cfg raw_fmt raw_oct; do
-    # Trim leading/trailing whitespace from each parsed argument 
     cfg=$(echo "$raw_cfg" | xargs)
     fmt=$(echo "$raw_fmt" | xargs)
     oct=$(echo "$raw_oct" | xargs)
     
-    # Ignore header keywords [cite: 1, 2, 3, 4]
     [[ "$cfg" == *"SIF_FILE"* || "$cfg" == *"CLAP_WEIGHTS"* || "$cfg" == *"ROBERTA_PATH"* || "$cfg" == *"SLURM_"* || "$cfg" == *"SCHEDULING_MODE"* || "$cfg" == *"DATASEC_GLOBAL"* ]] && continue
     [ -z "$cfg" ] || [ -z "$fmt" ] || [ -z "$oct" ] && continue
 
     echo "➡️ Processing: $cfg | Format: $fmt | Octave: $oct"
     submit_and_wait_task "$cfg" "$fmt" "$oct"
+    echo "✅ Task finished."
 done
