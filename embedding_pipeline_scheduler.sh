@@ -2,6 +2,7 @@
 # ==========================================================
 # RIGOROUS SEQUENTIAL SCHEDULER FOR LEONARDO CLUSTER
 # Mantra: "Un solo nodo, un solo job, nessuna eccezione"
+# Updated: Fixed variable expansion to prevent literal "USER" paths
 # ==========================================================
 
 DIRECTIVES_FILE=$1
@@ -13,7 +14,7 @@ fi
 
 # --- 1. HEADER PARSING ---
 echo "📖 Parsing Global Header..."
-# Risoluzione esplicita dei path per evitare i FATAL
+# Usiamo eval echo per assicurarci che variabili come $USER siano risolte ORA
 SIF_FILE_RAW=$(grep "SIF_FILE" "$DIRECTIVES_FILE" | cut -d'|' -f2 | xargs)
 SIF_FILE=$(eval echo $SIF_FILE_RAW)
 
@@ -28,6 +29,7 @@ SLURM_PARTITION=$(grep "SLURM_PARTITION" "$DIRECTIVES_FILE" | cut -d'|' -f2 | xa
 SLURM_TIME=$(grep "SLURM_TIME" "$DIRECTIVES_FILE" | cut -d'|' -f2 | xargs)
 
 DATASEC_GLOBAL_RAW=$(grep "DATASEC_GLOBAL" "$DIRECTIVES_FILE" | cut -d'|' -f2 | xargs)
+# Default path risolto se non specificato
 DATASEC_GLOBAL=$(eval echo ${DATASEC_GLOBAL_RAW:-"/leonardo_scratch/large/userexternal/\$USER/dataSEC"})
 
 # --- 2. TASK SUBMISSION FUNCTION ---
@@ -51,6 +53,8 @@ submit_and_wait_task() {
 #SBATCH -A $SLURM_ACCOUNT
 #SBATCH --output=%x_%j.out
 
+# 🎯 PATH DEFINITION
+# Usiamo \$USER scappato per l'espansione a runtime sul nodo
 TEMP_DIR="/leonardo_scratch/large/userexternal/\$USER/tmp_job_\$SLURM_JOB_ID"
 TARGET_GLOBAL="$FINAL_DEST"
 
@@ -64,7 +68,7 @@ finalize_and_cleanup() {
     trap - SIGTERM SIGINT
     echo "⚠️ Signal or End-of-Run caught! Starting consolidation..."
     if [ -d "\$TEMP_DIR" ]; then
-        # Modular consolidation from utils
+        # Modular consolidation
         singularity exec --no-home --bind "\$TEMP_DIR:/tmp_data" --bind "\$(pwd):/app" --pwd "/app" "$SIF_FILE" \\
             python3 "/tmp_data/work_dir/join_logs_wrapper.py"
         singularity exec --nv --no-home --bind "/leonardo_scratch:/leonardo_scratch" --bind "\$TEMP_DIR:/tmp_data" \\
@@ -78,7 +82,8 @@ finalize_and_cleanup() {
 }
 trap 'finalize_and_cleanup' SIGTERM SIGINT
 
-# STAGE-IN
+# 📦 STAGE-IN
+echo "📦 Staging data..."
 cp "$CLAP_SCRATCH_WEIGHTS" "\$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth"
 cp -r "$ROBERTA_PATH/." "\$TEMP_DIR/roberta-base/"
 [ -d "\$TARGET_GLOBAL" ] && cp -r "\$TARGET_GLOBAL/." "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$fmt/${oct}_octave/"
@@ -100,9 +105,17 @@ def main():
 if __name__ == '__main__': main()
 INNER_EOF
 
-# EXECUTION
+# 🚀 EXECUTION
 export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
+export HF_HUB_OFFLINE=1
+export CLAP_TEXT_ENCODER_PATH="/tmp_data/roberta-base"
+export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/weights/CLAP_weights_2023.pth"
+export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
+export PYTHONUNBUFFERED=1
+export PYTORCH_ALLOC_CONF=expandable_segments:True
+export MASTER_ADDR=\$(hostname)
 export MASTER_PORT=\$(expr 20000 + \${SLURM_JOB_ID} % 10000)
+
 srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \\
     singularity exec --nv --no-home --bind "/leonardo_scratch:/leonardo_scratch" --bind "\$TEMP_DIR:/tmp_data" \\
     --bind "\$(pwd):/app" --pwd "/app" "$SIF_FILE" \\
