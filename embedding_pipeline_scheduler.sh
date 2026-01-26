@@ -1,10 +1,11 @@
 #!/bin/bash
 # ==========================================================
 # RIGOROUS SEQUENTIAL SCHEDULER FOR LEONARDO CLUSTER
-# Strategy: "Absolute Path Injection & Environment Parity"
+# Strategy: "Absolute Environment Parity & Path Resolution"
 # ==========================================================
 
 DIRECTIVES_FILE=$1
+# Securely capture the actual username for internal fallback
 CURRENT_USER=$(whoami)
 
 if [ ! -f "$DIRECTIVES_FILE" ]; then
@@ -17,8 +18,10 @@ echo "📖 Parsing Global Header..."
 
 parse_path() {
     local raw_val=$(grep "$1" "$DIRECTIVES_FILE" | cut -d'|' -f2 | xargs)
-    # Force replacement of literal $USER string with the actual username
-    echo "$raw_val" | sed "s/\$USER/$CURRENT_USER/g"
+    # 🎯 FIX: We force the expansion by replacing literal USER string with the actual variable if necessary,
+    # then we use eval to resolve any existing $USER variables.
+    local fixed_val=$(echo "$raw_val" | sed "s/large\/userexternal\/USER/large\/userexternal\/$CURRENT_USER/g")
+    eval echo "$fixed_val"
 }
 
 SIF_FILE=$(parse_path "SIF_FILE")
@@ -35,6 +38,7 @@ submit_and_wait_task() {
     local c_file=$1; local fmt=$2; local oct=$3
     local j_name="emb_${fmt}_o${oct}"
     local script="submit_${j_name}.sh"
+    # Resolve the destination globally to prevent empty variable errors
     local FINAL_DEST="$DATASEC_GLOBAL/PREPROCESSED_DATASET/$fmt/${oct}_octave"
 
     cat << EOF > "$script"
@@ -54,7 +58,7 @@ submit_and_wait_task() {
 TEMP_DIR="/leonardo_scratch/large/userexternal/$CURRENT_USER/tmp_job_\$SLURM_JOB_ID"
 TARGET_GLOBAL="$FINAL_DEST"
 
-# 🛠️ DIRECTORY SETUP (Mirroring run_embedding_pipeline.sh)
+# 🛠️ DIRECTORY SETUP (Mirroring run_embedding_pipeline.sh logic)
 mkdir -p "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$fmt"
 mkdir -p "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$fmt/${oct}_octave"
 mkdir -p "\$TEMP_DIR/work_dir/weights"
@@ -84,7 +88,7 @@ finalize_and_cleanup() {
 }
 trap 'finalize_and_cleanup' SIGTERM SIGINT
 
-# 📦 STAGE-IN (Restored full logic)
+# 📦 STAGE-IN (Restored full logic from run_embedding_pipeline.sh)
 echo "📦 Staging data..."
 cp "$CLAP_SCRATCH_WEIGHTS" "\$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth"
 cp -r "$ROBERTA_PATH/." "\$TEMP_DIR/roberta-base/"
@@ -107,7 +111,7 @@ def main():
 if __name__ == '__main__': main()
 INNER_EOF
 
-# 🚀 ENVIRONMENT & EXECUTION (Full Parity Restored)
+# 🚀 ENVIRONMENT & EXECUTION (Parity restored with all original variables)
 export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
 export HF_HUB_OFFLINE=1
 export CLAP_TEXT_ENCODER_PATH="/tmp_data/roberta-base"
@@ -129,6 +133,7 @@ EOF
 
     chmod +x "$script"
     echo "⏳ Submitting $j_name and waiting for completion..."
+    # --wait ensures sequential campaign execution
     sbatch --wait "$script"
 }
 
@@ -137,7 +142,7 @@ echo "🚀 Dispatching tasks SEQUENTIALLY..."
 sed -n '/^[^#]/p' "$DIRECTIVES_FILE" | grep "|" | while IFS='|' read -r cfg fmt oct; do
     cfg=$(echo $cfg | xargs); fmt=$(echo $fmt | xargs); oct=$(echo $oct | xargs)
     
-    # Header check
+    # Filter header metadata from task execution
     [[ "$cfg" == *"SIF_FILE"* || "$cfg" == *"CLAP_WEIGHTS"* || "$cfg" == *"ROBERTA_PATH"* || "$cfg" == *"SLURM_"* || "$cfg" == *"DATASEC_GLOBAL"* ]] && continue
     [ -z "$cfg" ] && continue
 
