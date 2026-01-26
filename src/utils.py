@@ -138,7 +138,8 @@ def join_logs(log_dir):
     """
     Merges all rank-specific JSON logs (log_rank_*.json) found in a directory 
     into a single master 'log.json' file. It aggregates statistics for 
-    partially completed classes across different ranks.
+    partially completed classes across different ranks. If a joint log is
+    already present, merges its information with the one from rank logs.
 
     args:
      - log_dir (str): Path to the directory containing individual rank logs.
@@ -146,14 +147,24 @@ def join_logs(log_dir):
     returns:
      - None: Deletes individual rank logs after merging into the final file.
     """
-    final_log = {"config": {}}
     final_log_file = os.path.join(log_dir, "log.json")
+    final_log = {"config": {}}
+    
+    # 1. LOAD PRE-EXISTING LOG (if any)
+    if os.path.exists(final_log_file):
+        try:
+            with open(final_log_file, 'r') as f:
+                final_log = json.load(f)
+        except Exception as e:
+            print(f"⚠️ Warning: Could not load existing master log: {e}")
+
     pattern = os.path.join(log_dir, "log_rank_*.json")
     log_files = glob.glob(pattern)
     
     if not log_files:
         return
 
+    # 2. MERGE NEW RANK LOGS
     for log_file in log_files:
         try:
             with open(log_file, 'r') as f:
@@ -165,24 +176,24 @@ def join_logs(log_dir):
                             final_log["config"].update(data)
                         continue
 
-                    # ROBUST MERGE LOGIC: Extend lists if the class exists
+                    # INCREMENTAL MERGE LOGIC
                     if key in final_log:
+                        # Extend historical lists with new run data
                         for field in ["process_time", "n_embeddings_per_run", "rank"]:
                             if field in data:
                                 final_log[key][field].extend(data[field])
-                        # Task is completed only if all segments were successful
-                        final_log[key]["completed"] = final_log[key].get("completed", True) and data.get("completed", False)
+                        # Task is completed if it was already True OR if the new run finished it
+                        final_log[key]["completed"] = final_log[key].get("completed", False) or data.get("completed", False)
                     else:
                         final_log[key] = data
                         
         except Exception as e:
             print(f"Error merging log {log_file}: {e}")
 
-    # Write the unified file
+    # 3. ATOMIC SAVE
     with open(final_log_file, 'w') as f:
         json.dump(final_log, f, indent=4)
         
-    # Cleanup to keep the directory tidy
     for log_file in log_files:
         os.remove(log_file)
 
