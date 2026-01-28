@@ -15,13 +15,9 @@ SCHEDULING_MODE   | parallel
 # EXECUTION LIST
 # Format: config_file | audio_format | n_octave
 # ==========================================================
-config0.yaml | mp3  | 3
-config0.yaml | mp3  | 12
-config0.yaml | mp3  | 16
-config0.yaml | mp3  | 24
-config0.yaml | mp3  | 32
-config0.yaml | flac  | 1
+config0.yaml | mp3  | 6
 config0.yaml | flac  | 3
+config0.yaml | flac  | 6
 config0.yaml | flac  | 12
 config0.yaml | flac  | 16
 config0.yaml | flac  | 24
