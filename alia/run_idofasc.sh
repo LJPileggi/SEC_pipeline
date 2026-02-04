@@ -6,6 +6,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
 #SBATCH --time=04:00:00
+#SBATCH --mem=128G
 
 # --- CONFIGURAZIONE PERCORSI ---
 PROJECT_DIR="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline"
