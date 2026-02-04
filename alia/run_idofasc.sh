@@ -14,7 +14,7 @@ FORMAT=${1:-wav}
 # --- CONFIGURAZIONE PERCORSI (ESTRATTI DAI TUOI SCRIPT) ---
 PROJECT_DIR="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline"
 # Dove il tuo convertitore SALVA i file h5
-H5_SOURCE_DIR="/leonardo_scratch/large/userexternal/$USER/dataSEC/RAW_DATASET"
+H5_SOURCE_DIR="/leonardo_scratch/large/userexternal/$USER/dataSEC/RAW_DATASET/raw_$FORMAT"
 # Cartella parallela per i risultati
 OUTPUT_DIR="/leonardo_scratch/large/userexternal/$USER/IDOFASC_results_$FORMAT"
 
