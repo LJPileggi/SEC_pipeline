@@ -33,6 +33,18 @@ from sklearn.metrics import (
 
 from msclap import CLAP
 
+# --- MONKEY PATCH PER MSCLAP ---
+def patched_read_audio(self, audio_path, resample=True):
+    # Carichiamo con librosa (che usa soundfile/audioread) invece di torchaudio
+    sig, sr = librosa.load(audio_path, sr=self.args.sampling_rate if resample else None, mono=True)
+    # Convertiamo in un tensore float32 con la forma attesa da CLAP (1, samples)
+    audio_tensor = torch.from_numpy(sig).float().unsqueeze(0)
+    return audio_tensor, self.args.sampling_rate
+
+# Sostituiamo la funzione originale con quella corretta
+CLAP.read_audio = patched_read_audio
+print("✅ MSCLAP Patch applied: torchaudio.load bypassed via librosa.")
+
 #%% Timing
 start_time = time.time()
 
