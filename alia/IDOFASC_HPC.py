@@ -95,11 +95,11 @@ def main():
         print(f"❌ ERRORE: Nessun file .h5 trovato in {input_dir}")
         sys.exit(1)
 
-    classes = [f.split('_')[0] for f in h5_files]
+    classes = [f.replace(f'{audio_format}_dataset.h5', '') for f in h5_files]
     class_to_idx = {cls: idx for idx, cls in enumerate(classes)}
 
     for h5_file in h5_files:
-        label = h5_file#.split('_')[0]
+        label = h5_file.replace(f'{audio_format}_dataset.h5', '')
         h5_path = os.path.join(input_dir, h5_file)
         
         # Inizializza il manager (apre automaticamente il file h5 in hf)
