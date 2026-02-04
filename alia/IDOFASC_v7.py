@@ -7,6 +7,15 @@ import librosa
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 
+import torchaudio
+
+# Forza torchaudio a non usare torchcodec se non presente
+# e a ripiegare sui backend standard (ffmpeg/sox)
+try:
+    torchaudio.set_audio_backend("ffmpeg") # o "sox" se preferisci
+except:
+    pass
+
 from collections import Counter
 # from tkinter import Tk, filedialog
 from scipy.spatial import ConvexHull
