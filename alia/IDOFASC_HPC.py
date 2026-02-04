@@ -75,7 +75,7 @@ def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     log_step(f"🎸 Inizializzazione CLAP (Offline)")
-    clap_model = CLAP_initializer(device=device, use_cuda=torch.cuda.is_available())
+    clap_model, _, _ = CLAP_initializer(device=device, use_cuda=torch.cuda.is_available())
 
     feats = {"emb": [], "mfcc": [], "gfcc": [], "cqcc": []}
     all_filenames, all_labels = [], []
