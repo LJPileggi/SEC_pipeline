@@ -151,7 +151,7 @@ def main():
 
     # Salvataggio Output
     metrics_df = pd.DataFrame.from_dict(results, orient="index")
-    metrics_df.to_excel(os.path.join(output_folder, f"metrics_{audio_format}.xlsx"))
+    metrics_df.to_csv(os.path.join(output_folder, f"metrics_{audio_format}.csv"))
 
     # Plot Polygons (Convex Hull)
     color_list = [cm.get_cmap("tab20" if len(classes) <= 20 else "hsv", len(classes))(i) for i in range(len(classes))]
