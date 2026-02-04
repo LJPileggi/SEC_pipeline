@@ -40,6 +40,7 @@ export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/weights/CLAP_weights_2023.pth"
 export INPUT_HDF5_DIR="/tmp_data/data"
 export OUTPUT_RESULTS_PATH="/output_dir"
 export HF_HUB_OFFLINE=1
+export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
 
 echo "🚀 Avvio IDOFASC_HPC.py per formato: $FORMAT"
 # Bindiamo la cartella di output esterna al container
