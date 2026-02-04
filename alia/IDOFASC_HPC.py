@@ -83,7 +83,7 @@ def main():
 
     log_step(f"🎸 Inizializzazione CLAP (Offline Mode)")
     # Spacchettamento tupla a 3 elementi come definito in models.py
-    clap_model, get_audio_embedding, _ = CLAP_initializer(device=device, use_cuda=torch.cuda.is_available())
+    clap_model, get_audio_embeddings, _ = CLAP_initializer(device=device, use_cuda=torch.cuda.is_available())
 
     feats = {"emb": [], "mfcc": [], "gfcc": [], "cqcc": []}
     all_filenames, all_labels = [], []
