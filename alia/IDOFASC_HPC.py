@@ -81,13 +81,9 @@ def main():
         print(f"❌ ERRORE: Directory di input non valida: {input_dir}")
         sys.exit(1)
 
-    log_step(f"🎸 Inizializzazione CLAP (Offline)")
-    
-    # 🎯 CORREZIONE: Spacchettamento della tupla a 3 elementi restituita da models.py
-    clap_model, audio_embedding, original_params = CLAP_initializer(
-        device=device, 
-        use_cuda=torch.cuda.is_available()
-    )
+    log_step(f"🎸 Inizializzazione CLAP (Offline Mode)")
+    # Spacchettamento tupla a 3 elementi come definito in models.py
+    clap_model, _, _ = CLAP_initializer(device=device, use_cuda=torch.cuda.is_available())
 
     feats = {"emb": [], "mfcc": [], "gfcc": [], "cqcc": []}
     all_filenames, all_labels = [], []
@@ -96,7 +92,7 @@ def main():
     h5_files = sorted([f for f in os.listdir(input_dir) if f.endswith(f'_{audio_format}_dataset.h5')])
     
     if not h5_files:
-        print(f"❌ ERRORE: Nessun file .h5 trovato in {input_dir} per il formato {audio_format}")
+        print(f"❌ ERRORE: Nessun file .h5 trovato in {input_dir}")
         sys.exit(1)
 
     classes = [f.split('_')[0] for f in h5_files]
@@ -104,37 +100,39 @@ def main():
 
     for h5_file in h5_files:
         label = h5_file.split('_')[0]
-        manager = HDF5DatasetManager(os.path.join(input_dir, h5_file))
+        h5_path = os.path.join(input_dir, h5_file)
         
-        with manager.get_h5file() as f:
-            log_step(f"Processing class: {label}")
-            audio_ds = f[f'audio_{audio_format}']
-            meta_ds = f[f'metadata_{audio_format}']
-            sr_h5 = f.attrs.get('sample_rate', 51200)
+        # Inizializza il manager (apre automaticamente il file h5 in hf)
+        manager = HDF5DatasetManager(h5_path, audio_format=audio_format)
+        
+        log_step(f"Processing class: {label}")
+        # Accesso diretto all'attributo hf dell'oggetto manager
+        audio_ds = manager.hf[f'audio_{audio_format}']
+        meta_ds = manager.hf[f'metadata_{audio_format}']
+        sr_h5 = manager.hf.attrs.get('sample_rate', 51200)
+        
+        for i in range(len(audio_ds)):
+            sig = audio_ds[i].astype('float32')
+            fname = meta_ds[i]['track_name'].decode('utf-8')
             
-            for i in range(len(audio_ds)):
-                sig = audio_ds[i].astype('float32')
-                fname = meta_ds[i]['track_name'].decode('utf-8')
-                
-                # Preprocessing (Sacro Mantra)
-                sig_norm = StandardScaler().fit_transform(sig.reshape(-1, 1)).flatten()
-                feats["mfcc"].append(extract_mfcc(sig_norm, sr_h5))
-                feats["gfcc"].append(extract_gfcc(sig_norm, sr_h5))
-                feats["cqcc"].append(extract_cqcc(sig_norm, sr_h5))
+            # Preprocessing originale
+            sig_norm = StandardScaler().fit_transform(sig.reshape(-1, 1)).flatten()
+            feats["mfcc"].append(extract_mfcc(sig_norm, sr_h5))
+            feats["gfcc"].append(extract_gfcc(sig_norm, sr_h5))
+            feats["cqcc"].append(extract_cqcc(sig_norm, sr_h5))
 
-                track_t = torch.from_numpy(sig).float().unsqueeze(0).to(device)
-                with torch.no_grad():
-                    # Utilizzo del modello spacchettato correttamente
-                    emb = clap_model.clap.get_audio_embeddings(track_t)
-                    feats["emb"].append(emb.cpu().numpy().squeeze())
-                
-                all_labels.append(class_to_idx[label])
-                all_filenames.append(fname)
+            track_t = torch.from_numpy(sig).float().unsqueeze(0).to(device)
+            with torch.no_grad():
+                emb = clap_model.clap.get_audio_embeddings(track_t)
+                feats["emb"].append(emb.cpu().numpy().squeeze())
+            
+            all_labels.append(class_to_idx[label])
+            all_filenames.append(fname)
+        
+        # Chiude il file handle correttamente come previsto in utils.py
+        manager.close()
 
-    if not feats["emb"]:
-        print("❌ ERRORE: Nessun dato caricato.")
-        sys.exit(1)
-
+    # Logica di clustering identica all'originale
     features = {name: np.array(v) for name, v in feats.items()}
     y_true = np.array(all_labels)
     results = {}
