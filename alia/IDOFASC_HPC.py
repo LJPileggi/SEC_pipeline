@@ -99,7 +99,7 @@ def main():
     class_to_idx = {cls: idx for idx, cls in enumerate(classes)}
 
     for h5_file in h5_files:
-        label = h5_file.split('_')[0]
+        label = h5_file#.split('_')[0]
         h5_path = os.path.join(input_dir, h5_file)
         
         # Inizializza il manager (apre automaticamente il file h5 in hf)
@@ -153,21 +153,34 @@ def main():
     metrics_df = pd.DataFrame.from_dict(results, orient="index")
     metrics_df.to_csv(os.path.join(output_folder, f"metrics_{audio_format}.csv"))
 
-    # Plot Polygons (Convex Hull)
+    # Plot Polygons (Convex Hull) con correzione per stabilità numerica
     color_list = [cm.get_cmap("tab20" if len(classes) <= 20 else "hsv", len(classes))(i) for i in range(len(classes))]
     for (name, algo), res in results.items():
         X2 = PCA(n_components=2).fit_transform(res["pca_data"])
         plt.figure(figsize=(10, 8))
+        
         for c in range(len(classes)):
             pts = X2[res["labels"] == c]
             col = color_list[c % len(color_list)]
+            
             if len(pts) >= 3:
-                hull = ConvexHull(pts)
-                hp = pts[hull.vertices]
-                plt.plot(np.r_[hp[:, 0], hp[0, 0]], np.r_[hp[:, 1], hp[0, 1]], "--", color=col, lw=2)
-                plt.fill(hp[:, 0], hp[:, 1], color=col, alpha=0.1)
+                try:
+                    # 🎯 FIX: Aggiunta di jittering per evitare errori di precisione numerica Qhull
+                    # Aggiungiamo un rumore di ordine 1e-9 che non altera il plot ma stabilizza Qhull
+                    jitter = np.random.normal(0, 1e-9, pts.shape)
+                    pts_jittered = pts + jitter
+                    
+                    hull = ConvexHull(pts_jittered)
+                    hp = pts_jittered[hull.vertices]
+                    plt.plot(np.r_[hp[:, 0], hp[0, 0]], np.r_[hp[:, 1], hp[0, 1]], "--", color=col, lw=2)
+                    plt.fill(hp[:, 0], hp[:, 1], color=col, alpha=0.1)
+                except Exception as e:
+                    # Se fallisce, logghiamo ma proseguiamo (non vogliamo uccidere il job per un plot)
+                    print(f"⚠️ Warning: Fallito calcolo ConvexHull per cluster {c} ({name}-{algo}): {e}", flush=True)
+            
             plt.plot(np.mean(pts[:, 0]), np.mean(pts[:, 1]), "X", c="black")
         
+        # Centroidi originali (già scalati PC1-PC2)
         plt.scatter(res["model"].cluster_centers_[:, 0], res["model"].cluster_centers_[:, 1], c="red", s=80, marker="X")
         plt.title(f"{name.upper()} – {algo.capitalize()} ({audio_format})")
         plt.savefig(os.path.join(output_folder, f"plot_{name}_{algo}_{audio_format}.png"), dpi=600)
