@@ -183,8 +183,8 @@ def main():
             plt.text(np.mean(pts[:, 0]), np.mean(pts[:, 1]), str(c+1), fontsize=12, fontweight='bold')
         
         # Centroidi originali (già scalati PC1-PC2)
-        centroids_x1, centroids_x2 = pca_plot.fit_transform(res["model"].cluster_centers_[:, 0]), \
-                                   pca_plot.fit_transform(res["model"].cluster_centers_[:, 1])
+        centroids_x1, centroids_x2 = pca_plot.fit_transform(res["model"].cluster_centers_)[:, 0], \
+                                   pca_plot.fit_transform(res["model"].cluster_centers_)[:, 1]
         plt.scatter(centroids_x1, centroids_x2, c="red", s=80, marker="X")
         plt.title(f"{name.upper()} – {algo.capitalize()} ({audio_format})")
         plt.savefig(os.path.join(output_folder, f"plot_{name}_{algo}_{audio_format}.png"), dpi=600)
