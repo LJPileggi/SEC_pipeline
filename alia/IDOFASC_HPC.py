@@ -143,11 +143,11 @@ def main():
         n_comp = np.argmax(np.cumsum(pca_full.explained_variance_ratio_) >= 0.9) + 1
         X_pca = PCA(n_components=n_comp).fit_transform(X)
 
-        km = KMeans(n_clusters=len(classes), random_state=42, n_init=50, max_iter=1000).fit(X_pca)
-        results[(name, "kmeans")] = {"model": km, "labels": km.labels_, "pca_data": X_pca, **compute_metrics(X_pca, y_true, km.labels_)}
+        km = KMeans(n_clusters=len(classes), random_state=42, n_init=50, max_iter=1000).fit(X) # X_pca
+        results[(name, "kmeans")] = {"model": km, "labels": km.labels_, "data": X, **compute_metrics(X, y_true, km.labels_)} # X_pca
         
-        bkm = BisectingKMeans(n_clusters=len(classes), random_state=42, n_init=10, max_iter=1000).fit(X_pca)
-        results[(name, "bisecting")] = {"model": bkm, "labels": bkm.labels_, "pca_data": X_pca, **compute_metrics(X_pca, y_true, bkm.labels_)}
+        bkm = BisectingKMeans(n_clusters=len(classes), random_state=42, n_init=10, max_iter=1000).fit(X) # X_pca
+        results[(name, "bisecting")] = {"model": bkm, "labels": bkm.labels_, "data": X, **compute_metrics(X, y_true, bkm.labels_)} # X_pca
 
     # Salvataggio Output
     metrics_df = pd.DataFrame.from_dict(results, orient="index")
@@ -179,6 +179,7 @@ def main():
                     print(f"⚠️ Warning: Fallito calcolo ConvexHull per cluster {c} ({name}-{algo}): {e}", flush=True)
             
             plt.plot(np.mean(pts[:, 0]), np.mean(pts[:, 1]), "X", c="black")
+            plt.text(np.mean(pts[:, 0]), np.mean(pts[:, 1]), str(c+1), fontsize=12, fontweight='bold')
         
         # Centroidi originali (già scalati PC1-PC2)
         plt.scatter(res["model"].cluster_centers_[:, 0], res["model"].cluster_centers_[:, 1], c="red", s=80, marker="X")
