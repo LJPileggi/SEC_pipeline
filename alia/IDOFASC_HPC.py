@@ -156,7 +156,7 @@ def main():
     # Plot Polygons (Convex Hull) con correzione per stabilità numerica
     color_list = [cm.get_cmap("tab20" if len(classes) <= 20 else "hsv", len(classes))(i) for i in range(len(classes))]
     for (name, algo), res in results.items():
-        X2 = PCA(n_components=2).fit_transform(res["pca_data"])
+        X2 = PCA(n_components=2).fit_transform(res["data"])
         plt.figure(figsize=(10, 8))
         
         for c in range(len(classes)):
