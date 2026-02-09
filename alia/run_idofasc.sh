@@ -10,13 +10,21 @@
 #SBATCH --output=%x_%j.out
 
 FORMAT=${1:-wav}
+DATASET=${2:-dataSEC}
 
 # --- CONFIGURAZIONE PERCORSI (ESTRATTI DAI TUOI SCRIPT) ---
 PROJECT_DIR="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline"
 # Dove il tuo convertitore SALVA i file h5
-H5_SOURCE_DIR="/leonardo_scratch/large/userexternal/$USER/dataSEC/RAW_DATASET/raw_$FORMAT"
+if [[ $DATASET == "dataSEC" ]]; then
+    H5_SOURCE_DIR="/leonardo_scratch/large/userexternal/$USER/dataSEC/RAW_DATASET/raw_$FORMAT"
+elif [[ $DATASET == "ESC-50" ]]; then
+    H5_SOURCE_DIR="/leonardo_scratch/large/userexternal/$USER/ESC50_HDF5/raw_$FORMAT"
+else
+    echo "ERRORE CRITICO: Nessun dataset trovato corrispondente a $DATASET"
+    exit 1
+fi
 # Cartella parallela per i risultati
-OUTPUT_DIR="/leonardo_scratch/large/userexternal/$USER/IDOFASC_results_$FORMAT"
+OUTPUT_DIR="/leonardo_scratch/large/userexternal/$USER/IDOFASC_results_$DATASET_$FORMAT"
 
 SIF_FILE="$PROJECT_DIR/.containers/clap_pipeline.sif"
 LOCAL_TMP="${local_scratch:-/leonardo_scratch/large/userexternal/$USER/tmp_job_$SLURM_JOB_ID}"
