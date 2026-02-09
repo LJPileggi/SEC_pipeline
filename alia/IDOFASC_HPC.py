@@ -143,11 +143,11 @@ def main():
         n_comp = np.argmax(np.cumsum(pca_full.explained_variance_ratio_) >= 0.9) + 1
         X_pca = PCA(n_components=n_comp).fit_transform(X)
 
-        km = KMeans(n_clusters=len(classes), random_state=42, n_init=50, max_iter=1000).fit(X) # X_pca
-        results[(name, "kmeans")] = {"model": km, "labels": km.labels_, "data": X, **compute_metrics(X, y_true, km.labels_)} # X_pca
+        km = KMeans(n_clusters=len(classes), random_state=42, n_init=50, max_iter=1000).fit(X_pca)
+        results[(name, "kmeans")] = {"model": km, "labels": km.labels_, "pca_data": X_pca, **compute_metrics(X, y_true, km.labels_)}
         
-        bkm = BisectingKMeans(n_clusters=len(classes), random_state=42, n_init=10, max_iter=1000).fit(X) # X_pca
-        results[(name, "bisecting")] = {"model": bkm, "labels": bkm.labels_, "data": X, **compute_metrics(X, y_true, bkm.labels_)} # X_pca
+        bkm = BisectingKMeans(n_clusters=len(classes), random_state=42, n_init=10, max_iter=1000).fit(X_pca)
+        results[(name, "bisecting")] = {"model": bkm, "labels": bkm.labels_, "pca_data": X_pca, **compute_metrics(X, y_true, bkm.labels_)}
 
     # Salvataggio Output
     metrics_df = pd.DataFrame.from_dict(results, orient="index")
@@ -156,8 +156,7 @@ def main():
     # Plot Polygons (Convex Hull) con correzione per stabilità numerica
     color_list = [cm.get_cmap("tab20" if len(classes) <= 20 else "hsv", len(classes))(i) for i in range(len(classes))]
     for (name, algo), res in results.items():
-        pca_plot = PCA(n_components=2)
-        X2 = pca_plot.fit_transform(res["data"])
+        X2 = PCA(n_components=2).fit_transform(res["pca_data"])
         plt.figure(figsize=(10, 8))
         
         for c in range(len(classes)):
@@ -183,9 +182,7 @@ def main():
             plt.text(np.mean(pts[:, 0]), np.mean(pts[:, 1]), str(c+1), fontsize=12, fontweight='bold')
         
         # Centroidi originali (già scalati PC1-PC2)
-        centroids_x1, centroids_x2 = pca_plot.fit_transform(res["model"].cluster_centers_)[:, 0], \
-                                   pca_plot.fit_transform(res["model"].cluster_centers_)[:, 1]
-        plt.scatter(centroids_x1, centroids_x2, c="red", s=80, marker="X")
+        plt.scatter(res["model"].cluster_centers_)[:, 0], res["model"].cluster_centers_)[:, 1], c="red", s=80, marker="X")
         plt.title(f"{name.upper()} – {algo.capitalize()} ({audio_format})")
         plt.savefig(os.path.join(output_folder, f"plot_{name}_{algo}_{audio_format}.png"), dpi=600)
         plt.close()
