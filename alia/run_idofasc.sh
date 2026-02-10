@@ -24,7 +24,7 @@ else
     exit 1
 fi
 # Cartella parallela per i risultati
-OUTPUT_DIR="/leonardo_scratch/large/userexternal/$USER/IDOFASC_results_$DATASET_$FORMAT"
+OUTPUT_DIR="/leonardo_scratch/large/userexternal/$USER/IDOFASC_results_${DATASET}_${FORMAT}"
 
 SIF_FILE="$PROJECT_DIR/.containers/clap_pipeline.sif"
 LOCAL_TMP="${local_scratch:-/leonardo_scratch/large/userexternal/$USER/tmp_job_$SLURM_JOB_ID}"
