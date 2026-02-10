@@ -75,7 +75,7 @@ def process_esc50_to_hdf5(base_dir: Path, target_dir: Path):
 if __name__ == '__main__':
     user = os.environ.get('USER')
     # Path basati sulla struttura standard della repo GitHub di ESC-50
-    BASE_DIR = Path(f'/leonardo/home/userexternal/{user}/ESC-50')
+    BASE_DIR = Path(f'/leonardo_scratch/large/userexternal/{user}/ESC-50')
     TARGET_DIR = Path(f'/leonardo_scratch/large/userexternal/{user}/ESC50_HDF5/raw_wav')
     
     os.makedirs(TARGET_DIR, exist_ok=True)
