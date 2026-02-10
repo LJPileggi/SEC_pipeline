@@ -160,29 +160,46 @@ def main():
         plt.figure(figsize=(10, 8))
         
         for c in range(len(classes)):
-            pts = X2[res["labels"] == c]
             col = color_list[c % len(color_list)]
             
-            if len(pts) >= 3:
+            # 1. Recupero i punti assegnati al CLUSTER 'c' dall'algoritmo (per l'Hull)
+            pts_cluster = X2[res["labels"] == c]
+            
+            # 2. Recupero i punti appartenenti alla CLASSE REALE 'c' (Ground Truth)
+            pts_true = X2[y_true == c]
+            
+            # Disegno il Convex Hull basato sulla geometria del CLUSTER
+            if len(pts_cluster) >= 3:
                 try:
-                    # 🎯 FIX: Aggiunta di jittering per evitare errori di precisione numerica Qhull
-                    # Aggiungiamo un rumore di ordine 1e-9 che non altera il plot ma stabilizza Qhull
-                    jitter = np.random.normal(0, 1e-9, pts.shape)
-                    pts_jittered = pts + jitter
+                    # Jitter per stabilità numerica Qhull
+                    jitter = np.random.normal(0, 1e-9, pts_cluster.shape)
+                    pts_jittered = pts_cluster + jitter
                     
                     hull = ConvexHull(pts_jittered)
                     hp = pts_jittered[hull.vertices]
-                    plt.plot(np.r_[hp[:, 0], hp[0, 0]], np.r_[hp[:, 1], hp[0, 1]], "--", color=col, lw=2)
-                    plt.fill(hp[:, 0], hp[:, 1], color=col, alpha=0.1)
+                    plt.plot(np.r_[hp[:, 0], hp[0, 0]], np.r_[hp[:, 1], hp[0, 1]], "--", color=col, lw=1.5, alpha=0.6)
+                    plt.fill(hp[:, 0], hp[:, 1], color=col, alpha=0.05)
                 except Exception as e:
-                    # Se fallisce, logghiamo ma proseguiamo (non vogliamo uccidere il job per un plot)
-                    print(f"⚠️ Warning: Fallito calcolo ConvexHull per cluster {c} ({name}-{algo}): {e}", flush=True)
-            
-            plt.plot(np.mean(pts[:, 0]), np.mean(pts[:, 1]), "X", c="black")
-            plt.text(np.mean(pts[:, 0]), np.mean(pts[:, 1]), str(c+1), fontsize=12, fontweight='bold')
-        
-        # Centroidi originali (già scalati PC1-PC2)
-        plt.scatter(res["model"].cluster_centers_[:, 0], res["model"].cluster_centers_[:, 1], c="red", s=80, marker="X")
+                    print(f"⚠️ Warning: Hull fallito per cluster {c}: {e}")
+
+            # 3. BARICENTRO GROUND TRUTH: Numero della classe (c+1) posizionato sulla media dei punti REALI
+            if len(pts_true) > 0:
+                gt_mean_x = np.mean(pts_true[:, 0])
+                gt_mean_y = np.mean(pts_true[:, 1])
+                
+                # Numero identificativo della classe reale
+                plt.text(gt_mean_x, gt_mean_y, str(c+1), 
+                         fontsize=14, fontweight='extra bold', color='black',
+                         bbox=dict(facecolor='white', alpha=0.7, edgecolor=col, boxstyle='round,pad=0.2'))
+                
+                # Marker per il baricentro reale (Nero)
+                plt.plot(gt_mean_x, gt_mean_y, "o", c="black", markersize=4)
+
+        # 4. CENTROIDI DEL MODELLO (X Rosse)
+        # Rappresentano dove l'algoritmo ha piazzato i centri dei cluster
+        plt.scatter(res["model"].cluster_centers_[:, 0], 
+                    res["model"].cluster_centers_[:, 1], 
+                    c="red", s=100, marker="X", label="Cluster Centroids", alpha=0.8)
         plt.title(f"{name.upper()} – {algo.capitalize()} ({audio_format})")
         plt.savefig(os.path.join(output_folder, f"plot_{name}_{algo}_{audio_format}.png"), dpi=600)
         plt.close()
