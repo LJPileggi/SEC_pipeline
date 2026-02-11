@@ -22,13 +22,18 @@ from src.dirs_config import basedir_preprocessed, results_filepath_project, base
 
 # 🎯 MONKEY PATCH LOGIC per ambiente Leonardo
 def universal_path_redirect(*args, **kwargs):
+    weights_path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
     text_path = os.getenv("CLAP_TEXT_ENCODER_PATH")
-    if text_path:
-        return text_path
-    return args[0] if args else None
+    if any(x for x in args if 'msclap' in str(x)) or 'CLAP_weights' in str(kwargs):
+        return weights_path
+    filename = kwargs.get('filename') or (args[1] if len(args) > 1 else None)
+    if filename and text_path:
+        return os.path.join(text_path, str(filename))
+    return text_path
 
+huggingface_hub.hf_hub_download = universal_path_redirect
 transformers.utils.hub.cached_file = universal_path_redirect
-transformers.utils.hub.get_checkpoint_shard_files = universal_path_redirect
+msclap.CLAPWrapper.hf_hub_download = universal_path_redirect
 
 def parsing():
     parser = argparse.ArgumentParser(description='L-MAC Production Pipeline - Modular Version')
