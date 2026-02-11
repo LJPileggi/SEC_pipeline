@@ -49,7 +49,7 @@ def test_full_pipeline():
 
     # 3. TEST: LMAC initialization with Patched CLAP
     clap_wrapper, audio_embedding, _ = CLAP_initializer(device=device, use_cuda=torch.cuda.is_available())
-    lmac = LMAC(classifier=classifier, decoder=decoder, clap_model=clap_wrapper, audio_embedding=audio_embedding)
+    lmac = LMAC(classifier=classifier, decoder=decoder, audio_embedding=audio_embedding)
     
     dummy_spec_linear = torch.abs(torch.randn(1, 1, 27, 256)).to(device)
     loss, generated_mask = lmac.calculate_masking_loss(h_original=dummy_h, linear_spec_X=dummy_spec_linear, sampling_rate=51200)
