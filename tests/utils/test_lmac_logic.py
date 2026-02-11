@@ -52,7 +52,7 @@ def test_full_pipeline():
     lmac = LMAC(classifier=classifier, decoder=decoder, audio_embedding=audio_embedding)
     
     dummy_spec_linear = torch.abs(torch.randn(1, 1, 27, 256)).to(device)
-    loss, generated_mask = lmac.calculate_masking_loss(h_original=dummy_h, linear_spec_X=dummy_spec_linear, sampling_rate=51200)
+    loss, generated_mask = lmac.compute_loss(h_original=dummy_h, linear_spec_X=dummy_spec_linear, sampling_rate=51200)
     assert not torch.isnan(loss)
     print(f"✅ Masking loss: {loss.item():.4f}")
 
