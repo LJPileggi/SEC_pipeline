@@ -6,6 +6,7 @@ import argparse
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import huggingface_hub
+import msclap
 import transformers
 
 # Priorità assoluta moduli locali per importare src
