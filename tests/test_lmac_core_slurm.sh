@@ -10,38 +10,38 @@
 #SBATCH -A IscrC_Pb-skite
 #SBATCH --output=test_lmac_core_%j.out
 
-# --- 1. CONFIGURATION ---
-# Use the actual username resolved at runtime
+# --- 1. CONFIGURATION (Identica alla pipeline di produzione) ---
 SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/clap_pipeline.sif"
 CLAP_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
 ROBERTA_PATH="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/roberta-base"
 
 # Unique workspace on local scratch
 TEST_WORK_DIR="/leonardo_scratch/large/userexternal/$USER/tmp_lmac_core_$SLURM_JOB_ID"
-mkdir -p "$TEST_WORK_DIR/roberta-base" "$TEST_WORK_DIR/weights" "$TEST_WORK_DIR/numba_cache"
+mkdir -p "$TEST_WORK_DIR/weights" "$TEST_WORK_DIR/roberta-base" "$TEST_WORK_DIR/numba_cache"
 
-# Helper for cleanup on exit or signal
 cleanup() {
     echo "🧹 Cleaning up test environment: $TEST_WORK_DIR"
     rm -rf "$TEST_WORK_DIR"
 }
 trap cleanup EXIT SIGTERM SIGINT
 
-# --- 2. ASSET PREPARATION ---
+# --- 2. ASSET PREPARATION (MANTRA: Staging locale) ---
 echo "📦 Staging assets to local scratch..."
 cp -r "$ROBERTA_PATH/." "$TEST_WORK_DIR/roberta-base/"
 cp "$CLAP_WEIGHTS" "$TEST_WORK_DIR/weights/CLAP_weights_2023.pth"
 
-# Environment variables for the container
+# --- 3. ENVIRONMENT VARIABLES (MANTRA: Redirect assoluto) ---
+export HF_HUB_OFFLINE=1
 export CLAP_TEXT_ENCODER_PATH="/tmp_data/roberta-base"
 export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/weights/CLAP_weights_2023.pth"
 export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
-export TEST_WEIGHTS_PATH="/tmp_data/weights/dummy_classifier.pt"
+export TEST_WEIGHTS_PATH="/tmp_data/dummy_weights.pt"
+export PYTHONPATH="/app"
+export PYTHONUNBUFFERED=1
 
-echo "🚀 Launching L-MAC Core Logic Test..."
-
-# --- 3. EXECUTION ---
-singularity exec --nv \
+# --- 4. EXECUTION ---
+echo "🚀 Running LMAC core test..."
+singularity exec --nv --no-home \
     --bind "/leonardo_scratch:/leonardo_scratch" \
     --bind "$TEST_WORK_DIR:/tmp_data" \
     --bind "$(pwd):/app" \

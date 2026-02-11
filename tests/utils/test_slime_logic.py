@@ -6,8 +6,23 @@ import sys
 import os
 import gc
 
-sys.path.insert(0, os.getcwd())
+# --- CLAP MONKEY PATCH ---
+import huggingface_hub
+import transformers
+import msclap
 
+def universal_path_redirect(*args, **kwargs):
+    w = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
+    t = os.getenv("CLAP_TEXT_ENCODER_PATH")
+    if any(x for x in args if 'msclap' in str(x)) or 'CLAP_weights' in str(kwargs): return w
+    filename = kwargs.get('filename') or (args[1] if len(args) > 1 else None)
+    return os.path.join(t, str(filename)) if (filename and t) else t
+
+huggingface_hub.hf_hub_download = universal_path_redirect
+transformers.utils.hub.cached_file = universal_path_redirect
+msclap.CLAPWrapper.hf_hub_download = universal_path_redirect
+
+sys.path.insert(0, os.getcwd())
 from src.explainability.SLIME import SLIME
 from src.models import CLAP_initializer, FinetunedModel
 
