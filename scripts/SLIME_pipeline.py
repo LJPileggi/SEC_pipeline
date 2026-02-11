@@ -4,6 +4,7 @@ import gc
 import torch
 import json
 import argparse
+import huggingface_hub
 import transformers
 from tqdm import tqdm
 
