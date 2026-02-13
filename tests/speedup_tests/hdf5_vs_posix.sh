@@ -10,12 +10,12 @@ export N_FILES=500
 export SR=44100
 export DUR=1
 
-# Pulizia totale iniziale
+# Pulizia totale
 rm -rf "$LUSTRE_TMP"
 mkdir -p "${LUSTRE_TMP}/wav_files"
 touch "$STREAM_LOG"
 
-# --- 2. GENERATION PHASE (Funzionava già, non la tocchiamo) ---
+# --- 2. GENERATION PHASE ---
 echo "🔨 Phase 0: Generating data..."
 singularity exec --no-home --bind "${LUSTRE_TMP}:/mnt_lustre" "$SIF_FILE" \
     python3 -u - <<'PY'
@@ -32,10 +32,12 @@ with h5py.File(h5_p, 'w') as h5:
         sf.write(f"{wav_dir}/track_{i}.wav", data, sr)
         ds[i] = data
     h5.flush()
+print("✅ Python Generation Done.")
 PY
 
 # --- 3. GENERATE SLURM BATCH SCRIPT ---
-cat << EOF > "${LUSTRE_TMP}/io_test_slurm.sh"
+# Usiamo 'EOF' per non far espandere nulla al login node
+cat << 'EOF' > "${LUSTRE_TMP}/io_test_slurm.sh"
 #!/bin/bash
 #SBATCH --job-name=io_bench
 #SBATCH --partition=boost_usr_prod
@@ -43,24 +45,27 @@ cat << EOF > "${LUSTRE_TMP}/io_test_slurm.sh"
 #SBATCH --time=00:15:00
 #SBATCH --gres=gpu:1
 #SBATCH -A IscrC_Pb-skite
-#SBATCH --output=${LUSTRE_TMP}/slurm_debug.out
-#SBATCH --error=${LUSTRE_TMP}/slurm_debug.err
+#SBATCH --output=/dev/null
+#SBATCH --error=/dev/null
 
-# Cartella SSD locale
-LOCAL_STORAGE="\$LOCAL_SCRATCH/bench_data"
-mkdir -p "\$LOCAL_STORAGE/wav_files"
+# Recuperiamo le variabili passate o settiamole fisse
+L_TMP="/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.tmp_io_bench"
+LOG="/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.tmp_io_bench/io_results.log"
+SIF="/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.containers/clap_pipeline.sif"
+N=500
 
-echo "🚀 NODE START: \$(date)" >> "$STREAM_LOG"
+echo "🚀 NODE START: $(date)" >> "$LOG"
 
-# --- Python Probe (Percorsi dinamici) ---
-cat << 'PY_INNER' > "${LUSTRE_TMP}/reader_probe.py"
+# --- Python Probe (Salvato su Lustre) ---
+cat << 'PY_INNER' > "/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.tmp_io_bench/reader_probe.py"
 import time, h5py, soundfile as sf, sys, os
 wav_p, h5_p, label, n_files = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
 print(f"\n--- I/O Test: {label} ---", flush=True)
 try:
     s = time.perf_counter()
     for i in range(n_files):
-        with sf.SoundFile(os.path.join(wav_p, f"track_{i}.wav")) as f: _ = f.read()
+        p = os.path.join(wav_p, f"track_{i}.wav")
+        with sf.SoundFile(p) as f: _ = f.read()
     print(f"🔹 POSIX: {time.perf_counter() - s:.4f}s", flush=True)
     
     s = time.perf_counter()
@@ -72,41 +77,46 @@ except Exception as e:
     print(f"❌ ERROR: {e}", flush=True)
 PY_INNER
 
-# PHASE 1: Lustre (Sempre funzionante)
-echo "🧪 PHASE 1: Remote Lustre" >> "$STREAM_LOG"
-singularity exec --nv --no-home --bind "${LUSTRE_TMP}:${LUSTRE_TMP}" "$SIF_FILE" \\
-    python3 -u "${LUSTRE_TMP}/reader_probe.py" "${LUSTRE_TMP}/wav_files" "${LUSTRE_TMP}/dataset.h5" "REMOTE_LUSTRE" "$N_FILES" >> "$STREAM_LOG" 2>&1
+# Fase 1: Lustre
+echo "🧪 PHASE 1: Remote Lustre" >> "$LOG"
+singularity exec --nv --no-home --bind "/leonardo_scratch:/leonardo_scratch" "$SIF" \
+    python3 -u "$L_TMP/reader_probe.py" "$L_TMP/wav_files" "$L_TMP/dataset.h5" "REMOTE" "$N" >> "$LOG" 2>&1
 
-# PHASE 2: Staging
-echo "🧪 PHASE 2: Staging-In" >> "$STREAM_LOG"
-t1=\$(date +%s.%N)
-cp ${LUSTRE_TMP}/wav_files/*.wav "\$LOCAL_STORAGE/wav_files/"
-echo "  - CP WAVs: \$(python3 -c "print(f'{(\$(date +%s.%N) - \$t1):.4f}')")s" >> "$STREAM_LOG"
-t2=\$(date +%s.%N)
-cp ${LUSTRE_TMP}/dataset.h5 "\$LOCAL_STORAGE/"
-echo "  - CP HDF5: \$(python3 -c "print(f'{(\$(date +%s.%N) - \$t2):.4f}')")s" >> "$STREAM_LOG"
+# Fase 2: Staging
+echo "🧪 PHASE 2: Staging-In" >> "$LOG"
+LOCAL_SSD="$LOCAL_SCRATCH/bench"
+mkdir -p "$LOCAL_SSD/wavs"
+t1=$(date +%s.%N)
+cp "$L_TMP/wav_files/"*.wav "$LOCAL_SSD/wavs/" >> "$LOG" 2>&1
+echo "  - CP WAVs: $(python3 -c "print(f'{($(date +%s.%N) - $t1):.4f}')")s" >> "$LOG"
+cp "$L_TMP/dataset.h5" "$LOCAL_SSD/" >> "$LOG" 2>&1
 
-sync && sleep 1
+# Fase 3: SSD
+echo "🧪 PHASE 3: Local SSD" >> "$LOG"
+singularity exec --nv --no-home \
+    --bind "/leonardo_scratch:/leonardo_scratch" \
+    --bind "$LOCAL_SCRATCH:$LOCAL_SCRATCH" \
+    "$SIF" \
+    python3 -u "$L_TMP/reader_probe.py" "$LOCAL_SSD/wavs" "$LOCAL_SSD/dataset.h5" "LOCAL" "$N" >> "$LOG" 2>&1
 
-# PHASE 3: Local SSD (Mount simmetrico di tutto il percorso scratch_local)
-echo "🧪 PHASE 3: Local SSD" >> "$STREAM_LOG"
-# Montiamo direttamente /scratch_local per non sbagliare
-singularity exec --nv --no-home \\
-    --bind "${LUSTRE_TMP}:${LUSTRE_TMP}" \\
-    --bind "/scratch_local:/scratch_local" \\
-    "$SIF_FILE" \\
-    python3 -u "${LUSTRE_TMP}/reader_probe.py" "\$LOCAL_STORAGE/wav_files" "\$LOCAL_STORAGE/dataset.h5" "LOCAL_SSD" "$N_FILES" >> "$STREAM_LOG" 2>&1
-
-echo "🏁 NODE FINISH: \$(date)" >> "$STREAM_LOG"
+echo "🏁 NODE FINISH: $(date)" >> "$LOG"
 EOF
 
 # --- 4. SUBMISSION ---
-echo "📤 Submitting I/O job..."
+echo "📤 Submitting..."
 JOB_ID=$(sbatch --parsable "${LUSTRE_TMP}/io_test_slurm.sh")
 tail -f "$STREAM_LOG" &
 TAIL_PID=$!
 
-while sacct -j "$JOB_ID" --format=State --noheader | grep -qE "RUNNING|PENDING|COMPLETING"; do sleep 2; done
-sleep 2
+# Monitoraggio più lento per dare tempo al filesystem di scrivere
+while true; do
+    STATE=$(sacct -j "$JOB_ID" --format=State --noheader | head -n 1 | xargs)
+    if [[ "$STATE" == "COMPLETED" || "$STATE" == "FAILED" || "$STATE" == "TIMEOUT" ]]; then
+        sleep 5 # Aspettiamo 5 secondi extra per il flush dei log
+        break
+    fi
+    sleep 5
+done
+
 kill $TAIL_PID 2>/dev/null
-echo -e "\n✅ Benchmark concluso."
+echo -e "\n✅ Fine."
