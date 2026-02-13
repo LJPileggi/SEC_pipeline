@@ -1,20 +1,19 @@
 #!/bin/bash
 
-# --- 1. CONFIGURATION ---
-MY_USER="lpilegg1"
-PROJECT_DIR="/leonardo_scratch/large/userexternal/${MY_USER}/SEC_pipeline"
+# --- 1. CONFIGURATION (PERCORSI ASSOLUTI) ---
+USER_NAME=$(whoami)
+PROJECT_DIR="/leonardo_scratch/large/userexternal/${USER_NAME}/SEC_pipeline"
 L_TMP="${PROJECT_DIR}/.tmp_io_final"
-RAW_LOG="${L_TMP}/raw_bench.log"
-SIF="/leonardo_scratch/large/userexternal/${MY_USER}/SEC_pipeline/.containers/clap_pipeline.sif"
+RAW_CSV="${L_TMP}/raw_data.csv"
+SIF="${PROJECT_DIR}/.containers/clap_pipeline.sif"
 
-ITERATIONS=10
-BATCH_SIZE=500
-
+# Cleanup e setup iniziale
 rm -rf "$L_TMP"
 mkdir -p "${L_TMP}/wav_files"
+echo "Phase,Iteration,POSIX_Wall,POSIX_Sys,HDF5_Wall,HDF5_Sys" > "$RAW_CSV"
 
-# --- 2. GENERATION (5000 file) ---
-echo "🔨 Generazione dataset di test (5000 tracce)..."
+# --- 2. GENERATION PHASE (5000 file) ---
+echo "🔨 Phase 0: Generazione Dataset di test (5000 file)..."
 singularity exec --no-home --bind "${L_TMP}:/mnt_lustre" "$SIF" \
     python3 -u - <<'PY'
 import numpy as np
@@ -30,8 +29,10 @@ with h5py.File(h5_p, 'w') as h5:
         sf.write(f"{wav_dir}/track_{i}.wav", data, sr)
         ds[i] = data
 PY
+echo "✅ Generazione completata."
 
 # --- 3. GENERATE SLURM BATCH SCRIPT ---
+# Usiamo 'EOF' tra apici per evitare interferenze del login node
 cat << 'EOF' > "${L_TMP}/run_ultimate.sh"
 #!/bin/bash
 #SBATCH --job-name=io_bench
@@ -43,109 +44,95 @@ cat << 'EOF' > "${L_TMP}/run_ultimate.sh"
 #SBATCH --output=/dev/null
 #SBATCH --error=/dev/null
 
-L_TMP="/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.tmp_io_final"
-RAW_LOG="${L_TMP}/raw_bench.log"
+# Percorsi interni al nodo
+NODE_TMP="/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.tmp_io_final"
+CSV="${NODE_TMP}/raw_data.csv"
 SIF="/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.containers/clap_pipeline.sif"
-SSD_NODE="/tmp/bench_data_${SLURM_JOB_ID}"
+SSD="/tmp/bench_${SLURM_JOB_ID}"
+mkdir -p "${SSD}/wavs"
 
-# --- Python Probe (Output CSV-like per il parsing) ---
-cat << 'PY_INNER' > "${L_TMP}/probe.py"
+# --- Probe Python ---
+cat << 'PY_PROBE' > "${NODE_TMP}/probe.py"
 import time, h5py, soundfile as sf, sys, os
-def run(wav_p, h5_p, label, start, count):
-    # POSIX
-    ts = os.times(); ws = time.perf_counter()
-    for i in range(start, start + count):
-        with sf.SoundFile(os.path.join(wav_p, f"track_{i}.wav")) as f: _ = f.read()
-    te = os.times(); we = time.perf_counter()
-    p_w, p_s = we - ws, te[1] - ts[1]
-    # HDF5
-    ts = os.times(); ws = time.perf_counter()
-    with h5py.File(h5_p, 'r') as h5:
-        ds = h5['audio']
-        for i in range(start, start + count): _ = ds[i]
-    te = os.times(); we = time.perf_counter()
-    h_w, h_s = we - ws, te[1] - ts[1]
-    print(f"{label},{p_w:.6f},{p_s:.6f},{h_w:.6f},{h_s:.6f}")
-
-run(sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), 500)
-PY_INNER
-
-echo "Phase,Wall_P,Sys_P,Wall_H,Sys_H" > "$RAW_LOG"
+wav_p, h5_p, label, start, count = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), 500
+# Test POSIX
+ts = os.times(); ws = time.perf_counter()
+for i in range(start, start + count):
+    with sf.SoundFile(os.path.join(wav_p, f"track_{i}.wav")) as f: _ = f.read()
+te = os.times(); we = time.perf_counter()
+p_w, p_s = we - ws, te[1] - ts[1]
+# Test HDF5
+ts = os.times(); ws = time.perf_counter()
+with h5py.File(h5_p, 'r') as h5:
+    ds = h5['audio']
+    for i in range(start, start + count): _ = ds[i]
+te = os.times(); we = time.perf_counter()
+h_w, h_s = we - ws, te[1] - ts[1]
+print(f"{label},{start//500},{p_w:.6f},{p_s:.6f},{h_w:.6f},{h_s:.6f}")
+PY_PROBE
 
 # PHASE 1: LUSTRE
 for i in {0..9}; do
     OFFSET=$((i * 500))
     singularity exec --no-home --bind "/leonardo_scratch:/leonardo_scratch" "$SIF" \
-        python3 -u "$L_TMP/probe.py" "$L_TMP/wav_files" "$L_TMP/dataset.h5" "LUSTRE" "$OFFSET" >> "$RAW_LOG" 2>&1
+        python3 -u "${NODE_TMP}/probe.py" "${NODE_TMP}/wav_files" "${NODE_TMP}/dataset.h5" "LUSTRE" "$OFFSET" >> "$CSV"
 done
 
-# PHASE 2: STAGING (10 iterazioni di staging-in)
-mkdir -p "${SSD_NODE}/wavs"
+# PHASE 2: STAGING (Misura media su 10 blocchi)
 for i in {0..9}; do
     OFFSET=$((i * 500))
     t1=$(date +%s.%N)
-    cp "$L_TMP/wav_files/track_"{$OFFSET..$((OFFSET+499))}.wav "${SSD_NODE}/wavs/"
-    cp "$L_TMP/dataset.h5" "${SSD_NODE}/dataset.h5"
+    cp "${NODE_TMP}/wav_files/track_"{$OFFSET..$((OFFSET+499))}.wav "${SSD}/wavs/"
+    cp "${NODE_TMP}/dataset.h5" "${SSD}/dataset.h5"
     t2=$(date +%s.%N)
-    echo "STAGING,$(python3 -c "print($t2 - $t1)"),0,0,0" >> "$RAW_LOG"
+    echo "STAGING,$i,$(python3 -c "print($t2 - $t1)"),0,0,0" >> "$CSV"
     
-    # PHASE 3: SSD (Immediatamente dopo ogni staging per mediare)
+    # PHASE 3: SSD (Immediato dopo staging)
     singularity exec --no-home --bind "/tmp:/tmp" --bind "/leonardo_scratch:/leonardo_scratch" "$SIF" \
-        python3 -u "$L_TMP/probe.py" "${SSD_NODE}/wavs" "${SSD_NODE}/dataset.h5" "SSD" "$OFFSET" >> "$RAW_LOG" 2>&1
+        python3 -u "${NODE_TMP}/probe.py" "${SSD}/wavs" "${SSD}/dataset.h5" "SSD" "$OFFSET" >> "$CSV"
     
-    rm -f ${SSD_NODE}/wavs/* ${SSD_NODE}/dataset.h5
+    rm -f ${SSD}/wavs/* ${SSD}/dataset.h5
 done
-
-# --- ANALISI FINALE (Python) ---
-singularity exec --no-home --bind "$L_TMP:$L_TMP" "$SIF" python3 -u - <<'PY_STATS'
-import pandas as pd
-import numpy as np
-df = pd.read_csv("/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.tmp_io_final/raw_bench.log")
-
-def get_stats(data):
-    return f"{data.mean():.4f}s (±{data.std():.4f})"
-
-print("\n" + "="*90)
-print(f"{'REPORT STATISTICO I/O (N=10 iterazioni, 500 file/iter)':^90}")
-print("="*90)
-print(f"{'Fase':<12} | {'POSIX (Wall)':<22} | {'HDF5 (Wall)':<22} | {'Overhead Sys':<12}")
-print("-" * 90)
-
-for phase in ['LUSTRE', 'SSD']:
-    sub = df[df['Phase'] == phase]
-    p_wall = sub['Wall_P']
-    h_wall = sub['Wall_H']
-    # Overhead calcolato come SysTime / WallTime
-    p_ov = (sub['Sys_P'].mean() / p_wall.mean() * 100)
-    h_ov = (sub['Sys_H'].mean() / h_wall.mean() * 100)
-    
-    print(f"{phase:<12} | {get_stats(p_wall):<22} | {get_stats(h_wall):<22} | P:{p_ov:>4.1f}% H:{h_ov:>4.1f}%")
-
-st_data = df[df['Phase'] == 'STAGING']['Wall_P']
-print("-" * 90)
-print(f"STAGING IN   | Media: {st_data.mean():.4f}s | Dev.Std: {st_data.std():.4f} | (Lustre -> SSD)")
-print("="*90 + "\n")
-PY_STATS
 EOF
 
-# --- 4. EXECUTION ---
-echo "📤 Invio Job di Benchmark (10 iterazioni)..."
+# --- 4. SUBMISSION & ANALYSIS ---
+echo "📤 Invio Job Slurm (10 iterazioni)..."
 JOB_ID=$(sbatch --parsable "${L_TMP}/run_ultimate.sh")
 
-# Invece di tail -f, aspettiamo e basta
+# Loop di attesa con progresso visibile
 while squeue -j "$JOB_ID" | grep -q "$JOB_ID"; do
     echo -n "."
-    sleep 10
+    sleep 5
 done
+echo -e "\n✅ Job terminato. Elaborazione statistiche..."
 
-echo -e "\n✅ Job completato. Risultati analizzati:\n"
-# Stampiamo il report finale che il nodo ha scritto nel log (catturandolo dal file generato)
-# Cerchiamo l'inizio della tabella nel log raw o facciamo girare l'analisi qui
-singularity exec --no-home --bind "$L_TMP:$L_TMP" "$SIF" python3 -u - <<'PY_FINAL'
+# Analisi Finale in Python (direttamente qui nel login node)
+python3 -u - <<PY_STATS
 import pandas as pd
-df = pd.read_csv("/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.tmp_io_final/raw_bench.log")
-for phase in ['LUSTRE', 'SSD']:
-    sub = df[df['Phase'] == phase]
-    print(f"{phase}: POSIX {sub['Wall_P'].mean():.4f}±{sub['Wall_P'].std():.4f} | HDF5 {sub['Wall_H'].mean():.4f}±{sub['Wall_H'].std():.4f}")
-print(f"STAGING: {df[df['Phase'] == 'STAGING']['Wall_P'].mean():.4f}s")
-PY_FINAL
+import numpy as np
+try:
+    df = pd.read_csv("${RAW_CSV}")
+    print("\n" + "="*95)
+    print(f"{'REPORT FINALE I/O BENCHMARK (N=10)':^95}")
+    print("="*95)
+    print(f"{'FASE':<10} | {'POSIX Wall (mean ± std)':<25} | {'HDF5 Wall (mean ± std)':<25} | {'Sys Overhead'}")
+    print("-" * 95)
+    
+    for phase in ['LUSTRE', 'SSD']:
+        sub = df[df['Phase'] == phase]
+        pw, ps = sub['POSIX_Wall'], sub['POSIX_Sys']
+        hw, hs = sub['HDF5_Wall'], sub['HDF5_Sys']
+        
+        p_str = f"{pw.mean():.4f}s ± {pw.std():.4f}"
+        h_str = f"{hw.mean():.4f}s ± {hw.std():.4f}"
+        ov = f"P:{(ps.mean()/pw.mean()*100):.1f}% | H:{(hs.mean()/hw.mean()*100):.1f}%"
+        
+        print(f"{phase:<10} | {p_str:<25} | {h_str:<25} | {ov}")
+    
+    st = df[df['Phase'] == 'STAGING']['POSIX_Wall']
+    print("-" * 95)
+    print(f"STAGING IN | Media: {st.mean():.4f}s | Dev.Std: {st.std():.4f} (Lustre -> Local SSD)")
+    print("="*95 + "\n")
+except Exception as e:
+    print(f"Errore nell'analisi: {e}")
+PY_STATS
