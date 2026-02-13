@@ -14,7 +14,6 @@ mkdir -p "${LUSTRE_TMP}/wav_files"
 touch "$STREAM_LOG"
 
 # --- 2. GENERATION PHASE ---
-# (Invariata, funziona già bene)
 echo "🔨 Phase 0: Generating data..."
 singularity exec --no-home --bind "${LUSTRE_TMP}:/mnt_lustre" "$SIF_FILE" \
     python3 -u - <<'PY'
@@ -42,16 +41,16 @@ cat << EOF > "${LUSTRE_TMP}/io_test_slurm.sh"
 #SBATCH --time=00:20:00
 #SBATCH --gres=gpu:1
 #SBATCH -A IscrC_Pb-skite
-#SBATCH --output=/dev/null
+#SBATCH --output=${LUSTRE_TMP}/slurm_debug.out
 #SBATCH --error=${LUSTRE_TMP}/slurm_debug.err
 
-# Usa LOCAL_SCRATCH fornito da Slurm per l'SSD
+# Usiamo la directory scratch locale standard
 SSD_NODE="\$LOCAL_SCRATCH/io_bench"
 mkdir -p "\$SSD_NODE/wav_files"
 
 echo "🚀 NODE START: \$(date)" >> "$STREAM_LOG"
 
-# Creiamo il probe e diamogli subito i permessi SUL NODO
+# --- Python Probe Generation ---
 cat << 'PY_INNER' > "${LUSTRE_TMP}/reader_probe.py"
 import time, h5py, soundfile as sf, sys
 wav_p, h5_p, label, n_files = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
@@ -66,13 +65,12 @@ with h5py.File(h5_p, 'r') as h5:
     for i in range(n_files): _ = ds[i]
 print(f"🔹 HDF5:  {time.perf_counter() - s:.4f}s", flush=True)
 PY_INNER
-chmod +x "${LUSTRE_TMP}/reader_probe.py"
 
 # PHASE 1: Lustre
 singularity exec --nv --no-home --bind "${LUSTRE_TMP}:/mnt_lustre" "$SIF_FILE" \\
     python3 -u /mnt_lustre/reader_probe.py "/mnt_lustre/wav_files" "/mnt_lustre/dataset.h5" "REMOTE_LUSTRE" "$N_FILES" >> "$STREAM_LOG" 2>&1
 
-# PHASE 2: Staging (cp diretto su $LOCAL_SCRATCH)
+# PHASE 2: Staging
 echo "🧪 PHASE 2: Staging-In" >> "$STREAM_LOG"
 t1=\$(date +%s.%N)
 cp ${LUSTRE_TMP}/wav_files/*.wav "\$SSD_NODE/wav_files/"
@@ -82,10 +80,17 @@ t2=\$(date +%s.%N)
 cp ${LUSTRE_TMP}/dataset.h5 "\$SSD_NODE/"
 echo "  - CP HDF5: \$(python3 -c "print(f'{(\$(date +%s.%N) - \$t2):.4f}')")s" >> "$STREAM_LOG"
 
-# PHASE 3: SSD (Bind dinamico su LOCAL_SCRATCH)
+# Sincronizziamo il filesystem per essere sicuri che Singularity veda i dati
+sync
+sleep 2
+
+# PHASE 3: SSD (Bind dinamico usando direttamente LOCAL_SCRATCH)
 echo "🧪 PHASE 3: Local SSD" >> "$STREAM_LOG"
-singularity exec --nv --no-home --bind "${LUSTRE_TMP}:/mnt_lustre" --bind "\$SSD_NODE:/mnt_ssd" "$SIF_FILE" \\
-    python3 -u /mnt_lustre/reader_probe.py "/mnt_ssd/wav_files" "/mnt_ssd/dataset.h5" "LOCAL_SSD" "$N_FILES" >> "$STREAM_LOG" 2>&1
+singularity exec --nv --no-home \\
+    --bind "${LUSTRE_TMP}:/mnt_lustre" \\
+    --bind "\$LOCAL_SCRATCH:\$LOCAL_SCRATCH" \\
+    "$SIF_FILE" \\
+    python3 -u /mnt_lustre/reader_probe.py "\$SSD_NODE/wav_files" "\$SSD_NODE/dataset.h5" "LOCAL_SSD" "$N_FILES" >> "$STREAM_LOG" 2>&1
 
 echo "🏁 NODE FINISH: \$(date)" >> "$STREAM_LOG"
 EOF
@@ -101,4 +106,4 @@ TAIL_PID=$!
 while sacct -j "$JOB_ID" --format=State --noheader | grep -qE "RUNNING|PENDING|COMPLETING"; do sleep 2; done
 sleep 2
 kill $TAIL_PID 2>/dev/null
-echo -e "\n✅ Done. Phase 1 already showed HDF5 is ~20x faster on Lustre!"
+echo -e "\n✅ Done."
