@@ -10,7 +10,6 @@ export N_FILES=500
 export SR=44100
 export DUR=1
 
-# Pulizia totale
 rm -rf "$LUSTRE_TMP"
 mkdir -p "${LUSTRE_TMP}/wav_files"
 touch "$STREAM_LOG"
@@ -36,7 +35,6 @@ print("✅ Python Generation Done.")
 PY
 
 # --- 3. GENERATE SLURM BATCH SCRIPT ---
-# Usiamo 'EOF' per non far espandere nulla al login node
 cat << 'EOF' > "${LUSTRE_TMP}/io_test_slurm.sh"
 #!/bin/bash
 #SBATCH --job-name=io_bench
@@ -48,16 +46,22 @@ cat << 'EOF' > "${LUSTRE_TMP}/io_test_slurm.sh"
 #SBATCH --output=/dev/null
 #SBATCH --error=/dev/null
 
-# Recuperiamo le variabili passate o settiamole fisse
-L_TMP="/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.tmp_io_bench"
-LOG="/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.tmp_io_bench/io_results.log"
+# TRUCCO: Definiamo i percorsi LUSTRE in modo esplicito recuperandoli dal path dello script
+L_TMP=$(dirname $(realpath $0))
+LOG="${L_TMP}/io_results.log"
 SIF="/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.containers/clap_pipeline.sif"
 N=500
 
+# TRUCCO 2: Usiamo una directory sicura in LOCAL_SCRATCH
+# Se LOCAL_SCRATCH è vuota per qualche errore di Slurm, usiamo /scratch_local come fallback
+BASE_LOCAL=${LOCAL_SCRATCH:-/scratch_local}
+MY_LOCAL="${BASE_LOCAL}/io_bench_${SLURM_JOB_ID}"
+mkdir -p "${MY_LOCAL}/wavs"
+
 echo "🚀 NODE START: $(date)" >> "$LOG"
 
-# --- Python Probe (Salvato su Lustre) ---
-cat << 'PY_INNER' > "/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.tmp_io_bench/reader_probe.py"
+# --- Python Probe ---
+cat << 'PY_INNER' > "${L_TMP}/reader_probe.py"
 import time, h5py, soundfile as sf, sys, os
 wav_p, h5_p, label, n_files = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
 print(f"\n--- I/O Test: {label} ---", flush=True)
@@ -80,24 +84,27 @@ PY_INNER
 # Fase 1: Lustre
 echo "🧪 PHASE 1: Remote Lustre" >> "$LOG"
 singularity exec --nv --no-home --bind "/leonardo_scratch:/leonardo_scratch" "$SIF" \
-    python3 -u "$L_TMP/reader_probe.py" "$L_TMP/wav_files" "$L_TMP/dataset.h5" "REMOTE" "$N" >> "$LOG" 2>&1
+    python3 -u "${L_TMP}/reader_probe.py" "${L_TMP}/wav_files" "${L_TMP}/dataset.h5" "REMOTE" "$N" >> "$LOG" 2>&1
 
 # Fase 2: Staging
 echo "🧪 PHASE 2: Staging-In" >> "$LOG"
-LOCAL_SSD="$LOCAL_SCRATCH/bench"
-mkdir -p "$LOCAL_SSD/wavs"
 t1=$(date +%s.%N)
-cp "$L_TMP/wav_files/"*.wav "$LOCAL_SSD/wavs/" >> "$LOG" 2>&1
+cp "${L_TMP}/wav_files/"*.wav "${MY_LOCAL}/wavs/" >> "$LOG" 2>&1
 echo "  - CP WAVs: $(python3 -c "print(f'{($(date +%s.%N) - $t1):.4f}')")s" >> "$LOG"
-cp "$L_TMP/dataset.h5" "$LOCAL_SSD/" >> "$LOG" 2>&1
+
+t2=$(date +%s.%N)
+cp "${L_TMP}/dataset.h5" "${MY_LOCAL}/dataset.h5" >> "$LOG" 2>&1
+echo "  - CP HDF5: $(python3 -c "print(f'{($(date +%s.%N) - $t2):.4f}')")s" >> "$LOG"
+
+sync && sleep 1
 
 # Fase 3: SSD
 echo "🧪 PHASE 3: Local SSD" >> "$LOG"
 singularity exec --nv --no-home \
     --bind "/leonardo_scratch:/leonardo_scratch" \
-    --bind "$LOCAL_SCRATCH:$LOCAL_SCRATCH" \
+    --bind "${BASE_LOCAL}:${BASE_LOCAL}" \
     "$SIF" \
-    python3 -u "$L_TMP/reader_probe.py" "$LOCAL_SSD/wavs" "$LOCAL_SSD/dataset.h5" "LOCAL" "$N" >> "$LOG" 2>&1
+    python3 -u "${L_TMP}/reader_probe.py" "${MY_LOCAL}/wavs" "${MY_LOCAL}/dataset.h5" "LOCAL" "$N" >> "$LOG" 2>&1
 
 echo "🏁 NODE FINISH: $(date)" >> "$LOG"
 EOF
@@ -108,15 +115,14 @@ JOB_ID=$(sbatch --parsable "${LUSTRE_TMP}/io_test_slurm.sh")
 tail -f "$STREAM_LOG" &
 TAIL_PID=$!
 
-# Monitoraggio più lento per dare tempo al filesystem di scrivere
 while true; do
     STATE=$(sacct -j "$JOB_ID" --format=State --noheader | head -n 1 | xargs)
     if [[ "$STATE" == "COMPLETED" || "$STATE" == "FAILED" || "$STATE" == "TIMEOUT" ]]; then
-        sleep 5 # Aspettiamo 5 secondi extra per il flush dei log
+        sleep 5
         break
     fi
     sleep 5
 done
 
 kill $TAIL_PID 2>/dev/null
-echo -e "\n✅ Fine."
+echo -e "\n✅ Script concluso."
