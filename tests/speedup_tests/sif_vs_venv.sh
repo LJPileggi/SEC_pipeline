@@ -53,7 +53,7 @@ import sys
 import os
 
 mode = sys.argv[1] if len(sys.argv) > 1 else "UNKNOWN"
-modules = ["torch", "msclap", "transformers", "librosa", "soundfile", "numpy", "pandas", "h5py"]
+modules = ["numpy", "pandas", "h5py", "scipy", "librosa", "soundfile", "transformers", "torch", "msclap"]
 
 print(f"\n--- Python Results for {mode} ---")
 for mod in modules:
