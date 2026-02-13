@@ -1,21 +1,21 @@
 #!/bin/bash
 
 # --- 1. CONFIGURATION ---
-PROJECT_DIR="/leonardo_scratch/large/userexternal/${USER}/SEC_pipeline"
+MY_USER="lpilegg1"
+PROJECT_DIR="/leonardo_scratch/large/userexternal/${MY_USER}/SEC_pipeline"
 L_TMP="${PROJECT_DIR}/.tmp_io_final"
-STREAM_LOG="${L_TMP}/benchmark_stats.log"
-SIF="/leonardo_scratch/large/userexternal/${USER}/SEC_pipeline/.containers/clap_pipeline.sif"
+SIF="/leonardo_scratch/large/userexternal/${MY_USER}/SEC_pipeline/.containers/clap_pipeline.sif"
 
-# Parametri per la media
+# Parametri statistici
 ITERATIONS=10
 BATCH_SIZE=500
-TOTAL_FILES=$((ITERATIONS * BATCH_SIZE)) # 5000 file
+TOTAL_FILES=$((ITERATIONS * BATCH_SIZE))
 
+rm -rf "$L_TMP"
 mkdir -p "${L_TMP}/wav_files"
-touch "$STREAM_LOG"
 
 # --- 2. GENERATION (5000 file) ---
-echo "🔨 Generazione di $TOTAL_FILES file per test statistico..."
+echo "🔨 Generazione dataset di test ($TOTAL_FILES tracce)..."
 singularity exec --no-home --bind "${L_TMP}:/mnt_lustre" "$SIF" \
     python3 -u - <<'PY'
 import numpy as np
@@ -33,88 +33,101 @@ with h5py.File(h5_p, 'w') as h5:
 PY
 
 # --- 3. SLURM BATCH SCRIPT ---
-cat << 'EOF' > "${L_TMP}/run_stats.sh"
+cat << 'EOF' > "${L_TMP}/run_ultimate.sh"
 #!/bin/bash
 #SBATCH --partition=boost_usr_prod
 #SBATCH --nodes=1
-#SBATCH --time=00:30:00
+#SBATCH --time=00:40:00
 #SBATCH --gres=gpu:1
 #SBATCH -A IscrC_Pb-skite
+#SBATCH --output=/dev/null
 
 L_TMP="/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.tmp_io_final"
-LOG="${L_TMP}/benchmark_stats.log"
 SIF="/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.containers/clap_pipeline.sif"
-SSD="/tmp/bench_${SLURM_JOB_ID}"
-mkdir -p "$SSD/wavs"
+SSD_PATH="/tmp/bench_${SLURM_JOB_ID}"
+RAW_RESULTS="${L_TMP}/raw_data.csv"
 
-# --- Python Probe con distinzione System/User ---
-cat << 'PY_STATS' > "/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.tmp_io_final/reader_stats.py"
+echo "Phase,Iteration,POSIX_Wall,POSIX_Sys,HDF5_Wall,HDF5_Sys" > "$RAW_RESULTS"
+
+# --- Python Probe ---
+cat << 'PY_PROBE' > "${L_TMP}/probe.py"
 import time, h5py, soundfile as sf, sys, os
-
-def benchmark(wav_p, h5_p, label, start_idx, count):
-    # os.times() restituisce (user, system, children_user, children_system, elapsed)
-    t_start = os.times()
-    wall_start = time.perf_counter()
-    
-    # Test POSIX
-    for i in range(start_idx, start_idx + count):
+def run_test(wav_p, h5_p, start, count):
+    # POSIX
+    ts = os.times(); ws = time.perf_counter()
+    for i in range(start, start + count):
         with sf.SoundFile(os.path.join(wav_p, f"track_{i}.wav")) as f: _ = f.read()
-    
-    t_end = os.times()
-    wall_end = time.perf_counter()
-    
-    posix_wall = wall_end - wall_start
-    posix_sys = t_end[1] - t_start[1]
-    posix_user = t_end[0] - t_start[0]
-
-    # Test HDF5
-    t_start = os.times()
-    wall_start = time.perf_counter()
+    te = os.times(); we = time.perf_counter()
+    p_wall, p_sys = we - ws, te[1] - ts[1]
+    # HDF5
+    ts = os.times(); ws = time.perf_counter()
     with h5py.File(h5_p, 'r') as h5:
         ds = h5['audio']
-        for i in range(start_idx, start_idx + count): _ = ds[i]
-    
-    t_end = os.times()
-    wall_end = time.perf_counter()
-    
-    h5_wall = wall_end - wall_start
-    h5_sys = t_end[1] - t_start[1]
-    h5_user = t_end[0] - t_start[0]
+        for i in range(start, start + count): _ = ds[i]
+    te = os.times(); we = time.perf_counter()
+    h_wall, h_sys = we - ws, te[1] - ts[1]
+    return p_wall, p_sys, h_wall, h_sys
 
-    print(f"{label}|{posix_wall:.4f}|{posix_sys:.4f}|{h5_wall:.4f}|{h5_sys:.4f}")
+p_w, p_s, h_w, h_s = run_test(sys.argv[1], sys.argv[2], int(sys.argv[4]), 500)
+print(f"{sys.argv[3]},{sys.argv[5]},{p_w:.6f},{p_s:.6f},{h_w:.6f},{h_s:.6f}")
+PY_PROBE
 
-benchmark(sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5]))
-PY_STATS
-
-echo "Label|POSIX_Wall|POSIX_Sys|HDF5_Wall|HDF5_Sys" >> "$LOG"
-
-# Esecuzione Media (10 iterazioni)
+# 1. TEST LUSTRE (10 iterazioni con rotazione)
 for i in {0..9}; do
     OFFSET=$((i * 500))
-    echo "🏃 Iterazione $i (Offset $OFFSET)..."
-    
-    # Test su Lustre
     singularity exec --no-home --bind "/leonardo_scratch:/leonardo_scratch" "$SIF" \
-        python3 -u "$L_TMP/reader_stats.py" "$L_TMP/wav_files" "$L_TMP/dataset.h5" "LUSTRE_IT$i" "$OFFSET" 500 >> "$LOG" 2>&1
+        python3 -u "$L_TMP/probe.py" "$L_TMP/wav_files" "$L_TMP/dataset.h5" "LUSTRE" "$OFFSET" "$i" >> "$RAW_RESULTS"
 done
 
-# Copia per test SSD (Fase 2)
-cp "$L_TMP/wav_files/"*.wav "$SSD/wavs/"
-cp "$L_TMP/dataset.h5" "$SSD/"
-
+# 2. TEST STAGING (Misurato 10 volte)
+# Nota: Per lo staging leggiamo gruppi di 500 file diversi per ogni iterazione
 for i in {0..9}; do
     OFFSET=$((i * 500))
-    # Test su SSD
+    ITER_SSD="${SSD_PATH}_$i"
+    mkdir -p "$ITER_SSD/wavs"
+    
+    # Misura Staging POSIX
+    t_s=$(date +%s.%N)
+    cp "$L_TMP/wav_files/track_"{$OFFSET..$((OFFSET+499))}.wav "$ITER_SSD/wavs/"
+    t_e=$(date +%s.%N)
+    st_posix=$(python3 -c "print($t_e - $t_s)")
+    
+    # Misura Staging HDF5 (essendo un file solo, lo copiamo e basta, ma 10 volte)
+    t_s=$(date +%s.%N)
+    cp "$L_TMP/dataset.h5" "$ITER_SSD/data.h5"
+    t_e=$(date +%s.%N)
+    st_h5=$(python3 -c "print($t_e - $t_s)")
+    
+    echo "STAGING,$i,$st_posix,0,$st_h5,0" >> "$RAW_RESULTS"
+
+    # 3. TEST LOCAL SSD
     singularity exec --no-home --bind "/tmp:/tmp" --bind "/leonardo_scratch:/leonardo_scratch" "$SIF" \
-        python3 -u "$L_TMP/reader_stats.py" "$SSD/wavs" "$SSD/dataset.h5" "SSD_IT$i" "$OFFSET" 500 >> "$LOG" 2>&1
+        python3 -u "$L_TMP/probe.py" "$ITER_SSD/wavs" "$ITER_SSD/data.h5" "SSD" "$OFFSET" "$i" >> "$RAW_RESULTS"
+    
+    rm -rf "$ITER_SSD"
 done
+
+# --- Analisi Statistica Finale ---
+singularity exec --no-home --bind "${L_TMP}:${L_TMP}" "$SIF" python3 -u - <<'PY_STATS'
+import pandas as pd
+import numpy as np
+df = pd.read_csv("/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.tmp_io_final/raw_data.csv")
+print("\n" + "="*80)
+print(f"{'ANALISI I/O PERFORMANCE (Media su 10 iterazioni)':^80}")
+print("="*80)
+for phase in ['LUSTRE', 'STAGING', 'SSD']:
+    sub = df[df['Phase'] == phase]
+    print(f"\n>>> FASE: {phase}")
+    for fmt in ['POSIX', 'HDF5']:
+        wall = sub[f'{fmt}_Wall']
+        sys_t = sub[f'{fmt}_Sys']
+        overhead = (sys_t / wall * 100).mean() if wall.mean() > 0 else 0
+        print(f"  {fmt:<6} | Wall Time: {wall.mean():.4f}s ± {wall.std():.4f} | Sys Time: {sys_t.mean():.4f}s | Overhead: {overhead:.1f}%")
+print("="*80)
+PY_STATS
 EOF
 
-# --- 4. INVIO E MONITORAGGIO ---
-JOB_ID=$(sbatch --parsable "${L_TMP}/run_stats.sh")
-echo "📊 Benchmark in corso (Job $JOB_ID)..."
-# Aspetta la fine del job
+# --- 4. EXECUTION ---
+echo "📤 Invio Job di Benchmark..."
+JOB_ID=$(sbatch --parsable "${L_TMP}/run_ultimate.sh")
 while squeue -j "$JOB_ID" | grep -q "$JOB_ID"; do sleep 10; done
-
-echo "📈 ANALISI FINALE DEI RISULTATI:"
-column -t -s '|' "$STREAM_LOG"
