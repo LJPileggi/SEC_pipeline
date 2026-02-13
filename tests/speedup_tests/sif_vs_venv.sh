@@ -53,7 +53,7 @@ import sys
 import os
 
 mode = sys.argv[1] if len(sys.argv) > 1 else "UNKNOWN"
-modules = ["torch", "msclap", "transformers", "librosa", "numpy", "pandas"]
+modules = ["torch", "msclap", "transformers", "librosa", "soundfile", "numpy", "pandas", "h5py"]
 
 print(f"\n--- Python Results for {mode} ---")
 for mod in modules:
@@ -75,7 +75,7 @@ cat << EOF > "$SLURM_SCRIPT"
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --time=00:15:00
+#SBATCH --time=00:45:00
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
 #SBATCH -A IscrC_Pb-skite
