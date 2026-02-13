@@ -10,12 +10,12 @@ export N_FILES=500
 export SR=44100
 export DUR=1
 
-# Clean log and temp dir before starting
+# Pulizia totale iniziale
 rm -rf "$LUSTRE_TMP"
 mkdir -p "${LUSTRE_TMP}/wav_files"
 touch "$STREAM_LOG"
 
-# --- 2. GENERATION PHASE ---
+# --- 2. GENERATION PHASE (Funzionava già, non la tocchiamo) ---
 echo "🔨 Phase 0: Generating data..."
 singularity exec --no-home --bind "${LUSTRE_TMP}:/mnt_lustre" "$SIF_FILE" \
     python3 -u - <<'PY'
@@ -43,60 +43,59 @@ cat << EOF > "${LUSTRE_TMP}/io_test_slurm.sh"
 #SBATCH --time=00:15:00
 #SBATCH --gres=gpu:1
 #SBATCH -A IscrC_Pb-skite
-#SBATCH --output=/dev/null
+#SBATCH --output=${LUSTRE_TMP}/slurm_debug.out
 #SBATCH --error=${LUSTRE_TMP}/slurm_debug.err
 
-# Identifichiamo la cartella SSD locale (usiamo una sottocartella di $LOCAL_SCRATCH)
+# Cartella SSD locale
 LOCAL_STORAGE="\$LOCAL_SCRATCH/bench_data"
 mkdir -p "\$LOCAL_STORAGE/wav_files"
 
 echo "🚀 NODE START: \$(date)" >> "$STREAM_LOG"
 
-# --- Python Probe (Updated to use /mnt_ssd fixed path) ---
+# --- Python Probe (Percorsi dinamici) ---
 cat << 'PY_INNER' > "${LUSTRE_TMP}/reader_probe.py"
 import time, h5py, soundfile as sf, sys, os
 wav_p, h5_p, label, n_files = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
 print(f"\n--- I/O Test: {label} ---", flush=True)
-
-# POSIX Test
-s = time.perf_counter()
-for i in range(n_files):
-    f_path = os.path.join(wav_p, f"track_{i}.wav")
-    with sf.SoundFile(f_path) as f: _ = f.read()
-print(f"🔹 POSIX: {time.perf_counter() - s:.4f}s", flush=True)
-
-# HDF5 Test
-s = time.perf_counter()
-with h5py.File(h5_p, 'r') as h5:
-    ds = h5['audio']
-    for i in range(n_files): _ = ds[i]
-print(f"🔹 HDF5:  {time.perf_counter() - s:.4f}s", flush=True)
+try:
+    s = time.perf_counter()
+    for i in range(n_files):
+        with sf.SoundFile(os.path.join(wav_p, f"track_{i}.wav")) as f: _ = f.read()
+    print(f"🔹 POSIX: {time.perf_counter() - s:.4f}s", flush=True)
+    
+    s = time.perf_counter()
+    with h5py.File(h5_p, 'r') as h5:
+        ds = h5['audio']
+        for i in range(n_files): _ = ds[i]
+    print(f"🔹 HDF5:  {time.perf_counter() - s:.4f}s", flush=True)
+except Exception as e:
+    print(f"❌ ERROR: {e}", flush=True)
 PY_INNER
 
-# PHASE 1: Remote Lustre
+# PHASE 1: Lustre (Sempre funzionante)
 echo "🧪 PHASE 1: Remote Lustre" >> "$STREAM_LOG"
-singularity exec --nv --no-home --bind "${LUSTRE_TMP}:/mnt_lustre" "$SIF_FILE" \\
-    python3 -u /mnt_lustre/reader_probe.py "/mnt_lustre/wav_files" "/mnt_lustre/dataset.h5" "REMOTE_LUSTRE" "$N_FILES" >> "$STREAM_LOG" 2>&1
+singularity exec --nv --no-home --bind "${LUSTRE_TMP}:${LUSTRE_TMP}" "$SIF_FILE" \\
+    python3 -u "${LUSTRE_TMP}/reader_probe.py" "${LUSTRE_TMP}/wav_files" "${LUSTRE_TMP}/dataset.h5" "REMOTE_LUSTRE" "$N_FILES" >> "$STREAM_LOG" 2>&1
 
 # PHASE 2: Staging
 echo "🧪 PHASE 2: Staging-In" >> "$STREAM_LOG"
 t1=\$(date +%s.%N)
 cp ${LUSTRE_TMP}/wav_files/*.wav "\$LOCAL_STORAGE/wav_files/"
 echo "  - CP WAVs: \$(python3 -c "print(f'{(\$(date +%s.%N) - \$t1):.4f}')")s" >> "$STREAM_LOG"
-
 t2=\$(date +%s.%N)
 cp ${LUSTRE_TMP}/dataset.h5 "\$LOCAL_STORAGE/"
 echo "  - CP HDF5: \$(python3 -c "print(f'{(\$(date +%s.%N) - \$t2):.4f}')")s" >> "$STREAM_LOG"
 
 sync && sleep 1
 
-# PHASE 3: Local SSD (Force mount on /mnt_ssd)
+# PHASE 3: Local SSD (Mount simmetrico di tutto il percorso scratch_local)
 echo "🧪 PHASE 3: Local SSD" >> "$STREAM_LOG"
+# Montiamo direttamente /scratch_local per non sbagliare
 singularity exec --nv --no-home \\
-    --bind "${LUSTRE_TMP}:/mnt_lustre" \\
-    --bind "\$LOCAL_STORAGE:/mnt_ssd" \\
+    --bind "${LUSTRE_TMP}:${LUSTRE_TMP}" \\
+    --bind "/scratch_local:/scratch_local" \\
     "$SIF_FILE" \\
-    python3 -u /mnt_lustre/reader_probe.py "/mnt_ssd/wav_files" "/mnt_ssd/dataset.h5" "LOCAL_SSD" "$N_FILES" >> "$STREAM_LOG" 2>&1
+    python3 -u "${LUSTRE_TMP}/reader_probe.py" "\$LOCAL_STORAGE/wav_files" "\$LOCAL_STORAGE/dataset.h5" "LOCAL_SSD" "$N_FILES" >> "$STREAM_LOG" 2>&1
 
 echo "🏁 NODE FINISH: \$(date)" >> "$STREAM_LOG"
 EOF
@@ -104,12 +103,10 @@ EOF
 # --- 4. SUBMISSION ---
 echo "📤 Submitting I/O job..."
 JOB_ID=$(sbatch --parsable "${LUSTRE_TMP}/io_test_slurm.sh")
-
-echo "📊 Monitoring Job $JOB_ID..."
 tail -f "$STREAM_LOG" &
 TAIL_PID=$!
 
 while sacct -j "$JOB_ID" --format=State --noheader | grep -qE "RUNNING|PENDING|COMPLETING"; do sleep 2; done
 sleep 2
 kill $TAIL_PID 2>/dev/null
-echo -e "\n✅ Done."
+echo -e "\n✅ Benchmark concluso."
