@@ -9,32 +9,36 @@
 # ==============================================================================
 
 # --- 1. CONFIGURATION ---
-PROJECT_DIR="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/"
-# Temporary directory for logs, venv, and probe scripts
-TMP_DIR="$PROJECT_DIR/.tmp"
-# Dedicated log file to bypass Slurm .out buffering issues
-STREAM_LOG="$TMP_DIR/sif_vs_venv_benchmark_stream.log"
-VENV_PATH="$TMP_DIR/venv_benchmark"
-REQ_FILE="$PROJECT_DIR/requirements.txt"
-SIF_FILE="$PROJECT_DIR/.containers/clap_pipeline.sif"
+PROJECT_DIR="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline"
+# Ensure the path is clean and absolute
+TMP_DIR="${PROJECT_DIR}/.tmp"
+STREAM_LOG="${TMP_DIR}/sif_vs_venv_benchmark_stream.log"
+VENV_PATH="${TMP_DIR}/venv_benchmark"
+REQ_FILE="${PROJECT_DIR}/requirements.txt"
+SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/clap_pipeline.sif"
+SLURM_SCRIPT="${TMP_DIR}/imports_test_slurm.sh"
+
+# Using Python 3.10 to satisfy numba/torch requirements (>=3.8, <3.12)
+PYTHON_EXEC="python3.10"
 
 echo "🚀 Starting Benchmark Setup..."
+# Clean previous failed attempts
+rm -rf "$TMP_DIR"
 mkdir -p "$TMP_DIR"
 touch "$STREAM_LOG"
 
 # --- 2. VIRTUAL ENVIRONMENT SETUP (Baseline) ---
-# We create the venv on Lustre to expose the metadata bottleneck
-echo "📦 Creating Virtual Environment on Lustre (Metadata stress test)..."
-python3 -m venv "$VENV_PATH"
+echo "📦 Creating Virtual Environment on Lustre (Using $PYTHON_EXEC)..."
+$PYTHON_EXEC -m venv "$VENV_PATH" || { echo "❌ Failed to create venv"; exit 1; }
 source "$VENV_PATH/bin/activate"
 pip install --upgrade pip > /dev/null
-pip install -r "$REQ_FILE" > /dev/null
+echo "📥 Installing requirements (this might take a few minutes)..."
+pip install -r "$REQ_FILE" || { echo "❌ Failed to install requirements"; deactivate; exit 1; }
 deactivate
 echo "✅ Baseline environment ready."
 
 # --- 3. GENERATE SLURM BATCH SCRIPT ---
-# This script will execute on the compute node and stream data back to the log
-cat <<EOF > "$TMP_DIR/imports_test_slurm.sh"
+cat <<EOF > "$SLURM_SCRIPT"
 #!/bin/bash
 #SBATCH --job-name=import_bench
 #SBATCH --partition=boost_usr_prod
@@ -43,9 +47,8 @@ cat <<EOF > "$TMP_DIR/imports_test_slurm.sh"
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:1
 #SBATCH --time=00:20:00
-#SBATCH --output=/dev/null # Redirect standard output to null to use our custom stream
+#SBATCH --output=/dev/null 
 
-# Internal logging function to write to our shared stream file
 log_bench() {
     echo -e "\$1" | tee -a "$STREAM_LOG"
 }
@@ -57,10 +60,7 @@ import sys
 import os
 
 def benchmark_imports(label):
-    # Core modules extracted from project requirements
     modules = ['torch', 'numpy', 'pandas', 'msclap', 'transformers', 'scipy', 'h5py', 'librosa', 'soundfile']
-    results = {}
-    
     print(f"\n--- BENCHMARK: {label} ---")
     total_start = time.perf_counter()
     for mod in modules:
@@ -68,28 +68,22 @@ def benchmark_imports(label):
         try:
             __import__(mod)
             end = time.perf_counter()
-            latency = end - start
-            print(f"  {mod:15}: {latency:.4f}s")
+            print(f"  {mod:15}: {end - start:.4f}s")
         except ImportError:
             print(f"  {mod:15}: FAILED")
-    
-    total_end = time.perf_counter()
-    print(f"TOTAL IMPORT TIME: {total_end - total_start:.4f}s")
+    print(f"TOTAL IMPORT TIME: {time.perf_counter() - total_start:.4f}s")
 
 if __name__ == '__main__':
     mode = sys.argv[1] if len(sys.argv) > 1 else "Unknown"
     benchmark_imports(mode)
 PY
 
-# --- TEST A: VIRTUAL ENVIRONMENT ---
-log_bench "\n🧪 STARTING TEST A: Virtual Environment (Scattered files on Lustre)"
+log_bench "\n🧪 STARTING TEST A: Virtual Environment (Lustre)"
 source "$VENV_PATH/bin/activate"
 python3 "$TMP_DIR/probe_imports.py" "VENV_ON_LUSTRE" | tee -a "$STREAM_LOG"
 deactivate
 
-# --- TEST B: SINGULARITY CONTAINER ---
-log_bench "\n🧪 STARTING TEST B: Singularity Container (Monolithic SIF Image)"
-# Using --no-home to prevent interference from local .local/lib or configs
+log_bench "\n🧪 STARTING TEST B: Singularity Container (SIF)"
 singularity exec --nv --no-home \\
     --bind "$PROJECT_DIR:/app" \\
     --bind "$TMP_DIR:/tmp_bench" \\
@@ -97,31 +91,49 @@ singularity exec --nv --no-home \\
     python3 /tmp_bench/probe_imports.py "CONTAINER_SIF" | tee -a "$STREAM_LOG"
 EOF
 
-# --- 4. SUBMISSION AND REAL-TIME STREAMING ---
+# --- 4. SUBMISSION AND REAL-TIME MONITORING ---
 echo "📤 Submitting Job to SLURM..."
-JOB_ID=$(sbatch --parsable "$TMP_DIR/submit_imports_test.sh")
+JOB_ID=$(sbatch --parsable "$SLURM_SCRIPT")
+if [ $? -ne 0 ]; then echo "❌ sbatch submission failed"; exit 1; fi
 
-echo "📊 REAL-TIME STREAM FROM COMPUTE NODE (Job ID: $JOB_ID):"
+echo "📊 MONITORING JOB $JOB_ID (Real-time stream):"
 echo "----------------------------------------------------------------"
 
-# Start tail in background to stream our custom log file
 tail -f "$STREAM_LOG" &
 TAIL_PID=$!
 
-# Monitor the job status
-while squeue -j "$JOB_ID" | grep -q "$JOB_ID"; do
-    sleep 2
+# Improved Job Monitoring Loop
+while true; do
+    # Check job status via sacct for high reliability
+    STATUS=$(sacct -j "$JOB_ID" --format=State --noheader | head -n 1 | xargs)
+    
+    case "$STATUS" in
+        RUNNING|PENDING|REQUEUED|COMPLETING)
+            # Job is still active
+            sleep 3
+            ;;
+        COMPLETED)
+            # Success
+            break
+            ;;
+        FAILED|CANCELLED|TIMEOUT|NODE_FAIL|OUT_OF_MEMORY)
+            echo -e "\n❌ FATAL: Job $JOB_ID terminated with status: $STATUS"
+            kill $TAIL_PID 2>/dev/null
+            exit 1
+            ;;
+        *)
+            # Fallback for empty status during transition
+            sleep 2
+            ;;
+    esac
 done
 
-# Allow a small buffer for the final filesystem flush
 sleep 2
 kill $TAIL_PID 2>/dev/null
-
 echo -e "\n----------------------------------------------------------------"
-echo "✅ Job $JOB_ID finished. All performance metrics captured."
+echo "✅ Job $JOB_ID finished successfully."
 
 # --- 5. CLEANUP ---
-# MANTRA: Leave no trace on the shared filesystem
-echo "🧹 Cleaning up temporary assets and Virtual Environment..."
+echo "🧹 Cleaning up..."
 rm -rf "$TMP_DIR"
-echo "✨ Benchmark cycle completed successfully."
+echo "✨ Benchmark cycle completed."
