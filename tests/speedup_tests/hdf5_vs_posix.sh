@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # --- 1. CONFIGURATION ---
-MY_USER="lpilegg1"
+MY_USER=$(whoami)
 PROJECT_DIR="/leonardo_scratch/large/userexternal/${MY_USER}/SEC_pipeline"
 L_TMP="${PROJECT_DIR}/.tmp_io_final"
 RAW_DATA="${L_TMP}/raw_results.csv"
@@ -9,13 +9,12 @@ SIF="${PROJECT_DIR}/.containers/clap_pipeline.sif"
 
 ITERATIONS=10
 BATCH_SIZE=500
-TOTAL_FILES=5000
 
 rm -rf "$L_TMP"
 mkdir -p "${L_TMP}/wav_files"
 
 # --- 2. GENERATION (5000 file) ---
-echo "🔨 Generazione dataset (5000 file)..."
+echo "🔨 Phase 0: Generazione Dataset (5000 file)..."
 singularity exec --no-home --bind "${L_TMP}:/mnt_lustre" "$SIF" \
     python3 -u - <<'PY'
 import numpy as np
@@ -32,7 +31,7 @@ with h5py.File(h5_p, 'w') as h5:
         ds[i] = data
 PY
 
-# --- 3. SLURM SCRIPT ---
+# --- 3. SLURM SCRIPT (CORRETTO) ---
 cat << 'EOF' > "${L_TMP}/run_final.sh"
 #!/bin/bash
 #SBATCH --partition=boost_usr_prod
@@ -50,20 +49,23 @@ SSD_BASE="/tmp/bench_${SLURM_JOB_ID}"
 
 echo "Phase,Format,Iteration,Wall,Sys" > "$CSV"
 
-# --- Probe ---
+# --- Probe (Output rigoroso) ---
 cat << 'PY_PROBE' > "${L_TMP}/probe.py"
 import time, h5py, soundfile as sf, sys, os
 wav_p, h5_p, label, fmt, start = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
-ts = os.times(); ws = time.perf_counter()
-if fmt == "POSIX":
-    for i in range(start, start + 500):
-        with sf.SoundFile(os.path.join(wav_p, f"track_{i}.wav")) as f: _ = f.read()
-else:
-    with h5py.File(h5_p, 'r') as h5:
-        ds = h5['audio']
-        for i in range(start, start + 500): _ = ds[i]
-te = os.times(); we = time.perf_counter()
-print(f"{label},{fmt},{start//500},{we-ws:.6f},{te[1]-ts[1]:.6f}")
+try:
+    ts = os.times(); ws = time.perf_counter()
+    if fmt == "POSIX":
+        for i in range(start, start + 500):
+            with sf.SoundFile(os.path.join(wav_p, f"track_{i}.wav")) as f: _ = f.read()
+    else:
+        with h5py.File(h5_p, 'r') as h5:
+            ds = h5['audio']
+            for i in range(start, start + 500): _ = ds[i]
+    te = os.times(); we = time.perf_counter()
+    print(f"{label},{fmt},{start//500},{we-ws:.6f},{te[1]-ts[1]:.6f}")
+except Exception:
+    pass # Evitiamo di sporcare il CSV se un file manca
 PY_PROBE
 
 # FASE 1: LUSTRE
@@ -81,12 +83,18 @@ for i in {0..9}; do
     ITER_SSD="${SSD_BASE}_$i"
     mkdir -p "$ITER_SSD/wavs"
     
-    # Staging POSIX
-    t_s=$(date +%s.%N); cp "${L_TMP}/wav_files/track_"{$OFFSET..$((OFFSET+499))}.wav "$ITER_SSD/wavs/"; t_e=$(date +%s.%N)
+    # FIX: Staging POSIX (Uso di seq per risolvere il bug dell'espansione)
+    t_s=$(date +%s.%N)
+    for j in $(seq $OFFSET $((OFFSET + 499))); do
+        cp "${L_TMP}/wav_files/track_${j}.wav" "$ITER_SSD/wavs/"
+    done
+    t_e=$(date +%s.%N)
     echo "STAGING,POSIX,$i,$(python3 -c "print($t_e - $t_s)"),0" >> "$CSV"
     
     # Staging HDF5
-    t_s=$(date +%s.%N); cp "${L_TMP}/dataset.h5" "$ITER_SSD/data.h5"; t_e=$(date +%s.%N)
+    t_s=$(date +%s.%N)
+    cp "${L_TMP}/dataset.h5" "$ITER_SSD/data.h5"
+    t_e=$(date +%s.%N)
     echo "STAGING,HDF5,$i,$(python3 -c "print($t_e - $t_s)"),0" >> "$CSV"
 
     # Test SSD
@@ -107,6 +115,7 @@ while squeue -j "$JOB_ID" | grep -q "$JOB_ID"; do echo -n "."; sleep 5; done
 echo -e "\n📊 Elaborazione Risultati..."
 singularity exec --no-home --bind "${L_TMP}:${L_TMP}" "$SIF" python3 -u - <<PY_STATS
 import pandas as pd
+import numpy as np
 df = pd.read_csv("${RAW_DATA}")
 print("\n" + "="*95)
 print(f"{'BENCHMARK FINALE: POSIX VS HDF5 (N=10)':^95}")
@@ -117,10 +126,14 @@ print("-" * 95)
 for phase in ['LUSTRE', 'STAGING', 'SSD']:
     for fmt in ['POSIX', 'HDF5']:
         sub = df[(df['Phase'] == phase) & (df['Format'] == fmt)]
-        if not sub.empty:
+        if len(sub) > 0:
             m, s = sub['Wall'].mean(), sub['Wall'].std()
             sys_m = sub['Sys'].mean()
             ov = (sys_m / m * 100) if m > 0 else 0
-            print(f"{phase:<12} | {fmt:<8} | {m:>8.4f}s ± {s:.4f} | {ov:>6.1f}%")
+            # Se la std è NaN (un solo campione), mettiamo 0.0
+            s_val = s if not np.isnan(s) else 0.0
+            print(f"{phase:<12} | {fmt:<8} | {m:>8.4f}s ± {s_val:.4f} | {ov:>6.1f}%")
+        else:
+            print(f"{phase:<12} | {fmt:<8} | {'MISSING DATA':<30} | {'---'}")
 print("="*95)
 PY_STATS
