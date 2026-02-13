@@ -18,8 +18,11 @@ REQ_FILE="${PROJECT_DIR}/requirements.txt"
 SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/clap_pipeline.sif"
 SLURM_SCRIPT="${TMP_DIR}/imports_test_slurm.sh"
 
-# Using Python 3.10 to satisfy numba/torch requirements (>=3.8, <3.12)
-PYTHON_EXEC="python3.10"
+# Load the native Cineca Python module (3.11.6 is highly compatible with Numba)
+echo "🔧 Loading CINECA Python module..."
+module purge
+module load profile/base
+module load python/3.11.6--gcc--8.5.0 || { echo "❌ Failed to load Python module"; exit 1; }
 
 echo "🚀 Starting Benchmark Setup..."
 # Clean previous failed attempts
@@ -28,8 +31,8 @@ mkdir -p "$TMP_DIR"
 touch "$STREAM_LOG"
 
 # --- 2. VIRTUAL ENVIRONMENT SETUP (Baseline) ---
-echo "📦 Creating Virtual Environment on Lustre (Using $PYTHON_EXEC)..."
-$PYTHON_EXEC -m venv "$VENV_PATH" || { echo "❌ Failed to create venv"; exit 1; }
+echo "📦 Creating Virtual Environment on Lustre..."
+python3 -m venv "$VENV_PATH" || { echo "❌ Failed to create venv"; exit 1; }
 source "$VENV_PATH/bin/activate"
 pip install --upgrade pip > /dev/null
 echo "📥 Installing requirements (this might take a few minutes)..."
