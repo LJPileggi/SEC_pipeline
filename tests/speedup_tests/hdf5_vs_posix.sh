@@ -1,8 +1,7 @@
 #!/bin/bash
 
 # --- 1. CONFIGURATION (NON TOCCARE) ---
-MY_USER="$USER"
-PROJECT_DIR="/leonardo_scratch/large/userexternal/${MY_USER}/SEC_pipeline"
+PROJECT_DIR="/leonardo_scratch/large/userexternal/${USER}/SEC_pipeline"
 LUSTRE_TMP="${PROJECT_DIR}/.tmp_io_bench"
 STREAM_LOG="${LUSTRE_TMP}/io_results.log"
 SIF_FILE="${PROJECT_DIR}/.containers/clap_pipeline.sif"
@@ -11,7 +10,7 @@ rm -rf "$LUSTRE_TMP"
 mkdir -p "${LUSTRE_TMP}/wav_files"
 touch "$STREAM_LOG"
 
-# --- 2. GENERATION PHASE (FUNZIONA - NON TOCCATA) ---
+# --- 2. GENERATION PHASE (NON TOCCARE) ---
 echo "🔨 Phase 0: Generating data..."
 singularity exec --no-home --bind "${LUSTRE_TMP}:/mnt_lustre" "$SIF_FILE" \
     python3 -u - <<'PY'
@@ -43,18 +42,22 @@ cat << 'EOF' > "${LUSTRE_TMP}/io_test_slurm.sh"
 #SBATCH --output=/dev/null
 #SBATCH --error=/dev/null
 
-# FIX: Recuperiamo il percorso SSD in modo esplicito dal sistema Slurm
-# Usiamo /scratch_local che è il link fisico su Leonardo se LOCAL_SCRATCH fallisce
-TARGET_SSD="/scratch_local/io_bench_${SLURM_JOB_ID}"
-mkdir -p "${TARGET_SSD}/wavs"
+# TRUCCO: Troviamo dove Slurm ha montato l'SSD locale per questo Job
+# Se LOCAL_SCRATCH non è definita, cerchiamo una cartella scrivibile in /scratch_local o usiamo /tmp
+SSD_PATH="${LOCAL_SCRATCH}"
+if [ -z "$SSD_PATH" ]; then
+    SSD_PATH="/scratch_local/slurm_job_${SLURM_JOB_ID}"
+fi
+mkdir -p "${SSD_PATH}/wavs"
 
 L_TMP="/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.tmp_io_bench"
 LOG="${L_TMP}/io_results.log"
 SIF="/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.containers/clap_pipeline.sif"
 
 echo "🚀 NODE START: $(date)" >> "$LOG"
+echo "📂 SSD Path detected: $SSD_PATH" >> "$LOG"
 
-# --- Probe Python (FUNZIONA - NON TOCCATO) ---
+# --- Creazione Probe Python (NON TOCCARE) ---
 cat << 'PY_PROBE' > "/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.tmp_io_bench/reader_probe.py"
 import time, h5py, soundfile as sf, sys, os
 def run(wav_p, h5_p, label):
@@ -78,27 +81,31 @@ if __name__ == '__main__':
     run(sys.argv[1], sys.argv[2], sys.argv[3])
 PY_PROBE
 
-# PHASE 1: Lustre (FUNZIONA - NON TOCCATA)
+# PHASE 1: Lustre (NON TOCCARE)
 echo "🧪 PHASE 1: Remote Lustre" >> "$LOG"
 singularity exec --nv --no-home --bind "/leonardo_scratch:/leonardo_scratch" "$SIF" \
     python3 -u "$L_TMP/reader_probe.py" "$L_TMP/wav_files" "$L_TMP/dataset.h5" "REMOTE" >> "$LOG" 2>&1
 
-# PHASE 2: Staging (CORRETTA CON TARGET_SSD)
+# PHASE 2: Staging (CORRETTO con SSD_PATH)
 echo "🧪 PHASE 2: Staging-In" >> "$LOG"
 t1=$(date +%s.%N)
-cp "$L_TMP/wav_files/"*.wav "${TARGET_SSD}/wavs/" >> "$LOG" 2>&1
+cp "$L_TMP/wav_files/"*.wav "${SSD_PATH}/wavs/" >> "$LOG" 2>&1
 echo "  - CP WAVs: $(python3 -c "print(f'{($(date +%s.%N) - $t1):.4f}')")s" >> "$LOG"
-cp "$L_TMP/dataset.h5" "${TARGET_SSD}/dataset.h5" >> "$LOG" 2>&1
+
+t2=$(date +%s.%N)
+cp "$L_TMP/dataset.h5" "${SSD_PATH}/dataset.h5" >> "$LOG" 2>&1
+echo "  - CP HDF5: $(python3 -c "print(f'{($(date +%s.%N) - $t2):.4f}')")s" >> "$LOG"
 
 sync && sleep 1
 
-# PHASE 3: Local SSD (CORRETTA CON BIND SU TARGET_SSD)
+# PHASE 3: Local SSD
 echo "🧪 PHASE 3: Local SSD" >> "$LOG"
+# TRUCCO: Montiamo direttamente SSD_PATH sulla root del container /ssd per semplicità totale
 singularity exec --nv --no-home \
     --bind "/leonardo_scratch:/leonardo_scratch" \
-    --bind "${TARGET_SSD}:${TARGET_SSD}" \
+    --bind "${SSD_PATH}:/ssd_bench" \
     "$SIF" \
-    python3 -u "$L_TMP/reader_probe.py" "${TARGET_SSD}/wavs" "${TARGET_SSD}/dataset.h5" "LOCAL" >> "$LOG" 2>&1
+    python3 -u "$L_TMP/reader_probe.py" "/ssd_bench/wavs" "/ssd_bench/dataset.h5" "LOCAL" >> "$LOG" 2>&1
 
 echo "🏁 NODE FINISH: $(date)" >> "$LOG"
 EOF
