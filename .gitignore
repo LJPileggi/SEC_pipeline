@@ -3,3 +3,4 @@ old/
 .git/
 .clap_weights/
 .containers/
+.tmp/
