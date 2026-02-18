@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# --- 1. CONFIGURATION (Strictly your naming and paths) ---
+# --- 1. CONFIGURATION (Immutata) ---
 PROJECT_DIR="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline"
 TMP_DIR="${PROJECT_DIR}/.tmp"
 RUN_ID=$(date +%H%M%S)
@@ -11,9 +11,9 @@ SIF_FILE="${PROJECT_DIR}/.containers/clap_pipeline.sif"
 SLURM_SCRIPT="${TMP_DIR}/imports_test_slurm.sh"
 DONE_FILE="${TMP_DIR}/job.done"
 
-# --- 2. SETUP CLEANUP TRAP ---
+# --- 2. SETUP CLEANUP TRAP (Immutata) ---
 cleanup() {
-    if [ ! -z "$TAIL_PID" ]; then kill "$TAIL_PID" 2>/dev/null; fi
+    if [ ! -z "$TAIL_PID" ]; then kill -9 "$TAIL_PID" 2>/dev/null; fi
 }
 trap cleanup EXIT SIGTERM SIGINT
 
@@ -21,7 +21,7 @@ mkdir -p "$TMP_DIR"
 touch "$STREAM_LOG"
 rm -f "$DONE_FILE"
 
-# --- 3. VENV SETUP ---
+# --- 3. VENV SETUP (Immutata) ---
 echo "🔧 Loading CINECA Python module..."
 module purge
 module load profile/base
@@ -40,12 +40,11 @@ if [ ! -d "$VENV_PATH" ]; then
     echo "✅ VENV ready."
 fi
 
-# --- 4. PROBE CREATION (Identical) ---
+# --- 4. PROBE CREATION (Immutata) ---
 cat << 'EOF' > "${TMP_DIR}/probe_imports.py"
 import time, sys, os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['MPLCONFIGDIR'] = '/tmp/matplotlib_cache_' + str(os.getpid())
-
 mode = sys.argv[1] if len(sys.argv) > 1 else "UNKNOWN"
 modules = ["numpy", "pandas", "h5py", "scipy", "librosa", "soundfile", "transformers", "torch", "msclap"]
 results = []
@@ -62,7 +61,7 @@ print("\n".join(results))
 print(f"--- End of {mode} ---\n", flush=True)
 EOF
 
-# --- 5. SLURM SCRIPT GENERATION ---
+# --- 5. SLURM SCRIPT GENERATION (Immutata) ---
 cat << 'EOF' > "$SLURM_SCRIPT"
 #!/bin/bash
 #SBATCH --job-name=bench_pair
@@ -72,29 +71,22 @@ cat << 'EOF' > "$SLURM_SCRIPT"
 #SBATCH --gres=gpu:1
 #SBATCH -A IscrC_Pb-skite
 #SBATCH --output=/dev/null
-
 STREAM_LOG=$1; VENV_PATH=$2; TMP_DIR=$3; SIF_FILE=$4; PROJECT_DIR=$5; DONE_FILE=$6
-
 echo -e "\n🚀 NODE: $(hostname) | START: $(date)" >> "$STREAM_LOG"
-
-# --- TEST A: VENV ---
 source "$VENV_PATH/bin/activate"
 export PYTHONPATH="$VENV_PATH/lib/python3.11/site-packages"
 python3 -u "$TMP_DIR/probe_imports.py" "VENV_COLD" >> "$STREAM_LOG" 2>&1
 python3 -u "$TMP_DIR/probe_imports.py" "VENV_WARM" >> "$STREAM_LOG" 2>&1
 deactivate
-
-# --- TEST B: SIF ---
 singularity exec -e --nv --no-home --bind "$PROJECT_DIR:/app" --bind "$TMP_DIR:/tmp_bench" "$SIF_FILE" \
     python3 -u /tmp_bench/probe_imports.py "SIF_COLD" >> "$STREAM_LOG" 2>&1
 singularity exec -e --nv --no-home --bind "$PROJECT_DIR:/app" --bind "$TMP_DIR:/tmp_bench" "$SIF_FILE" \
     python3 -u /tmp_bench/probe_imports.py "SIF_WARM" >> "$STREAM_LOG" 2>&1
-
 echo "🏁 NODE FINISH: $(date)" >> "$STREAM_LOG"
 touch "$DONE_FILE"
 EOF
 
-# --- 6. SUBMISSION AND MONITORING (No more sacct!) ---
+# --- 6. SUBMISSION AND MONITORING ---
 echo "📤 Submitting Single Pair Job (Cold/Warm)..."
 sbatch "$SLURM_SCRIPT" "$STREAM_LOG" "$VENV_PATH" "$TMP_DIR" "$SIF_FILE" "$PROJECT_DIR" "$DONE_FILE"
 
@@ -102,14 +94,17 @@ echo "📊 MONITORING STREAM:"
 tail -f "$STREAM_LOG" &
 TAIL_PID=$!
 
-# Wait for the done file to appear
+# Attesa del file di completamento
 while [ ! -f "$DONE_FILE" ]; do
-    sleep 10
+    sleep 5
 done
 
-kill "$TAIL_PID" 2>/dev/null
+# --- 7. FIX: USCITA PULITA DAL MONITORAGGIO ---
+# Uccidiamo tail in modo forzato e aspettiamo che il processo sparisca
+kill -9 "$TAIL_PID" 2>/dev/null
+wait "$TAIL_PID" 2>/dev/null
+sleep 2 # Respiro per il filesystem Lustre
 
-# --- 7. FINAL CLEANUP ---
 echo -e "\n🧹 Final cleanup of benchmark environment: $TMP_DIR"
 rm -rf "$TMP_DIR"
 echo -e "✅ Process finished."
