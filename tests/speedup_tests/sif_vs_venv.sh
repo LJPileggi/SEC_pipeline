@@ -9,6 +9,7 @@ VENV_PATH="${TMP_DIR}/venv_benchmark"
 REQ_FILE="${PROJECT_DIR}/requirements.txt"
 SIF_FILE="${PROJECT_DIR}/.containers/clap_pipeline.sif"
 SLURM_SCRIPT="${TMP_DIR}/imports_test_slurm.sh"
+DONE_FILE="${TMP_DIR}/job.done"
 
 # --- 2. SETUP CLEANUP TRAP ---
 cleanup() {
@@ -18,6 +19,7 @@ trap cleanup EXIT SIGTERM SIGINT
 
 mkdir -p "$TMP_DIR"
 touch "$STREAM_LOG"
+rm -f "$DONE_FILE"
 
 # --- 3. VENV SETUP ---
 echo "🔧 Loading CINECA Python module..."
@@ -40,16 +42,12 @@ fi
 
 # --- 4. PROBE CREATION (Identical) ---
 cat << 'EOF' > "${TMP_DIR}/probe_imports.py"
-import time
-import sys
-import os
-
+import time, sys, os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['MPLCONFIGDIR'] = '/tmp/matplotlib_cache_' + str(os.getpid())
 
 mode = sys.argv[1] if len(sys.argv) > 1 else "UNKNOWN"
 modules = ["numpy", "pandas", "h5py", "scipy", "librosa", "soundfile", "transformers", "torch", "msclap"]
-
 results = []
 for mod in modules:
     start = time.perf_counter()
@@ -59,7 +57,6 @@ for mod in modules:
         results.append(f"🔹 {mod:<15}: {end - start:.4f}s")
     except Exception as e:
         results.append(f"❌ {mod:<15}: ERROR ({e})")
-
 print(f"\n--- Python Results for {mode} ---")
 print("\n".join(results))
 print(f"--- End of {mode} ---\n", flush=True)
@@ -76,48 +73,38 @@ cat << 'EOF' > "$SLURM_SCRIPT"
 #SBATCH -A IscrC_Pb-skite
 #SBATCH --output=/dev/null
 
-STREAM_LOG=$1; VENV_PATH=$2; TMP_DIR=$3; SIF_FILE=$4; PROJECT_DIR=$5
+STREAM_LOG=$1; VENV_PATH=$2; TMP_DIR=$3; SIF_FILE=$4; PROJECT_DIR=$5; DONE_FILE=$6
+
+echo -e "\n🚀 NODE: $(hostname) | START: $(date)" >> "$STREAM_LOG"
 
 # --- TEST A: VENV ---
-echo -e "\n🚀 NODE: $(hostname) | START: $(date)" >> "$STREAM_LOG"
 source "$VENV_PATH/bin/activate"
-# Impostiamo il PYTHONPATH solo per il venv locale
 export PYTHONPATH="$VENV_PATH/lib/python3.11/site-packages"
 python3 -u "$TMP_DIR/probe_imports.py" "VENV_COLD" >> "$STREAM_LOG" 2>&1
 python3 -u "$TMP_DIR/probe_imports.py" "VENV_WARM" >> "$STREAM_LOG" 2>&1
 deactivate
 
-# --- TEST B: SIF (Clean Environment) ---
-# Usiamo --cleanenv (-e) per evitare che il PYTHONPATH del venv inquini il container
-singularity exec -e --nv --no-home \
-    --bind "$PROJECT_DIR:/app" \
-    --bind "$TMP_DIR:/tmp_bench" \
-    "$SIF_FILE" \
+# --- TEST B: SIF ---
+singularity exec -e --nv --no-home --bind "$PROJECT_DIR:/app" --bind "$TMP_DIR:/tmp_bench" "$SIF_FILE" \
     python3 -u /tmp_bench/probe_imports.py "SIF_COLD" >> "$STREAM_LOG" 2>&1
-
-singularity exec -e --nv --no-home \
-    --bind "$PROJECT_DIR:/app" \
-    --bind "$TMP_DIR:/tmp_bench" \
-    "$SIF_FILE" \
+singularity exec -e --nv --no-home --bind "$PROJECT_DIR:/app" --bind "$TMP_DIR:/tmp_bench" "$SIF_FILE" \
     python3 -u /tmp_bench/probe_imports.py "SIF_WARM" >> "$STREAM_LOG" 2>&1
 
 echo "🏁 NODE FINISH: $(date)" >> "$STREAM_LOG"
+touch "$DONE_FILE"
 EOF
 
-# --- 6. SUBMISSION AND MONITORING ---
+# --- 6. SUBMISSION AND MONITORING (No more sacct!) ---
 echo "📤 Submitting Single Pair Job (Cold/Warm)..."
-JOB_ID=$(sbatch --parsable "$SLURM_SCRIPT" "$STREAM_LOG" "$VENV_PATH" "$TMP_DIR" "$SIF_FILE" "$PROJECT_DIR")
+sbatch "$SLURM_SCRIPT" "$STREAM_LOG" "$VENV_PATH" "$TMP_DIR" "$SIF_FILE" "$PROJECT_DIR" "$DONE_FILE"
 
-echo "📊 MONITORING JOB $JOB_ID:"
+echo "📊 MONITORING STREAM:"
 tail -f "$STREAM_LOG" &
 TAIL_PID=$!
 
-while true; do
-    STATUS=$(sacct -j "$JOB_ID" --format=State --noheader | head -n 1 | xargs)
-    case "$STATUS" in
-        COMPLETED|FAILED|TIMEOUT|CANCELLED) break ;;
-        *) sleep 15 ;;
-    esac
+# Wait for the done file to appear
+while [ ! -f "$DONE_FILE" ]; do
+    sleep 10
 done
 
 kill "$TAIL_PID" 2>/dev/null
