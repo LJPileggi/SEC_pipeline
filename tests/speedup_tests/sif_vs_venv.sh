@@ -19,7 +19,7 @@ trap cleanup EXIT SIGTERM SIGINT
 mkdir -p "$TMP_DIR"
 touch "$STREAM_LOG"
 
-# --- 3. VENV SETUP (Rigorosamente nel login node) ---
+# --- 3. VENV SETUP ---
 echo "🔧 Loading CINECA Python module..."
 module purge
 module load profile/base
@@ -38,7 +38,7 @@ if [ ! -d "$VENV_PATH" ]; then
     echo "✅ VENV ready."
 fi
 
-# --- 4. PROBE CREATION (Zero Noise Policy) ---
+# --- 4. PROBE CREATION (Identical) ---
 cat << 'EOF' > "${TMP_DIR}/probe_imports.py"
 import time
 import sys
@@ -78,26 +78,24 @@ cat << 'EOF' > "$SLURM_SCRIPT"
 
 STREAM_LOG=$1; VENV_PATH=$2; TMP_DIR=$3; SIF_FILE=$4; PROJECT_DIR=$5
 
-export TF_CPP_MIN_LOG_LEVEL=3
-export MPLCONFIGDIR="/tmp/matplotlib_$(hostname)_${SLURM_JOB_ID}"
-
-echo -e "\n🚀 NODE: $(hostname) | START: $(date)" >> "$STREAM_LOG"
-
 # --- TEST A: VENV ---
+echo -e "\n🚀 NODE: $(hostname) | START: $(date)" >> "$STREAM_LOG"
 source "$VENV_PATH/bin/activate"
-export PYTHONPATH="$VENV_PATH/lib/python3.11/site-packages:$PYTHONPATH"
+# Impostiamo il PYTHONPATH solo per il venv locale
+export PYTHONPATH="$VENV_PATH/lib/python3.11/site-packages"
 python3 -u "$TMP_DIR/probe_imports.py" "VENV_COLD" >> "$STREAM_LOG" 2>&1
 python3 -u "$TMP_DIR/probe_imports.py" "VENV_WARM" >> "$STREAM_LOG" 2>&1
 deactivate
 
-# --- TEST B: SIF ---
-singularity exec --nv --no-home \
+# --- TEST B: SIF (Clean Environment) ---
+# Usiamo --cleanenv (-e) per evitare che il PYTHONPATH del venv inquini il container
+singularity exec -e --nv --no-home \
     --bind "$PROJECT_DIR:/app" \
     --bind "$TMP_DIR:/tmp_bench" \
     "$SIF_FILE" \
     python3 -u /tmp_bench/probe_imports.py "SIF_COLD" >> "$STREAM_LOG" 2>&1
 
-singularity exec --nv --no-home \
+singularity exec -e --nv --no-home \
     --bind "$PROJECT_DIR:/app" \
     --bind "$TMP_DIR:/tmp_bench" \
     "$SIF_FILE" \
@@ -124,7 +122,7 @@ done
 
 kill "$TAIL_PID" 2>/dev/null
 
-# --- 7. FINAL CLEANUP (Riparato) ---
+# --- 7. FINAL CLEANUP ---
 echo -e "\n🧹 Final cleanup of benchmark environment: $TMP_DIR"
 rm -rf "$TMP_DIR"
 echo -e "✅ Process finished."
