@@ -13,7 +13,7 @@ DATASEC_DIR="/leonardo_scratch/large/userexternal/$USER/dataSEC"
 EMB_BASE="${DATASEC_DIR}/PREPROCESSED_DATASET"
 RESULTS_BASE="${DATASEC_DIR}/results"
 SIF_FILE="${PROJECT_DIR}/.containers/clap_pipeline.sif"
-MODEL_WEIGHTS="${PROJECT_DIR}/models/finetuned_model_Adam_0.01_7_secs.torch"
+MODEL_WEIGHTS="${PROJECT_DIR}/.models/finetuned_model_Adam_0.01_7_secs.torch"
 CONFIG_FILE="${PROJECT_DIR}/configs/config0.yaml"
 
 TMP_DIR="${PROJECT_DIR}/.tmp"
