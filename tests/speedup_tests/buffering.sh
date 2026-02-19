@@ -34,7 +34,7 @@ import os
 import sys
 import numpy as np
 import torch
-from utils import HDF5EmbeddingDatasetsManager
+from src.utils import HDF5EmbeddingDatasetsManager
 
 def run_bench(cut_secs, n_octave, buffer_size, n_samples, h5_path):
     n_bins = 12 * n_octave 
