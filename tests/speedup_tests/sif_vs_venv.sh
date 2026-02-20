@@ -116,17 +116,90 @@ done
 kill -9 "$TAIL_PID" 2>/dev/null
 echo -e "\n📊 All runs completed. Data saved in $FINAL_CSV"
 
-# Quick Python summary
-singularity exec -e "$SIF_FILE" python3 -u - <<PY_SUM
+# Quick Python summary and Plotting (Matplotlib only)
+singularity exec -e --bind "$RESULTS_DIR:$RESULTS_DIR" "$SIF_FILE" python3 -u - <<PY_SUM
 import pandas as pd
-df = pd.read_csv("${FINAL_CSV}")
+import sys
+import os
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Percorso del file CSV
+csv_path = "${FINAL_CSV}"
+if not os.path.exists(csv_path):
+    print(f"❌ Error: File {csv_path} not found inside the container.")
+    sys.exit(1)
+
+df = pd.read_csv(csv_path)
+
+# Pulizia e conversione dati
 summary = df[df['Time_s'] != 'ERROR'].copy()
-summary['Time_s'] = pd.to_numeric(summary['Time_s'])
-stats = summary.groupby(['Mode', 'Library'])['Time_s'].agg(['mean', 'std', 'median']).reset_index()
-print("\n--- BENCHMARK SUMMARY ---")
-print(stats.to_string())
-stats.to_csv("${RESULTS_DIR}/summary_statistics.csv")
+summary['Time_s'] = pd.to_numeric(summary['Time_s'], errors='coerce')
+summary = summary.dropna(subset=['Time_s'])
+
+if summary.empty:
+    print("⚠️ No valid data found to aggregate.")
+else:
+    # 1. Generazione Statistiche Testuali
+    stats = summary.groupby(['Mode', 'Library'])['Time_s'].agg(['mean', 'std', 'median', 'min', 'max']).reset_index()
+    print("\n--- BENCHMARK SUMMARY (Time in Seconds) ---")
+    print(stats.to_string(index=False))
+    
+    # Salvataggio statistiche
+    output_stats = os.path.join("${RESULTS_DIR}", "summary_statistics.csv")
+    stats.to_csv(output_stats, index=False)
+    print(f"\n✅ Summary statistics saved to: {output_stats}")
+
+    # 2. Creazione Boxplot con Matplotlib (Analisi Variabilità)
+    try:
+        target_libs = ['transformers', 'msclap', 'pandas', 'numpy']
+        
+        # Prepariamo le liste di dati per il plot
+        venv_data = [summary[(summary['Library'] == lib) & (summary['Mode'] == 'VENV_COLD')]['Time_s'].values for lib in target_libs]
+        sif_data = [summary[(summary['Library'] == lib) & (summary['Mode'] == 'SIF_COLD')]['Time_s'].values for lib in target_libs]
+        
+        fig, ax = plt.subplots(figsize=(12, 8))
+        
+        # Posizionamento dei box: uno accanto all'altro per ogni libreria
+        positions = np.arange(len(target_libs))
+        width = 0.35
+        
+        # Plot dei due gruppi
+        bp_venv = ax.boxplot(venv_data, positions=positions - width/2, widths=width, patch_artist=True)
+        bp_sif = ax.boxplot(sif_data, positions=positions + width/2, widths=width, patch_artist=True)
+        
+        # Estetica: Colori (VENV = Rosso soft, SIF = Verde soft)
+        for patch in bp_venv['boxes']:
+            patch.set_facecolor('#ff9999')
+        for patch in bp_sif['boxes']:
+            patch.set_facecolor('#99ff99')
+            
+        # Configurazione assi
+        ax.set_xticks(positions)
+        ax.set_xticklabels(target_libs)
+        ax.set_yscale('log') # Indispensabile per la scala dei tempi
+        
+        ax.set_title('Import Times Variability: VENV_COLD vs SIF_COLD', fontsize=15)
+        ax.set_ylabel('Time (seconds) - Log Scale', fontsize=12)
+        ax.set_xlabel('Library', fontsize=12)
+        ax.grid(True, axis='y', linestyle='--', alpha=0.7)
+        
+        # Legenda manuale
+        ax.legend([bp_venv["boxes"][0], bp_sif["boxes"][0]], ['VENV_COLD', 'SIF_COLD'], loc='upper right')
+        
+        # Salvataggio
+        output_plot = os.path.join("${RESULTS_DIR}", "import_variability_boxplot.png")
+        plt.savefig(output_plot, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"✅ Boxplot (Matplotlib) visualization saved to: {output_plot}")
+        
+    except Exception as e:
+        print(f"⚠️ Could not generate plot: {e}")
+        import traceback
+        traceback.print_exc()
+
 PY_SUM
 
+# Cleanup
 rm -rf "$TMP_DIR"
 echo "🧹 Temporary files removed. Process finished."
