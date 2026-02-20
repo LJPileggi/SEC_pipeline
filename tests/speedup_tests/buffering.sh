@@ -82,9 +82,12 @@ cat << 'EOF' > "$SLURM_SCRIPT"
 # 🎯 FIX: Ordine assegnazione corretto per combaciare con sbatch (Log, Data, SIF, TMP)
 STREAM_LOG=$1; RAW_DATA=$2; SIF_FILE=$3; TMP_DIR=$4
 
-CUT_SECS=(1 2 5 10 15)
-N_OCTAVES=(1 3 6 12 24)
-BUFFER_SIZES=(1 2 4 8 16 32 64 128 256 512 1024)
+#CUT_SECS=(1 2 5 10 15)
+#N_OCTAVES=(1 3 6 12 24)
+CUT_SECS=(1 2)
+N_OCTAVES=(1 3)
+BUFFER_SIZES=(1 2 4 8 16)
+#BUFFER_SIZES=(1 2 4 8 16 32 64 128 256 512 1024)
 
 for c in "${CUT_SECS[@]}"; do
     for o in "${N_OCTAVES[@]}"; do
