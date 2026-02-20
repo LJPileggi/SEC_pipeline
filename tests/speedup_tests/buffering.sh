@@ -73,7 +73,7 @@ cat << 'EOF' > "$SLURM_SCRIPT"
 #SBATCH --job-name=hdf5_buff_bench
 #SBATCH --partition=boost_usr_prod
 #SBATCH --nodes=1
-#SBATCH --time=02:00:00
+#SBATCH --time=03:00:00
 #SBATCH --gres=gpu:1
 #SBATCH -A IscrC_Pb-skite
 #SBATCH --output=/dev/null
