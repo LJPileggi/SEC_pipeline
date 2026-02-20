@@ -17,15 +17,16 @@ MAX_BUFFER_RAM_MB=256
 
 # --- 2. SETUP CLEANUP TRAP ---
 cleanup() {
-    # Kill tail process if still running
     if [ ! -z "$TAIL_PID" ]; then kill "$TAIL_PID" 2>/dev/null; fi
-    # TMP_DIR removal is handled manually at the end of the orchestrator loop
 }
 trap cleanup EXIT SIGTERM SIGINT
 
 mkdir -p "$TMP_DIR"
 mkdir -p "$RESULTS_DIR"
 echo "Phase,Cut_Secs,N_Octave,Buffer_Size,Wall_Time" > "$RAW_DATA"
+
+touch "$STREAM_LOG" 
+echo "📝 Log initialized at $(date)" > "$STREAM_LOG"
 
 # --- 3. PROBE CREATION (Internal Python script) ---
 cat << 'EOF' > "${TMP_DIR}/probe_buffering.py"
@@ -110,9 +111,10 @@ EOF
 
 # --- 5. SUBMISSION AND MONITORING ---
 echo "📤 Submitting Job to SLURM..."
-JOB_ID=$(sbatch --parsable "$SLURM_SCRIPT" "$RAW_DATA" "$TMP_DIR" "$SIF_FILE" "$STREAM_LOG")
+JOB_ID=$(sbatch --parsable "$SLURM_SCRIPT" "$STREAM_LOG" "$RAW_DATA" "$SIF_FILE" "$TMP_DIR")
 
-echo "📊 MONITORING JOB $JOB_ID (Real-time stream):"
+echo -e "\n📊 MONITORING JOB $JOB_ID (Real-time stream):"
+
 tail -f "$STREAM_LOG" &
 TAIL_PID=$!
 
@@ -128,32 +130,73 @@ done
 
 echo -e "\n📊 Benchmark completed. Generating plots in $RESULTS_DIR..."
 
-singularity exec --no-home --bind "/leonardo_scratch:/leonardo_scratch" "$SIF_FILE" python3 -u - <<PY_PLOT
+# 🎯 FIX: Using only Matplotlib for compatibility and ensuring correct BIND
+# Added --bind for RESULTS_DIR to ensure the container can write the output image
+singularity exec --no-home --bind "$RESULTS_DIR:$RESULTS_DIR" "$SIF_FILE" python3 -u - <<PY_PLOT
 import pandas as pd
-import seaborn as sns
 import matplotlib.pyplot as plt
 import os
+import numpy as np
 
 res_dir = "${RESULTS_DIR}"
-df = pd.read_csv("${RAW_DATA}")
+raw_data = "${RAW_DATA}"
+
+# Check for data existence before processing
+if not os.path.exists(raw_data):
+    print(f"❌ Error: Data file {raw_data} not found.")
+    exit(1)
+
+df = pd.read_csv(raw_data)
+
+# Create a unique label for each configuration (e.g., "7.0s_1oct")
 df['Label'] = df['Cut_Secs'].astype(str) + "s_" + df['N_Octave'].astype(str) + "oct"
+
+# Calculate mean and standard deviation for Wall_Time
 stats = df.groupby(['Label', 'Buffer_Size'])['Wall_Time'].agg(['mean', 'std']).reset_index()
 
+# 📈 Plotting with pure Matplotlib
 plt.figure(figsize=(12, 8))
-for label in stats['Label'].unique():
-    sub = stats[stats['Label'] == label]
-    plt.errorbar(sub['Buffer_Size'], sub['mean'], yerr=sub['std'], label=label, marker='o', capsize=3)
-plt.xscale('log', base=2); plt.grid(True, which="both", alpha=0.3)
-plt.xlabel("Buffer Size"); plt.ylabel("Time (s)"); plt.legend(bbox_to_anchor=(1.05, 1))
-plt.savefig(os.path.join(res_dir, "buffering_curves.png"), bbox_inches='tight')
 
-pivot = stats.pivot(index='Label', columns='Buffer_Size', values='mean')
-plt.figure(figsize=(14, 10))
-sns.heatmap(pivot, annot=True, fmt=".3f", cmap="YlGnBu")
-plt.savefig(os.path.join(res_dir, "buffering_heatmap.png"))
+# Define markers to distinguish between different configurations
+markers = ['o', 's', '^', 'D', 'v', 'p', '*', 'h']
+unique_labels = stats['Label'].unique()
+
+for i, label in enumerate(unique_labels):
+    sub = stats[stats['Label'] == label]
+    # Cycle through markers if there are more labels than markers
+    m = markers[i % len(markers)]
+    
+    plt.errorbar(
+        sub['Buffer_Size'], 
+        sub['mean'], 
+        yerr=sub['std'], 
+        label=label, 
+        marker=m, 
+        capsize=3, 
+        linestyle='-', 
+        linewidth=1.5,
+        markersize=6
+    )
+
+# Axis configuration
+plt.xscale('log', base=2) # Logarithmic scale base 2 as requested for buffer size
+plt.grid(True, which="both", linestyle='--', alpha=0.5)
+
+plt.xlabel("Buffer Size (Samples)", fontsize=12)
+plt.ylabel("Wall Time (s)", fontsize=12)
+plt.title("I/O Buffering Performance Analysis (SEC Pipeline)", fontsize=14)
+
+# Place legend outside the plot area to avoid overlapping data points
+plt.legend(title="Configurations", bbox_to_anchor=(1.05, 1), loc='upper left')
+
+# Save the resulting plot to the results directory
+plot_path = os.path.join(res_dir, "buffering_curves_analysis.png")
+plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+plt.close()
+
+print(f"✅ Plot successfully generated: {plot_path}")
 PY_PLOT
 
-# --- 7. FINAL CLEANUP ---
-echo "🧹 Final cleanup: Removing $TMP_DIR"
+# Final cleanup of temporary files
 rm -rf "$TMP_DIR"
-echo "✨ Process finished. Results in $RESULTS_DIR"
+echo "🧹 Temporary files removed. Process finished."
