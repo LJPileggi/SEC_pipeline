@@ -36,6 +36,7 @@ import os
 import sys
 import numpy as np
 import torch
+sys.path.insert(0, '/app')
 from src.utils import HDF5EmbeddingDatasetsManager
 
 def run_bench(cut_secs, n_octave, buffer_size, n_samples, h5_path):
@@ -137,7 +138,9 @@ singularity exec --no-home --bind "$RESULTS_DIR:$RESULTS_DIR" "$SIF_FILE" python
 import pandas as pd
 import matplotlib.pyplot as plt
 import os
+import sys
 import numpy as np
+sys.path.insert(0, '/app')
 
 res_dir = "${RESULTS_DIR}"
 raw_data = "${RAW_DATA}"
