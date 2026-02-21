@@ -36,7 +36,6 @@ import os
 import sys
 sys.path.insert(0, '/app')
 import numpy as np
-import torch
 from src.utils import HDF5EmbeddingDatasetsManager
 
 def run_bench(cut_secs, n_octave, buffer_size, n_samples, h5_path):
@@ -74,7 +73,7 @@ cat << 'EOF' > "$SLURM_SCRIPT"
 #SBATCH --job-name=hdf5_buff_bench
 #SBATCH --partition=boost_usr_prod
 #SBATCH --nodes=1
-#SBATCH --time=05:00:00
+#SBATCH --time=10:00:00
 #SBATCH --gres=gpu:1
 #SBATCH -A IscrC_Pb-skite
 #SBATCH --output=/dev/null
@@ -199,6 +198,7 @@ for i, cut in enumerate(unique_cuts):
         )
     
     ax.set_xscale('log', base=2)
+    ax.set_yscale('log', base=10)
     ax.grid(True, which="both", linestyle='--', alpha=0.5)
     ax.set_title(f"I/O Performance: {cut}s Audio", fontsize=14, fontweight='bold')
     ax.set_ylabel("Wall Time (s)", fontsize=12)
