@@ -65,7 +65,7 @@ def run_bench(cut_secs, n_octave, buffer_size, n_samples, h5_path):
 if __name__ == "__main__":
     c_sec, n_oct, b_size, n_samp, h5_target = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
     elapsed = run_bench(c_sec, n_oct, b_size, n_samp, h5_target)
-    print(f"RESULT|{c_sec}|{n_oct}|{b_size}|{elapsed:.6f}", flush=True)
+    print(f"RESULT,{c_sec},{n_oct},{b_size},{elapsed:.6f}", flush=True)
 EOF
 
 # --- 4. SLURM SCRIPT GENERATION ---
@@ -85,9 +85,9 @@ STREAM_LOG=$1; RAW_DATA=$2; SIF_FILE=$3; TMP_DIR=$4; PROJECT_DIR=$5
 #CUT_SECS=(1 2 5 10 15)
 #N_OCTAVES=(1 3 6 12 24)
 #BUFFER_SIZES=(1 2 4 8 16 32 64 128 256 512 1024)
-CUT_SECS=(1)
-N_OCTAVES=(1)
-BUFFER_SIZES=(1024)
+CUT_SECS=(1 2)
+N_OCTAVES=(1 2)
+BUFFER_SIZES=(512 1024)
 
 for c in "${CUT_SECS[@]}"; do
     for o in "${N_OCTAVES[@]}"; do
@@ -177,7 +177,7 @@ for i, label in enumerate(unique_labels):
     m = markers[i % len(markers)]
     plt.errorbar(sub['Buffer_Size'], sub['mean'], yerr=sub['std'], label=label, marker=m, capsize=3, linestyle='-', linewidth=1.5)
 
-plt.xscale('log', base=2); plt.grid(True, which="both", linestyle='--', alpha=0.5)
+plt.xscale('log', base=10); plt.grid(True, which="both", linestyle='--', alpha=0.5)
 plt.xlabel("Buffer Size (Samples)"); plt.ylabel("Wall Time (s)")
 plt.title("I/O Buffering Performance Analysis (SEC Pipeline)")
 plt.legend(title="Configurations", bbox_to_anchor=(1.05, 1), loc='upper left')
