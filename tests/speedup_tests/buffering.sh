@@ -73,14 +73,14 @@ cat << 'EOF' > "$SLURM_SCRIPT"
 #SBATCH --job-name=hdf5_buff_bench
 #SBATCH --partition=boost_usr_prod
 #SBATCH --nodes=1
-#SBATCH --time=10:00:00
+#SBATCH --time=02:00:00
 #SBATCH --gres=gpu:1
 #SBATCH -A IscrC_Pb-skite
 #SBATCH --output=/dev/null
 
 STREAM_LOG=$1; RAW_DATA=$2; SIF_FILE=$3; TMP_DIR=$4; PROJECT_DIR=$5
 
-CUT_SECS=(1 5 10 15)
+CUT_SECS=(5)
 N_OCTAVES=(1 3 6 12 24)
 BUFFER_SIZES=(1 2 4 8 16 32 64 128 256 512 1024)
 
@@ -129,7 +129,6 @@ while true; do
         *) sleep 30 ;;
     esac
 done
-
 # --- 6. PLOTTING RESULTS ---
 echo -e "\n📊 Generating summary and plots in $RESULTS_DIR..."
 
@@ -169,52 +168,50 @@ stats = df.groupby(['Cut_Secs', 'N_Octave', 'Buffer_Size'])['Wall_Time'].agg(['m
 stats.to_csv(raw_data, index=False)
 print(f"✅ Summary statistics saved (overwriting raw data): {raw_data}")
 
-# 📊 MULTI-PLOT GENERATION (2x2 Grid for the 4 Cut_Secs)
-unique_cuts = sorted(stats['Cut_Secs'].unique())
-fig, axes = plt.subplots(2, 2, figsize=(16, 12), sharex=True)
-axes = axes.flatten()
+# 📊 SINGLE PLOT GENERATION (Filtering for 5s as requested)
+cut_val = 5
+plot_df = stats[stats['Cut_Secs'] == cut_val]
+
+if plot_df.empty:
+    print(f"❌ Error: No data found for Cut_Secs = {cut_val}s.")
+    exit(1)
+
+plt.figure(figsize=(12, 8))
 
 # Define markers to distinguish between different octaves
 markers = ['o', 's', '^', 'D', 'v', 'p', '*', 'h']
+unique_octaves = sorted(plot_df['N_Octave'].unique())
 
-for i, cut in enumerate(unique_cuts):
-    ax = axes[i]
-    cut_df = stats[stats['Cut_Secs'] == cut]
+for j, oct_val in enumerate(unique_octaves):
+    sub = plot_df[plot_df['N_Octave'] == oct_val]
+    m = markers[j % len(markers)]
     
-    unique_octaves = sorted(cut_df['N_Octave'].unique())
-    for j, oct_val in enumerate(unique_octaves):
-        sub = cut_df[cut_df['N_Octave'] == oct_val]
-        m = markers[j % len(markers)]
-        
-        ax.errorbar(
-            sub['Buffer_Size'], 
-            sub['mean'], 
-            yerr=sub['std'], 
-            label=f"{oct_val} oct", 
-            marker=m, 
-            capsize=3,
-            linestyle='-',
-            linewidth=1.5
-        )
-    
-    ax.set_xscale('log', base=2)
-    ax.set_yscale('log', base=10)
-    ax.grid(True, which="both", linestyle='--', alpha=0.5)
-    ax.set_title(f"I/O Performance: {cut}s Audio", fontsize=14, fontweight='bold')
-    ax.set_ylabel("Wall Time (s)", fontsize=12)
-    
-    # Only add X-label to the bottom row for clarity
-    if i >= 2:
-        ax.set_xlabel("Buffer Size (Samples)", fontsize=12)
-    
-    ax.legend(title="Octaves", loc='upper right', fontsize=10)
+    plt.errorbar(
+        sub['Buffer_Size'], 
+        sub['mean'], 
+        yerr=sub['std'], 
+        label=f"{oct_val} oct", 
+        marker=m, 
+        capsize=3,
+        linestyle='-',
+        linewidth=1.5
+    )
+
+plt.xscale('log', base=2)
+plt.yscale('log', base=10)
+plt.grid(True, which="both", linestyle='--', alpha=0.5)
+
+plt.title(f"I/O Performance: {cut_val}s Audio", fontsize=14, fontweight='bold')
+plt.xlabel("Buffer Size (Samples)", fontsize=12)
+plt.ylabel("Wall Time (s)", fontsize=12)
+plt.legend(title="Octaves", loc='upper right', fontsize=10)
 
 plt.tight_layout()
-plot_path = os.path.join(res_dir, "buffering_analysis_grid.png")
+plot_path = os.path.join(res_dir, "buffering_analysis_single.png")
 plt.savefig(plot_path, dpi=300, bbox_inches='tight')
 plt.close()
 
-print(f"✅ Grid plot successfully generated: {plot_path}")
+print(f"✅ Single plot successfully generated: {plot_path}")
 PY_PLOT
 
 rm -rf "$TMP_DIR"
