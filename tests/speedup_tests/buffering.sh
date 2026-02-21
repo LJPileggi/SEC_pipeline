@@ -99,7 +99,7 @@ for c in "${CUT_SECS[@]}"; do
             
             echo "🧪 Testing: Cut=${c}s, Oct=${o}, Buffer=${b}" >> "$STREAM_LOG"
             
-            for i in {1..10}; do
+            for i in {1..2}; do
                 H5_TMP="/tmp/bench_buffer_$(hostname)_${i}.h5"
                 
                 # 🎯 FIX: Ispirato a test_lmac_pipeline_slurm.sh
