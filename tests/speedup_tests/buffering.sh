@@ -79,7 +79,6 @@ cat << 'EOF' > "$SLURM_SCRIPT"
 #SBATCH -A IscrC_Pb-skite
 #SBATCH --output=/dev/null
 
-# 🎯 FIX: Ordine assegnazione corretto per combaciare con sbatch (Log, Data, SIF, TMP, PROJ)
 STREAM_LOG=$1; RAW_DATA=$2; SIF_FILE=$3; TMP_DIR=$4; PROJECT_DIR=$5
 
 #CUT_SECS=(1 2 5 10 15)
@@ -99,11 +98,9 @@ for c in "${CUT_SECS[@]}"; do
             
             echo "🧪 Testing: Cut=${c}s, Oct=${o}, Buffer=${b}" >> "$STREAM_LOG"
             
-            for i in {1..2}; do
+            for i in {1..10}; do
                 H5_TMP="/tmp/bench_buffer_$(hostname)_${i}.h5"
                 
-                # 🎯 FIX: Ispirato a test_lmac_pipeline_slurm.sh
-                # Mappiamo il progetto in /app e usiamo --pwd /app per far trovare il modulo 'src'
                 singularity exec --nv --no-home \
                     --bind "/leonardo_scratch:/leonardo_scratch" \
                     --bind "$PROJECT_DIR:/app" \
@@ -155,13 +152,14 @@ if not os.path.exists(raw_data):
     print(f"❌ Error: Data file {raw_data} not found.")
     exit(1)
 
-# Il file contiene righe 'RESULT|...' e potenziali errori. Filtriamo.
 data = []
 with open(raw_data, 'r') as f:
     for line in f:
-        if line.startswith('RESULT|'):
-            parts = line.strip().split('|')
-            data.append([float(parts[1]), int(parts[2]), int(parts[3]), float(parts[4])])
+        if line.startswith('RESULT,'):
+            # 🎯 FIX: Split con la virgola invece del pipe
+            parts = line.strip().split(',')
+            # 🎯 FIX: Cast a int per Cut_Secs (parts[1]) come da tua ground truth
+            data.append([int(parts[1]), int(parts[2]), int(parts[3]), float(parts[4])])
 
 df = pd.DataFrame(data, columns=['Cut_Secs', 'N_Octave', 'Buffer_Size', 'Wall_Time'])
 
