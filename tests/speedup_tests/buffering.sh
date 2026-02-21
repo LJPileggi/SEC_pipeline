@@ -36,6 +36,7 @@ import os
 import sys
 sys.path.insert(0, '/app')
 import numpy as np
+import torch
 from src.utils import HDF5EmbeddingDatasetsManager
 
 def run_bench(cut_secs, n_octave, buffer_size, n_samples, h5_path):
