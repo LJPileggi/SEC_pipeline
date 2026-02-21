@@ -36,7 +36,6 @@ import os
 import sys
 import numpy as np
 import torch
-sys.path.insert(0, '/app')
 from src.utils import HDF5EmbeddingDatasetsManager
 
 def run_bench(cut_secs, n_octave, buffer_size, n_samples, h5_path):
@@ -74,20 +73,20 @@ cat << 'EOF' > "$SLURM_SCRIPT"
 #SBATCH --job-name=hdf5_buff_bench
 #SBATCH --partition=boost_usr_prod
 #SBATCH --nodes=1
-#SBATCH --time=05:00:00
+#SBATCH --time=02:00:00
 #SBATCH --gres=gpu:1
 #SBATCH -A IscrC_Pb-skite
 #SBATCH --output=/dev/null
 
-# 🎯 FIX: Ordine assegnazione corretto per combaciare con sbatch (Log, Data, SIF, TMP)
-STREAM_LOG=$1; RAW_DATA=$2; SIF_FILE=$3; TMP_DIR=$4
+# 🎯 FIX: Ordine assegnazione corretto per combaciare con sbatch (Log, Data, SIF, TMP, PROJ)
+STREAM_LOG=$1; RAW_DATA=$2; SIF_FILE=$3; TMP_DIR=$4; PROJECT_DIR=$5
 
 #CUT_SECS=(1 2 5 10 15)
 #N_OCTAVES=(1 3 6 12 24)
-CUT_SECS=(1 2)
-N_OCTAVES=(1 3)
-BUFFER_SIZES=(1 2 4 8 16)
 #BUFFER_SIZES=(1 2 4 8 16 32 64 128 256 512 1024)
+CUT_SECS=(1 2)
+N_OCTAVES=(1)
+BUFFER_SIZES=(512 1024)
 
 for c in "${CUT_SECS[@]}"; do
     for o in "${N_OCTAVES[@]}"; do
@@ -102,9 +101,13 @@ for c in "${CUT_SECS[@]}"; do
             for i in {1..10}; do
                 H5_TMP="/tmp/bench_buffer_$(hostname)_${i}.h5"
                 
+                # 🎯 FIX: Ispirato a test_lmac_pipeline_slurm.sh
+                # Mappiamo il progetto in /app e usiamo --pwd /app per far trovare il modulo 'src'
                 singularity exec --nv --no-home \
                     --bind "/leonardo_scratch:/leonardo_scratch" \
+                    --bind "$PROJECT_DIR:/app" \
                     --bind "/tmp:/tmp" \
+                    --pwd "/app" \
                     "$SIF_FILE" \
                     python3 -u "${TMP_DIR}/probe_buffering.py" "$c" "$o" "$b" 500 "$H5_TMP" >> "$RAW_DATA" 2>&1
                 
@@ -117,8 +120,8 @@ EOF
 
 # --- 5. SUBMISSION AND MONITORING ---
 echo "📤 Submitting Job to SLURM..."
-# 🎯 FIX: Ordine parametri allineato allo script Slurm (Log, Data, SIF, TMP)
-JOB_ID=$(sbatch --parsable "$SLURM_SCRIPT" "$STREAM_LOG" "$RAW_DATA" "$SIF_FILE" "$TMP_DIR")
+# 🎯 FIX: Aggiunto PROJECT_DIR come 5° parametro per lo script Slurm
+JOB_ID=$(sbatch --parsable "$SLURM_SCRIPT" "$STREAM_LOG" "$RAW_DATA" "$SIF_FILE" "$TMP_DIR" "$PROJECT_DIR")
 
 echo -e "\n📊 MONITORING JOB $JOB_ID (Real-time stream):"
 
@@ -136,14 +139,11 @@ done
 # --- 6. PLOTTING RESULTS ---
 echo -e "\n📊 Benchmark completed. Generating plots in $RESULTS_DIR..."
 
-# 🎯 FIX: Seaborn rimosso, usato Matplotlib puro. Identico per il resto.
 singularity exec --no-home --bind "$RESULTS_DIR:$RESULTS_DIR" "$SIF_FILE" python3 -u - <<PY_PLOT
 import pandas as pd
 import matplotlib.pyplot as plt
 import os
-import sys
 import numpy as np
-sys.path.insert(0, '/app')
 
 res_dir = "${RESULTS_DIR}"
 raw_data = "${RAW_DATA}"
@@ -152,10 +152,15 @@ if not os.path.exists(raw_data):
     print(f"❌ Error: Data file {raw_data} not found.")
     exit(1)
 
-# Nota: Il tuo CSV prodotto dal probe usa '|' come separatore nel print, 
-# ma la testata echo usa ','. Assicurati che il formato sia coerente.
-# Qui assumo formato standard CSV come da tua testata echo.
-df = pd.read_csv(raw_data)
+# Il file contiene righe 'RESULT|...' e potenziali errori. Filtriamo.
+data = []
+with open(raw_data, 'r') as f:
+    for line in f:
+        if line.startswith('RESULT|'):
+            parts = line.strip().split('|')
+            data.append([float(parts[1]), int(parts[2]), int(parts[3]), float(parts[4])])
+
+df = pd.DataFrame(data, columns=['Cut_Secs', 'N_Octave', 'Buffer_Size', 'Wall_Time'])
 
 df['Label'] = df['Cut_Secs'].astype(str) + "s_" + df['N_Octave'].astype(str) + "oct"
 stats = df.groupby(['Label', 'Buffer_Size'])['Wall_Time'].agg(['mean', 'std']).reset_index()
