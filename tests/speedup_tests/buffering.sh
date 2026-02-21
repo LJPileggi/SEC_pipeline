@@ -63,7 +63,7 @@ def run_bench(cut_secs, n_octave, buffer_size, n_samples, h5_path):
     return end_time - start_time
 
 if __name__ == "__main__":
-    c_sec, n_oct, b_size, n_samp, h5_target = float(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
+    c_sec, n_oct, b_size, n_samp, h5_target = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
     elapsed = run_bench(c_sec, n_oct, b_size, n_samp, h5_target)
     print(f"RESULT|{c_sec}|{n_oct}|{b_size}|{elapsed:.6f}", flush=True)
 EOF
