@@ -68,7 +68,7 @@ cat << 'EOF' > "$SLURM_SCRIPT"
 #SBATCH --job-name=sif_venv_marathon
 #SBATCH --partition=boost_usr_prod
 #SBATCH --nodes=1
-#SBATCH --time=00:20:00
+#SBATCH --time=05:00:00
 #SBATCH --gres=gpu:1
 #SBATCH -A IscrC_Pb-skite
 #SBATCH --output=/dev/null

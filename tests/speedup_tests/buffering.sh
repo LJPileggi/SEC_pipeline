@@ -98,7 +98,7 @@ for c in "${CUT_SECS[@]}"; do
             
             echo "🧪 Testing: Cut=${c}s, Oct=${o}, Buffer=${b}" >> "$STREAM_LOG"
             
-            for i in {1..10}; do
+            for i in {1..2}; do
                 H5_TMP="/tmp/bench_buffer_$(hostname)_${i}.h5"
                 
                 singularity exec --nv --no-home \
@@ -135,7 +135,7 @@ while true; do
 done
 
 # --- 6. PLOTTING RESULTS ---
-echo -e "\n📊 Benchmark completed. Generating plots in $RESULTS_DIR..."
+echo -e "\n📊 Generating summary and plots in $RESULTS_DIR..."
 
 singularity exec --no-home --bind "$RESULTS_DIR:$RESULTS_DIR" "$SIF_FILE" python3 -u - <<PY_PLOT
 import pandas as pd
@@ -152,35 +152,72 @@ if not os.path.exists(raw_data):
     print(f"❌ Error: Data file {raw_data} not found.")
     exit(1)
 
+# Parsing the generated lines (matching the 'RESULT,' format)
 data = []
 with open(raw_data, 'r') as f:
     for line in f:
         if line.startswith('RESULT,'):
-            # 🎯 FIX: Split con la virgola invece del pipe
             parts = line.strip().split(',')
-            # 🎯 FIX: Cast a int per Cut_Secs (parts[1]) come da tua ground truth
+            # Using int(parts[1]) for Cut_Secs as required
             data.append([int(parts[1]), int(parts[2]), int(parts[3]), float(parts[4])])
+
+if not data:
+    print("❌ Error: No valid results found in CSV. Check formatting.")
+    exit(1)
 
 df = pd.DataFrame(data, columns=['Cut_Secs', 'N_Octave', 'Buffer_Size', 'Wall_Time'])
 
-df['Label'] = df['Cut_Secs'].astype(str) + "s_" + df['N_Octave'].astype(str) + "oct"
-stats = df.groupby(['Label', 'Buffer_Size'])['Wall_Time'].agg(['mean', 'std']).reset_index()
+# 🎯 SUMMARY STATISTICS & OVERWRITE
+# Grouping by config to calculate mean/std and overwriting the raw CSV as requested
+stats = df.groupby(['Cut_Secs', 'N_Octave', 'Buffer_Size'])['Wall_Time'].agg(['mean', 'std']).reset_index()
+stats.to_csv(raw_data, index=False)
+print(f"✅ Summary statistics saved (overwriting raw data): {raw_data}")
 
-plt.figure(figsize=(12, 8))
+# 📊 MULTI-PLOT GENERATION (2x2 Grid for the 4 Cut_Secs)
+unique_cuts = sorted(stats['Cut_Secs'].unique())
+fig, axes = plt.subplots(2, 2, figsize=(16, 12), sharex=True)
+axes = axes.flatten()
+
+# Define markers to distinguish between different octaves
 markers = ['o', 's', '^', 'D', 'v', 'p', '*', 'h']
-unique_labels = stats['Label'].unique()
 
-for i, label in enumerate(unique_labels):
-    sub = stats[stats['Label'] == label]
-    m = markers[i % len(markers)]
-    plt.errorbar(sub['Buffer_Size'], sub['mean'], yerr=sub['std'], label=label, marker=m, capsize=3, linestyle='-', linewidth=1.5)
+for i, cut in enumerate(unique_cuts):
+    ax = axes[i]
+    cut_df = stats[stats['Cut_Secs'] == cut]
+    
+    unique_octaves = sorted(cut_df['N_Octave'].unique())
+    for j, oct_val in enumerate(unique_octaves):
+        sub = cut_df[cut_df['N_Octave'] == oct_val]
+        m = markers[j % len(markers)]
+        
+        ax.errorbar(
+            sub['Buffer_Size'], 
+            sub['mean'], 
+            yerr=sub['std'], 
+            label=f"{oct_val} oct", 
+            marker=m, 
+            capsize=3,
+            linestyle='-',
+            linewidth=1.5
+        )
+    
+    ax.set_xscale('log', base=2)
+    ax.grid(True, which="both", linestyle='--', alpha=0.5)
+    ax.set_title(f"I/O Performance: {cut}s Audio", fontsize=14, fontweight='bold')
+    ax.set_ylabel("Wall Time (s)", fontsize=12)
+    
+    # Only add X-label to the bottom row for clarity
+    if i >= 2:
+        ax.set_xlabel("Buffer Size (Samples)", fontsize=12)
+    
+    ax.legend(title="Octaves", loc='upper right', fontsize=10)
 
-plt.xscale('log', base=10); plt.grid(True, which="both", linestyle='--', alpha=0.5)
-plt.xlabel("Buffer Size (Samples)"); plt.ylabel("Wall Time (s)")
-plt.title("I/O Buffering Performance Analysis (SEC Pipeline)")
-plt.legend(title="Configurations", bbox_to_anchor=(1.05, 1), loc='upper left')
-plt.savefig(os.path.join(res_dir, "buffering_curves_analysis.png"), dpi=300, bbox_inches='tight')
+plt.tight_layout()
+plot_path = os.path.join(res_dir, "buffering_analysis_grid.png")
+plt.savefig(plot_path, dpi=300, bbox_inches='tight')
 plt.close()
+
+print(f"✅ Grid plot successfully generated: {plot_path}")
 PY_PLOT
 
 rm -rf "$TMP_DIR"
