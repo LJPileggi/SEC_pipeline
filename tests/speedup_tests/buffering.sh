@@ -34,6 +34,7 @@ cat << 'EOF' > "${TMP_DIR}/probe_buffering.py"
 import time
 import os
 import sys
+sys.path.insert(0, '/app')
 import numpy as np
 import torch
 from src.utils import HDF5EmbeddingDatasetsManager
@@ -73,7 +74,7 @@ cat << 'EOF' > "$SLURM_SCRIPT"
 #SBATCH --job-name=hdf5_buff_bench
 #SBATCH --partition=boost_usr_prod
 #SBATCH --nodes=1
-#SBATCH --time=02:00:00
+#SBATCH --time=05:00:00
 #SBATCH --gres=gpu:1
 #SBATCH -A IscrC_Pb-skite
 #SBATCH --output=/dev/null
@@ -84,9 +85,9 @@ STREAM_LOG=$1; RAW_DATA=$2; SIF_FILE=$3; TMP_DIR=$4; PROJECT_DIR=$5
 #CUT_SECS=(1 2 5 10 15)
 #N_OCTAVES=(1 3 6 12 24)
 #BUFFER_SIZES=(1 2 4 8 16 32 64 128 256 512 1024)
-CUT_SECS=(1 2)
+CUT_SECS=(1)
 N_OCTAVES=(1)
-BUFFER_SIZES=(512 1024)
+BUFFER_SIZES=(1024)
 
 for c in "${CUT_SECS[@]}"; do
     for o in "${N_OCTAVES[@]}"; do
@@ -143,6 +144,8 @@ singularity exec --no-home --bind "$RESULTS_DIR:$RESULTS_DIR" "$SIF_FILE" python
 import pandas as pd
 import matplotlib.pyplot as plt
 import os
+import sys
+sys.path.insert(0, '/app')
 import numpy as np
 
 res_dir = "${RESULTS_DIR}"
