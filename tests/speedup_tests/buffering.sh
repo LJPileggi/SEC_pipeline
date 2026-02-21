@@ -47,7 +47,7 @@ def run_bench(cut_secs, n_octave, buffer_size, n_samples, h5_path):
     
     if os.path.exists(h5_path): os.remove(h5_path)
     
-    manager = HDF5EmbeddingDatasetsManager(h5_path, 'a', buffer_size=buffer_size)
+    manager = HDF5EmbeddingDatasetsManager(h5_path, 'a', partitions=set(('splits',)), buffer_size=buffer_size)
     manager.initialize_hdf5(embedding_dim, spec_shape, 'wav', cut_secs, n_octave, 44100, 42, 0.0, 'train')
     
     emb = np.random.uniform(-1, 1, embedding_dim).astype(np.float64)
