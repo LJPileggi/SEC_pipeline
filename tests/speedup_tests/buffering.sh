@@ -81,12 +81,9 @@ cat << 'EOF' > "$SLURM_SCRIPT"
 
 STREAM_LOG=$1; RAW_DATA=$2; SIF_FILE=$3; TMP_DIR=$4; PROJECT_DIR=$5
 
-#CUT_SECS=(1 2 5 10 15)
-#N_OCTAVES=(1 3 6 12 24)
-#BUFFER_SIZES=(1 2 4 8 16 32 64 128 256 512 1024)
 CUT_SECS=(1 5 10 15)
-N_OCTAVES=(1 2)
-BUFFER_SIZES=(512 1024)
+N_OCTAVES=(1 3 6 12 24)
+BUFFER_SIZES=(1 2 4 8 16 32 64 128 256 512 1024)
 
 for c in "${CUT_SECS[@]}"; do
     for o in "${N_OCTAVES[@]}"; do
@@ -98,7 +95,7 @@ for c in "${CUT_SECS[@]}"; do
             
             echo "🧪 Testing: Cut=${c}s, Oct=${o}, Buffer=${b}" >> "$STREAM_LOG"
             
-            for i in {1..2}; do
+            for i in {1..10}; do
                 H5_TMP="/tmp/bench_buffer_$(hostname)_${i}.h5"
                 
                 singularity exec --nv --no-home \
