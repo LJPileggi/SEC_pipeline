@@ -118,7 +118,7 @@ JOB_ID=$(sbatch --parsable "${L_TMP}/run_final.sh")
 while squeue -j "$JOB_ID" | grep -q "$JOB_ID"; do echo -n "."; sleep 5; done
 
 echo -e "\n📊 Elaborating Results..."
-singularity exec --no-home --bind "${L_TMP}:${L_TMP}" "$SIF" python3 -u - <<PY_STATS
+singularity exec --no-home --bind "${L_TMP}:${L_TMP}" --bind "${RESULTS_DIR}:${RESULTS_DIR}" "$SIF" python3 -u - <<PY_STATS
 import pandas as pd
 import numpy as np
 import os
