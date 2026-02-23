@@ -5,7 +5,8 @@ MY_USER=$(whoami)
 BASE_DIR="/leonardo_scratch/large/userexternal/${MY_USER}"
 PROJECT_DIR="${BASE_DIR}/SEC_pipeline"
 L_TMP="${PROJECT_DIR}/.tmp"
-RAW_DATA="${BASE_DIR}/posix_hdf5_results/raw_results.csv"
+RESULTS_DIR="${BASE_DIR}/posix_hdf5_results/"
+RAW_DATA="${RESULTS_DIR}/raw_results.csv"
 SIF="${PROJECT_DIR}/.containers/clap_pipeline.sif"
 
 ITERATIONS=10
@@ -13,7 +14,7 @@ BATCH_SIZE=500
 
 rm -rf "$L_TMP"
 mkdir -p "${L_TMP}/wav_files"
-mkdir -p "${BASE_DIR}/posix_hdf5_results/"
+mkdir -p "${RESULTS_DIR}"
 
 # --- 2. GENERATION (5000 file) ---
 echo "🔨 Phase 0: Dataset Creation (5000 files)..."
@@ -45,7 +46,7 @@ cat << 'EOF' > "${L_TMP}/run_final.sh"
 #SBATCH --error=/dev/null
 
 L_TMP="/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.tmp_io_final"
-CSV="${L_TMP}/raw_results.csv"
+CSV="${RESULTS_DIR}/raw_results.csv"
 SIF="/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.containers/clap_pipeline.sif"
 SSD_BASE="/tmp/bench_${SLURM_JOB_ID}"
 
