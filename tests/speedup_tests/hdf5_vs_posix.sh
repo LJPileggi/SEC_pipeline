@@ -45,7 +45,7 @@ cat << 'EOF' > "${L_TMP}/run_final.sh"
 #SBATCH --output=/dev/null
 #SBATCH --error=/dev/null
 
-L_TMP="/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.tmp_io_final"
+L_TMP="/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.tmp"
 CSV="${RESULTS_DIR}/raw_results.csv"
 SIF="/leonardo_scratch/large/userexternal/lpilegg1/SEC_pipeline/.containers/clap_pipeline.sif"
 SSD_BASE="/tmp/bench_${SLURM_JOB_ID}"
