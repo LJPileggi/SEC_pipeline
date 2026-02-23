@@ -2,9 +2,10 @@
 
 # --- 1. CONFIGURATION ---
 MY_USER=$(whoami)
-PROJECT_DIR="/leonardo_scratch/large/userexternal/${MY_USER}/SEC_pipeline"
+BASE_DIR="/leonardo_scratch/large/userexternal/${MY_USER}"
+PROJECT_DIR="${BASE_DIR}/SEC_pipeline"
 L_TMP="${PROJECT_DIR}/.tmp"
-RAW_DATA="${L_TMP}/raw_results.csv"
+RAW_DATA="${BASE_DIR}/posix_hdf5_results/raw_results.csv"
 SIF="${PROJECT_DIR}/.containers/clap_pipeline.sif"
 
 ITERATIONS=10
@@ -12,6 +13,7 @@ BATCH_SIZE=500
 
 rm -rf "$L_TMP"
 mkdir -p "${L_TMP}/wav_files"
+mkdir -p "${BASE_DIR}/posix_hdf5_results/"
 
 # --- 2. GENERATION (5000 file) ---
 echo "🔨 Phase 0: Dataset Creation (5000 files)..."
