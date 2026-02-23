@@ -5,7 +5,7 @@ MY_USER=$(whoami)
 BASE_DIR="/leonardo_scratch/large/userexternal/${MY_USER}"
 PROJECT_DIR="${BASE_DIR}/SEC_pipeline"
 L_TMP="${PROJECT_DIR}/.tmp"
-RESULTS_DIR="${BASE_DIR}/posix_hdf5_results/"
+RESULTS_DIR="${BASE_DIR}/posix_hdf5_results"
 RAW_DATA="${RESULTS_DIR}/raw_results.csv"
 SIF="${PROJECT_DIR}/.containers/clap_pipeline.sif"
 
