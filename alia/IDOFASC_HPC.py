@@ -180,10 +180,10 @@ def main():
         X_pca = PCA(n_components=n_comp).fit_transform(X)
 
         km = KMeans(n_clusters=len(classes), random_state=42, n_init=50, max_iter=1000).fit(X_pca)
-        results[(name, "kmeans")] = {"model": km, "labels": km.labels_, "pca_data": X_pca, **compute_metrics(X, y_true, km.labels_)}
+        results[(name, "kmeans")] = {"model": km, "n_components": n_comp, "labels": km.labels_, "pca_data": X_pca, **compute_metrics(X, y_true, km.labels_)}
         
         bkm = BisectingKMeans(n_clusters=len(classes), random_state=42, n_init=10, max_iter=1000).fit(X_pca)
-        results[(name, "bisecting")] = {"model": bkm, "labels": bkm.labels_, "pca_data": X_pca, **compute_metrics(X, y_true, bkm.labels_)}
+        results[(name, "bisecting")] = {"model": bkm, "n_components": n_comp, "labels": bkm.labels_, "pca_data": X_pca, **compute_metrics(X, y_true, bkm.labels_)}
 
     # Save Output
     metrics_df = pd.DataFrame.from_dict(results, orient="index")
