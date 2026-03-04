@@ -36,8 +36,8 @@ mkdir -p "$L_TMP/embeddings"
 
 # --- 3. PREPARE TASK LIST ---
 cd "${EMB_BASE}"
-# Cerchiamo tutti i file combined_valid.h5 come richiesto
-mapfile -t H5_LIST < <(find . -path "*/7_secs/combined_valid.h5")
+# Cerchiamo tutti i file combined_test.h5 come richiesto
+mapfile -t H5_LIST < <(find . -path "*/7_secs/combined_test.h5")
 cd "$PROJECT_DIR"
 
 # --- 4. CREATE TEMPORARY AGGREGATOR SCRIPT IN .tmp ---
