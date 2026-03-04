@@ -55,10 +55,10 @@ def main():
         os.makedirs(out_dir, exist_ok=True)
         
         manager = HDF5EmbeddingDatasetsManager(h5_path, 'r')
-        test_group = manager.hf['test']
-        X = torch.from_numpy(test_group['embeddings'][:]).float().to(device)
-        y = torch.from_numpy(test_group['labels'][:]).long().to(device)
-        keys = test_group['keys'][:]
+        emb_dataset = manager.hf['embedding_dataset']
+        X = torch.from_numpy(emb_dataset['embeddings'][:]).float().to(device)
+        y = torch.from_numpy(emb_dataset['classes'][:]).long().to(device)
+        keys = emb_dataset['ID'][:]
         manager.close()
 
         with torch.no_grad():
