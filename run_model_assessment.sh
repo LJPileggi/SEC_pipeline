@@ -37,7 +37,7 @@ mkdir -p "$L_TMP/embeddings"
 # --- 3. PREPARE TASK LIST ---
 cd "${EMB_BASE}"
 # Cerchiamo tutti i file combined_test.h5 come richiesto
-mapfile -t H5_LIST < <(find . -name "combined_test.h5")
+mapfile -t H5_LIST < <(find . -path "*/7_secs/combined_test.h5")
 cd "$PROJECT_DIR"
 
 # --- 4. CREATE TEMPORARY AGGREGATOR SCRIPT IN .tmp ---
@@ -97,19 +97,23 @@ while [ $CURRENT_IDX -lt $TOTAL_FILES ]; do
     
     echo "🚀 Processing batch of ${#CURRENT_BATCH[@]} files..."
     
-    singularity exec --nv --no-home \
-        --bind "$PROJECT_DIR:/app" \
-        --bind "$L_TMP:/tmp_node" \
-        --bind "$RESULTS_BASE:$RESULTS_BASE" \
-        "$SIF_FILE" \
-        python3 /app/scripts/finetuned_model_assessment.py \
-            --local_root "/tmp_node/embeddings" \
-            --model_path "$MODEL_WEIGHTS" \
-            --results_base "$RESULTS_BASE" \
-            --config_path "/app/configs/config0.yaml" \
-            --batch_list "${CURRENT_BATCH[*]}"
+    for FILE_REL in "${CURRENT_BATCH[@]}"; do
+        echo "📊 Assessing: $FILE_REL"
+        
+        singularity exec --nv --no-home \
+            --bind "$PROJECT_DIR:/app" \
+            --bind "$L_TMP:/tmp_node" \
+            --bind "$RESULTS_BASE:$RESULTS_BASE" \
+            "$SIF_FILE" \
+            python3 /app/scripts/finetuned_model_assessment.py \
+                --local_root "/tmp_node/embeddings" \
+                --model_path "$MODEL_WEIGHTS" \
+                --results_base "$RESULTS_BASE" \
+                --config_path "/app/configs/config0.yaml" \
+                --batch_list "$FILE_REL"
+    done
 
-    rm -rf "$L_TMP/embeddings"/*
+    rm -rf "$L_TMP/embeddings/*"
 done
 
 # --- 6. FINAL AGGREGATION ---
