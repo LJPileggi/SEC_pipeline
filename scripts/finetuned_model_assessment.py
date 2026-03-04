@@ -42,7 +42,7 @@ def main():
     config_data = get_config_from_yaml(args.config_path)
     classes = config_data[0] 
     
-    model = FinetunedModel(classes, device=device)ù
+    model = FinetunedModel(classes, device=device)
     state_dict = torch.load(args.model_path, map_location=device)
     model.load_state_dict(state_dict)
     model.eval()
