@@ -56,8 +56,23 @@ def main():
         
         manager = HDF5EmbeddingDatasetsManager(h5_path, 'r')
         emb_dataset = manager.hf['embedding_dataset']
+        
+        # 1. Embeddings: conversion to float tensor is direct
         X = torch.from_numpy(emb_dataset['embeddings'][:]).float().to(device)
-        y = torch.from_numpy(emb_dataset['classes'][:]).long().to(device)
+        
+        # 2. Labels: mapping bytes to integer indices
+        # We need to decode bytes to utf-8 and find the index in the config classes list
+        class_to_idx = {cls: i for i, cls in enumerate(classes)}
+        raw_labels = emb_dataset['classes'][:] # or 'subclasses' depending on your logic
+        
+        y_list = []
+        for rl in raw_labels:
+            label_str = rl.decode('utf-8') if isinstance(rl, bytes) else rl
+            y_list.append(class_to_idx[label_str])
+            
+        y = torch.tensor(y_list).long().to(device)
+        
+        # 3. Keys: kept as bytes for decoding during error saving
         keys = emb_dataset['ID'][:]
         manager.close()
 
