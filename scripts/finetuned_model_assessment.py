@@ -1,15 +1,27 @@
-import os, sys, argparse, torch, numpy as np, pandas as pd, seaborn as sns, matplotlib.pyplot as plt
+import os, sys, argparse, torch, numpy as np, pandas as pd, matplotlib.pyplot as plt
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
 
-# Inserimento prioritario del percorso app per i moduli src
 sys.path.insert(0, '/app')
-from src.utils import HDF5EmbeddingDatasetsManager, get_config_from_yaml #
-from src.models import FinetunedModel # Corretto nome classe
+from src.utils import HDF5EmbeddingDatasetsManager, get_config_from_yaml
+from src.models import FinetunedModel
 
 def plot_cm(cm, classes, path, title):
     plt.figure(figsize=(14, 12))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='viridis', xticklabels=classes, yticklabels=classes)
+    im = plt.imshow(cm, interpolation='nearest', cmap='viridis')
     plt.title(title, fontsize=15)
+    plt.colorbar(im)
+    
+    tick_marks = np.arange(len(classes))
+    plt.xticks(tick_marks, classes, rotation=45, ha='right')
+    plt.yticks(tick_marks, classes)
+
+    thresh = cm.max() / 2.
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            plt.text(j, i, format(cm[i, j], 'd'),
+                     ha="center", va="center",
+                     color="white" if cm[i, j] > thresh else "black")
+
     plt.ylabel('True Label')
     plt.xlabel('Predicted Label')
     plt.tight_layout()
@@ -27,14 +39,10 @@ def main():
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
-    # Recupero classi dal config YAML tramite utils
-    # get_config_from_yaml restituisce (classes, patience, epochs, ...)
     config_data = get_config_from_yaml(args.config_path)
     classes = config_data[0] 
     
-    # Inizializzazione modello corretto
-    model = FinetunedModel(classes, device=device)
-    # Caricamento pesi (FinetunedModel gestisce il caricamento internamente o via load_state_dict)
+    model = FinetunedModel(classes, device=device)ù
     state_dict = torch.load(args.model_path, map_location=device)
     model.load_state_dict(state_dict)
     model.eval()
@@ -42,7 +50,6 @@ def main():
     for file_rel in args.batch_list:
         h5_path = os.path.join(args.local_root, file_rel)
         
-        # Mirroring della struttura cartelle per i risultati
         dir_rel = os.path.dirname(file_rel).lstrip("./")
         out_dir = os.path.join(args.results_base, dir_rel)
         os.makedirs(out_dir, exist_ok=True)

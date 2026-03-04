@@ -20,17 +20,27 @@ TMP_DIR="${PROJECT_DIR}/.tmp"
 L_TMP="/tmp/assessment_marathon"
 MEM_THRESHOLD_MB=5120 
 
+# --- 2. ROBUSTNESS & CLEANUP ---
+# 🎯 FIX: Cancelliamo sia la cartella locale al nodo che quella temporanea su scratch
+cleanup() {
+    echo "🧹 [CLEANUP] Job interrupted or finished. Cleaning directories..."
+    [ -d "$L_TMP" ] && rm -rf "$L_TMP"
+    [ -d "$TMP_DIR" ] && rm -rf "$TMP_DIR"
+}
+
+trap cleanup EXIT SIGTERM SIGINT ERR
+
 mkdir -p "$TMP_DIR"
 mkdir -p "$RESULTS_BASE"
 mkdir -p "$L_TMP/embeddings"
 
-# --- 2. PREPARE TASK LIST ---
+# --- 3. PREPARE TASK LIST ---
 cd "${EMB_BASE}"
 # Cerchiamo tutti i file combined_test.h5 come richiesto
 mapfile -t H5_LIST < <(find . -name "combined_test.h5")
 cd "$PROJECT_DIR"
 
-# --- 3. CREATE TEMPORARY AGGREGATOR SCRIPT IN .tmp ---
+# --- 4. CREATE TEMPORARY AGGREGATOR SCRIPT IN .tmp ---
 cat << 'EOF' > "${TMP_DIR}/metrics_aggregator.py"
 import os, sys, pandas as pd, glob
 def aggregate(results_base):
@@ -59,7 +69,7 @@ if __name__ == "__main__":
     aggregate(sys.argv[1])
 EOF
 
-# --- 4. EXECUTION LOOP WITH QUEUE LOGIC ---
+# --- 5. EXECUTION LOOP WITH QUEUE LOGIC ---
 TOTAL_FILES=${#H5_LIST[@]}
 CURRENT_IDX=0
 
@@ -102,7 +112,7 @@ while [ $CURRENT_IDX -lt $TOTAL_FILES ]; do
     rm -rf "$L_TMP/embeddings"/*
 done
 
-# --- 5. FINAL AGGREGATION ---
+# --- 6. FINAL AGGREGATION ---
 singularity exec --no-home --bind "$RESULTS_BASE:$RESULTS_BASE" --bind "$TMP_DIR:/tmp_scripts" "$SIF_FILE" \
     python3 /tmp_scripts/metrics_aggregator.py "$RESULTS_BASE"
 
