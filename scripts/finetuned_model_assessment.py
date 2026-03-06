@@ -43,7 +43,7 @@ def main():
     classes = config_data[0] 
     
     model = FinetunedModel(classes, device=device)
-    state_dict = torch.load(args.model_path, map_location=device)
+    state_dict = torch.load(args.model_path, map_location=device, weights_only=False)
     model.load_state_dict(state_dict)
     model.eval()
 
