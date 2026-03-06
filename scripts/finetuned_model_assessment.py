@@ -77,7 +77,7 @@ def main():
         manager.close()
 
         with torch.no_grad():
-            X = torch.nn.functional.normalize(X, p=2, dim=1)
+            # X = torch.nn.functional.normalize(X, p=2, dim=1)
             logits = model(X)
             preds = torch.argmax(logits, dim=1).cpu().numpy()
             y_true = y.cpu().numpy()
