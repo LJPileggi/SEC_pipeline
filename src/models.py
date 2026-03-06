@@ -272,6 +272,7 @@ def train(tr_set, es_set, config, epochs, patience, device='cpu', classes=None, 
     Funzione di training universale (CPU/GPU).
     """
     model = FinetunedModel(classes, device=device)
+    print(model.state_dict())
     if pretrained_path:
         state_dict = torch.load(pretrained_path, map_location=device)
         model.load_state_dict(state_dict)
