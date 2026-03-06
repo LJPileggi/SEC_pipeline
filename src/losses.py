@@ -6,7 +6,7 @@ from xgboost import XGBClassifier
 _criterion = torch.nn.CrossEntropyLoss()
 
 def accuracy(y, p):
-    return ((y.argmax(axis=-1) - p.argmax(axis=-1)) == 0).to(torch.float).mean().item()
+    return ((y - p.argmax(axis=-1)) == 0).to(torch.float).mean().item()
 
 
 def get_scores(model, test_dataloader, train_dataloader=None):
@@ -71,8 +71,8 @@ def get_scores(model, test_dataloader, train_dataloader=None):
             #print(f"pred: {p}; y: {y}")
             p_list += p.argmax(axis=-1).tolist()
             y_list += y.tolist() # y.argmax(axis=-1).tolist()
-            print(y)
-            print(p.argmax(axis=-1))
+            #print(y)
+            #print(p.argmax(axis=-1))
             ts_loss += _criterion(p, y).item()
             ts_accuracy += accuracy(y, p)
             print(ts_accuracy)
