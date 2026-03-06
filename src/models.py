@@ -302,7 +302,7 @@ def train(tr_set, es_set, config, epochs, patience, device='cpu', classes=None, 
             optimizer.set_readout()
             
         model.eval()
-        _, es_accuracy, _ = get_scores(model, es_set, device=device)
+        _, es_accuracy, _ = get_scores(model, es_set)
         
         if es_accuracy > best_es_accuracy:
             best_es_accuracy = es_accuracy
