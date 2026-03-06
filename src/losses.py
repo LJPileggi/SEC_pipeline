@@ -68,14 +68,10 @@ def get_scores(model, test_dataloader, train_dataloader=None):
                 tr_accuracy += accuracy(y, p)
         for x, y in tqdm(test_dataloader, desc=f'loss on test'):
             p = model(x)
-            #print(f"pred: {p}; y: {y}")
             p_list += p.argmax(axis=-1).tolist()
-            y_list += y.tolist() # y.argmax(axis=-1).tolist()
-            #print(y)
-            #print(p.argmax(axis=-1))
+            y_list += y.tolist()
             ts_loss += _criterion(p, y).item()
             ts_accuracy += accuracy(y, p)
-            print(ts_accuracy)
         if train_dataloader is not None:
             tr_loss = tr_loss / len(train_dataloader)
             tr_accuracy = tr_accuracy / len(train_dataloader)
