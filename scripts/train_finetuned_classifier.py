@@ -51,7 +51,7 @@ def main():
                                                   classes=classes, pretrained_path=args.pretrained_path)
     FINAL_MODEL_PATH = os.environ.get("FINAL_MODEL_PATH")
     if FINAL_MODEL_PATH:
-        torch.save(model, FINAL_MODEL_PATH)
+        torch.save(model.state_dict(), FINAL_MODEL_PATH)
 
 if __name__ == "__main__":
     main()
