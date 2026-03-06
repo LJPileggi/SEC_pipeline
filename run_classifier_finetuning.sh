@@ -35,7 +35,7 @@ singularity exec --nv --no-home \
     --bind "${DATASEC_DIR}:${DATASEC_DIR}" \
     --pwd "/app" \
     "$SIF_FILE" \
-    python3 train_finetuned_classifier.py \
+    python3 scripts/train_finetuned_classifier.py \
         --config_file "$CONFIG_FILE" \
         --audio_format "$AUDIO_FORMAT" \
         --n_octave "$N_OCTAVE" \
