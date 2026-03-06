@@ -47,7 +47,6 @@ def main():
 
     device = 'cuda' if torch.cuda.is_available() else torch.device('cpu')
     dataloaders, classes = load_single_cut_secs_dataloaders(octaveband_dir, args.cut_secs, 1024, device)
-    print(classes)
     model = train(dataloaders['train'], dataloaders['es'], optim_config, epochs, patience, device=device,
                                                   classes=classes, pretrained_path=args.pretrained_path)
     FINAL_MODEL_PATH = os.environ.get("FINAL_MODEL_PATH")

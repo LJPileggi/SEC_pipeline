@@ -265,14 +265,15 @@ class FinetunedModel(torch.nn.Module):
         if x.dim() > 2: # E.g., if it's (batch_size, 1, 1024)
             x = x.squeeze(1) # Remove unitary dimension if present
 
-        return self.classifier(x)
+        y = self.classifier(x)
+        print(y)
+        return y
 
 def train(tr_set, es_set, config, epochs, patience, device='cpu', classes=None, pretrained_path=None):
     """
     Funzione di training universale (CPU/GPU).
     """
     model = FinetunedModel(classes, device=device)
-    print(model.state_dict())
     if pretrained_path:
         state_dict = torch.load(pretrained_path, map_location=device)
         model.load_state_dict(state_dict)
