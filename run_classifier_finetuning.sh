@@ -9,8 +9,9 @@
 
 # --- 1. CONFIGURATION ---
 MY_USER=$(whoami)
-PROJECT_DIR="/leonardo_scratch/large/userexternal/${MY_USER}/SEC_pipeline"
-DATASEC_DIR="/leonardo_scratch/large/userexternal/${MY_USER}/dataSEC"
+BASEDIR="/leonardo_scratch/large/userexternal/${MY_USER}"
+PROJECT_DIR="${BASEDIR}/SEC_pipeline"
+DATASEC_DIR="${BASEDIR}/dataSEC"
 SIF_FILE="${PROJECT_DIR}/.containers/clap_pipeline.sif"
 CONFIG_FILE="${PROJECT_DIR}/configs/config0.yaml"
 
@@ -31,9 +32,10 @@ echo "🚀 Starting Finetune Recovery (Target: ${FINAL_MODEL_PATH})..."
 # - PROJECT_DIR per lo script e i moduli src
 # - DATASEC_DIR per caricare gli embeddings HDF5
 singularity exec --nv --no-home \
-    --bind "${PROJECT_DIR}:/app" \
-    --bind "${DATASEC_DIR}:${DATASEC_DIR}" \
-    --pwd "/app" \
+    --bind "${BASEDIR}:/app" \
+    --bind "${PROJECT_DIR}:/app/${PROJECT_DIR}" \
+    --bind "${DATASEC_DIR}:/app/${DATASEC_DIR}" \
+    --pwd "/app/${PROJECT_DIR}" \
     "$SIF_FILE" \
     python3 scripts/train_finetuned_classifier.py \
         --config_file "$CONFIG_FILE" \
