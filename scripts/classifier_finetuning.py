@@ -4,7 +4,7 @@ sys.path.append('.')
 
 from src.utils import get_config_from_yaml
 from src.dirs_config import basedir_preprocessed, results_validation_filepath_project
-from src.models import CLAP_initializer
+from src.models import *
 from src.distributed_finetuning import select_optim_distributed
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'

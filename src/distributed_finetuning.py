@@ -21,9 +21,6 @@ os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
 ### Finetuned classifier training ###
 
-def build_model():
-    return FinetunedModel(classes, device='cpu')
-
 def train_xgboost(tr_set, config):
     """
     Train a model with a given configuration.
@@ -46,52 +43,6 @@ def train_xgboost(tr_set, config):
     # Train the model
     model.fit(X_train, y_train)
 
-    return model
-
-def train(tr_set, es_set, config, epochs, patience, device='cpu', classes=None):
-    """
-    Funzione di training universale (CPU/GPU).
-    """
-    model = FinetunedModel(classes, device=device)
-    optimizer, with_epochs = build_optimizer(config['optimizer'], model)
-    
-    # Se RR non usa epoche, forziamo a 1
-    actual_epochs = epochs if with_epochs else 1
-    criterion = torch.nn.CrossEntropyLoss().to(device)
-    
-    best_es_accuracy = 0.0
-    best_params = model.state_dict()
-    counter_es = 0
-
-    for epoch in range(actual_epochs):
-        model.train()
-        for x, y in tr_set:
-            x, y = x.to(device), y.to(device)
-            if with_epochs:
-                optimizer.zero_grad()
-                h = model(x)
-                loss = criterion(h, y)
-                loss.backward()
-                optimizer.step()
-            else:
-                optimizer(x, y) # Logica Ridge Regression
-        
-        if not with_epochs:
-            optimizer.set_readout()
-            
-        model.eval()
-        _, es_accuracy, _ = get_scores(model, es_set, device=device)
-        
-        if es_accuracy > best_es_accuracy:
-            best_es_accuracy = es_accuracy
-            best_params = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-            counter_es = 0
-        else:
-            counter_es += 1
-            if counter_es > patience:
-                break
-                
-    model.load_state_dict(best_params)
     return model
 
 def save_validation_plot(validation_filepath, k, config_label, o_acc, o_loss, o_cm, vl_acc, vl_loss, cm, classes, rank):
