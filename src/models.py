@@ -265,8 +265,7 @@ class FinetunedModel(torch.nn.Module):
             x = x.squeeze(1)
 
         y = self.classifier(x)
-        print(y)
-        return y
+        return torch.softmax(y, dim=0)
 
 def train(tr_set, es_set, config, epochs, patience, device='cpu', classes=None, pretrained_path=None):
     """
