@@ -259,14 +259,12 @@ class FinetunedModel(torch.nn.Module):
              print(f"Warning: Input tensor dtype ({x.dtype}) mismatch with model weight dtype ({self.classifier.weight.dtype})")
              x = x.to(self.classifier.weight.dtype)
 
-        print(x)
         # Checks input dimension
         # If x has more dimensions than it should (es. [batch, 1, latent_dim] instead of [batch, latent_dim])
         # a squeeze might be needed.
         if x.dim() > 2: # E.g., if it's (batch_size, 1, 1024)
             x = x.squeeze(1) # Remove unitary dimension if present
 
-        print(x)
         return self.classifier(x)
 
 def train(tr_set, es_set, config, epochs, patience, device='cpu', classes=None, pretrained_path=None):
