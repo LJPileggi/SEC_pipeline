@@ -71,6 +71,8 @@ def get_scores(model, test_dataloader, train_dataloader=None):
             #print(f"pred: {p}; y: {y}")
             p_list += p.argmax(axis=-1).tolist()
             y_list += y.tolist() # y.argmax(axis=-1).tolist()
+            print(y)
+            print(p.argmax(axis=-1)
             ts_loss += _criterion(p, y).item()
             ts_accuracy += accuracy(y, p)
             print(ts_accuracy)
