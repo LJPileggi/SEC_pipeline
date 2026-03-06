@@ -31,8 +31,8 @@ echo "🚀 Starting Finetune Recovery (Target: ${FINAL_MODEL_PATH})..."
 # - PROJECT_DIR per lo script e i moduli src
 # - DATASEC_DIR per caricare gli embeddings HDF5
 singularity exec --nv --no-home \
-    --bind "/leonardo_scratch:/leonardo_scratch" \
-    --bind "\$(pwd):/app" \
+    --bind "${PROJECT_DIR}:/app" \
+    --bind "${DATASEC_DIR}:${DATASEC_DIR}" \
     --pwd "/app" \
     "$SIF_FILE" \
     python3 scripts/train_finetuned_classifier.py \
