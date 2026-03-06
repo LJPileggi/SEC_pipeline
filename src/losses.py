@@ -73,6 +73,7 @@ def get_scores(model, test_dataloader, train_dataloader=None):
             y_list += y.tolist() # y.argmax(axis=-1).tolist()
             ts_loss += _criterion(p, y).item()
             ts_accuracy += accuracy(y, p)
+            print(ts_accuracy)
         if train_dataloader is not None:
             tr_loss = tr_loss / len(train_dataloader)
             tr_accuracy = tr_accuracy / len(train_dataloader)
