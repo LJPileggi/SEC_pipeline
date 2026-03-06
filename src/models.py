@@ -248,25 +248,24 @@ class FinetunedModel(torch.nn.Module):
         
     def forward(self, x):
         if isinstance(x, np.ndarray):
-            # Convert to torch tensor and explicitly cast to the same dtype as the model's parameters
             x = torch.from_numpy(x).to(self.classifier.weight.dtype).to(self.classifier.weight.device)
-        # If input is already a tensor, ensure it's on the correct device
         elif isinstance(x, torch.Tensor):
             x = x.to(self.device)
-        # Add a check to ensure dtype is consistent before the linear layer call
-        if x.dtype != self.classifier.weight.dtype:
-             # This case should ideally not happen with the fix above, but good for debugging
-             print(f"Warning: Input tensor dtype ({x.dtype}) mismatch with model weight dtype ({self.classifier.weight.dtype})")
-             x = x.to(self.classifier.weight.dtype)
 
-        # Checks input dimension
-        # If x has more dimensions than it should (es. [batch, 1, latent_dim] instead of [batch, latent_dim])
-        # a squeeze might be needed.
-        if x.dim() > 2: # E.g., if it's (batch_size, 1, 1024)
-            x = x.squeeze(1) # Remove unitary dimension if present
+        # 🎯 FIX: Policy per forzare i NaN a 0.0 prima del calcolo
+        if torch.isnan(x).any():
+            # Opzione 1: Sostituzione con 0 (più sicura per la stabilità)
+            x = torch.nan_to_num(x, nan=0.0)
+            
+            # Opzione 2 (Facoltativa): Logging per debugging
+            # print(f"⚠️ Warning: NaNs detected in input batch and forced to 0.0")
+
+        # Checks input dimension (Squeeze se necessario)
+        if x.dim() > 2:
+            x = x.squeeze(1)
 
         y = self.classifier(x)
-        print(y)
+        #print(y)
         return y
 
 def train(tr_set, es_set, config, epochs, patience, device='cpu', classes=None, pretrained_path=None):
