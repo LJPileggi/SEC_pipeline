@@ -116,7 +116,7 @@ def main():
         manager.close()
 
         # 🎯 APPLICAZIONE RECOVERY: Imputazione intelligente prima dell'inferenza
-        print(f"🩹 Applying Centroid Imputation to {h5_rel_path}...")
+        print(f"🩹 Applying Centroid Imputation to {h5_path}...")
         X = impute_nans_with_class_centroids(X, y, len(classes))
 
         with torch.no_grad():
