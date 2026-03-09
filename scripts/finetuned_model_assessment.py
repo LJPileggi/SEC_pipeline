@@ -5,6 +5,45 @@ sys.path.insert(0, '/app')
 from src.utils import HDF5EmbeddingDatasetsManager, get_config_from_yaml
 from src.models import FinetunedModel
 
+# ==============================================================================
+# 🎯 RECOVERY STRATEGY: Class-Wise Centroid Imputation
+# ==============================================================================
+def impute_nans_with_class_centroids(X, y, num_classes):
+    """
+    Sostituisce i valori NaN negli embeddings con la media (centroide) 
+    della specifica classe di appartenenza.
+    """
+    X_imputed = X.clone()
+    for c in range(num_classes):
+        class_mask = (y == c)
+        if not class_mask.any():
+            continue
+            
+        # Estraiamo i campioni della classe
+        class_samples = X_imputed[class_mask]
+        
+        # Calcoliamo il centroide ignorando i NaN (nanmean)
+        # Se una coordinata è NaN per tutti i campioni della classe, nanmean restituisce NaN
+        centroid = torch.nanmean(class_samples, dim=0)
+        
+        # Fallback di sicurezza: se il centroide ha ancora NaN, forziamo a 0
+        centroid = torch.nan_to_num(centroid, nan=0.0)
+        
+        # Identifichiamo dove sono i NaN nei campioni di questa classe
+        nan_mask = torch.isnan(class_samples)
+        if nan_mask.any():
+            # Troviamo gli indici globali dei campioni della classe
+            global_indices = torch.where(class_mask)[0]
+            
+            # Per ogni campione della classe che ha dei NaN, applichiamo il centroide
+            for i, idx in enumerate(global_indices):
+                sample_nan_mask = nan_mask[i]
+                if sample_nan_mask.any():
+                    X_imputed[idx, sample_nan_mask] = centroid[sample_nan_mask]
+                    
+    return X_imputed
+# ==============================================================================
+
 def plot_cm(cm, classes, path, title):
     plt.figure(figsize=(14, 12))
     im = plt.imshow(cm, interpolation='nearest', cmap='viridis')
@@ -75,6 +114,10 @@ def main():
         # 3. Keys: kept as bytes for decoding during error saving
         keys = emb_dataset['ID'][:]
         manager.close()
+
+        # 🎯 APPLICAZIONE RECOVERY: Imputazione intelligente prima dell'inferenza
+        print(f"🩹 Applying Centroid Imputation to {h5_rel_path}...")
+        X = impute_nans_with_class_centroids(X, y, len(classes))
 
         with torch.no_grad():
             # X = torch.nn.functional.normalize(X, p=2, dim=1)
