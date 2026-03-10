@@ -68,20 +68,23 @@ def process_audio_dir_to_hdf5(base_dir: Path, target_dir: Path, audio_format: st
             metadata_array = np.empty(len(df), dtype=METADATA_DTYPE)
             
             # --- MODIFICA MINIMA: Il loop ora popola solo l'array in memoria ---
+            # Recuperiamo la lunghezza massima definita per questo dataset
+            current_max_len = audio_data_dset.shape[1]
+
             for i, row in tqdm(df.iterrows(), total=len(df), desc="Scrittura Audio"):
                 metadata_array[i] = (row['subclass'], row['track_name'], i)
                 try:
                     data, _ = librosa.load(row['file_path'], sr=target_sr, mono=True)
-                
-                    # 🎯 FIX ANTI-NAN: Sanificazione (rimane fondamentale)
+                    
+                    # 🎯 FIX ANTI-NAN: Sanificazione (fondamentale per evitare l'infezione della pipeline)
                     if np.isnan(data).any():
                         data = np.nan_to_num(data, nan=0.0)
-                
-                    # 🎯 FIX INDEXING: Scriviamo direttamente nella riga i
-                    # Se data è più corto di max_len, il resto della riga rimane 0 (fill value di default)
-                    # Se data è più lungo (improbabile), lo tagliamo per farlo stare
-                    audio_data_dset[i, :min(len(data), max_len)] = data[:max_len].astype('float32')
-                
+                    
+                    # 🎯 FIX INDEXING: Usiamo current_max_len per evitare l'errore 'not defined'
+                    # Tagliamo i dati se superano la lunghezza massima consentita
+                    write_size = min(len(data), current_max_len)
+                    audio_data_dset[i, :write_size] = data[:write_size].astype('float32')
+                    
                 except Exception as e:
                     logging.error(f"Errore su {row['file_path']}: {e}")
 
