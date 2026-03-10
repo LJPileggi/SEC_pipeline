@@ -75,7 +75,7 @@ def process_audio_dir_to_hdf5(base_dir: Path, target_dir: Path, audio_format: st
                     
                     # 🎯 FIX ANTI-NAN: Sanificazione (essenziale per la pipeline CLAP)
                     if np.isnan(data).any():
-                        data = np.nan_to_num(data, nan=0.0)
+                        data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
                     
                     # 🎯 FIX SCRITTURA: Essendo un dataset VLEN 1D, si assegna così:
                     audio_data_dset[i] = data.astype('float32')
