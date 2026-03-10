@@ -127,6 +127,8 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
 
         # Transfer batch to GPU as Float32 and pin memory for faster transfer
         raw_batch = torch.stack(batch_audio).pin_memory().to(device, non_blocking=True).float()
+        # NaN check and correction
+        raw_batch = torch.nan_to_num(raw_batch, nan=0.0, posinf=0.0, neginf=0.0)
         
         # 🎯 DETERMINISTIC NOISE GENERATION
         # Seed the GPU generator based on the global position within the class

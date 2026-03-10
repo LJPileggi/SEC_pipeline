@@ -72,7 +72,13 @@ def process_audio_dir_to_hdf5(base_dir: Path, target_dir: Path, audio_format: st
                 metadata_array[i] = (row['subclass'], row['track_name'], i)
                 try:
                     data, _ = librosa.load(row['file_path'], sr=target_sr, mono=True)
-                    audio_data_dset[i] = data.astype('float32')
+                    
+                    # 🎯 FIX: Validazione e pulizia immediata dei dati raw
+                    if np.isnan(data).any():
+                        logging.warning(f"NaN rilevati in {row['file_path']}. Pulizia in corso...")
+                        data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
+                    
+                    audio_data_dset[i, :len(data)] = data.astype('float32')
                 except Exception as e:
                     logging.error(f"Errore su {row['file_path']}: {e}")
 

@@ -188,7 +188,7 @@ def spectrogram_n_octaveband_generator_gpu(wav_batch, sampling_rate, n_octave=3,
         for s in range(sos_tensor.shape[1]):
             b = sos_chunk[:, s, :3]
             a = sos_chunk[:, s, 3:]
-            x_chunk = F.lfilter(x_chunk, a, b, clamp=False)
+            x_chunk = F.lfilter(x_chunk, a, b, clamp=True)
         
         filtered_results.append(x_chunk)
         
