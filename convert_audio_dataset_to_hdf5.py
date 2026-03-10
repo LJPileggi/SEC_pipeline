@@ -93,7 +93,7 @@ if __name__ == '__main__':
     BASE_DIR = Path(f'/leonardo/home/userexternal/{user}/SEC/dataSEC/RAW_DATASET')
     TARGET_DIR = Path(f'/leonardo_scratch/large/userexternal/{user}/dataSEC/RAW_DATASET')
     if not os.path.exists(TARGET_DIR):
-        os.makedir(TARGET_DIR)
+        os.makedirs(TARGET_DIR)
     
     for fmt in ['wav', 'mp3', 'flac']:
         basedir_format = BASE_DIR / f'raw_{fmt}'
