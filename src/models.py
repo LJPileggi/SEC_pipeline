@@ -204,7 +204,8 @@ def spectrogram_n_octaveband_generator_gpu(wav_batch, sampling_rate, n_octave=3,
     rms = torch.sqrt(torch.mean(filtered**2, dim=-1))
     rms = torch.clamp(rms, min=torch.finfo(torch.float32).eps)
     
-    return 20 * torch.log10(rms / ref).permute(0, 2, 1)
+    res = 20 * torch.log10(rms / ref).permute(0, 2, 1)
+    return torch.nan_to_num(res, nan=0.0, posinf=0.0, neginf=0.0)
 
 class OriginalModel:
     """
