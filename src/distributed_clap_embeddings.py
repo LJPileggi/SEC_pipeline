@@ -162,6 +162,9 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
 
         # Transfer results back to CPU for HDF5 storage
         embeddings_cpu = embeddings.float().cpu().numpy()
+        if np.isnan(embeddings_cpu).any():
+            print(f"🚨 ALERT: NaN rilevati DOPO il modello CLAP. Li sto piallando a mano.")
+            embeddings_cpu = np.nan_to_num(embeddings_cpu, nan=0.0)
         specs_cpu = specs_gpu.float().cpu().numpy()
         stats["gpu_total"] += (time.perf_counter() - t_gpu_start)
 
