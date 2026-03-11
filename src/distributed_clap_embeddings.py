@@ -152,10 +152,10 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
                 torch.cuda.empty_cache()
             
             # Step 2: Perform CLAP Inference in Mixed Precision (FP16)
-            # with torch.cuda.amp.autocast():
-            output = audio_embedding(batch_tensor)
-            embeddings = output[0] if isinstance(output, (tuple, list)) else output
-            if embeddings.dim() > 2: embeddings = embeddings.squeeze(1)
+            with torch.cuda.amp.autocast():
+                output = audio_embedding(batch_tensor)
+                embeddings = output[0] if isinstance(output, (tuple, list)) else output
+                if embeddings.dim() > 2: embeddings = embeddings.squeeze(1)
 
         # Transfer results back to CPU for HDF5 storage
         embeddings_cpu = embeddings.float().cpu().numpy()
