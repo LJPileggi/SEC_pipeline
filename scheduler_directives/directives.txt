@@ -15,7 +15,6 @@ SCHEDULING_MODE   | parallel
 # EXECUTION LIST
 # Format: config_file | audio_format | n_octave
 # ==========================================================
-config0.yaml | wav  | 1
 config0.yaml | wav  | 3
 config0.yaml | wav  | 6
 config0.yaml | wav  | 16
