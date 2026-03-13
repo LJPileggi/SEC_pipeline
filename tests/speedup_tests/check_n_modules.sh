@@ -13,36 +13,36 @@ PYTHON_SCRIPT="$TMP_DIR/count_modules_internal.py"
 cat << 'EOF' > "$PYTHON_SCRIPT"
 import os
 import importlib
-from pathlib import Path
+import sys
 
-def count_files_and_dirs(package_name):
+def count_physical_modules(package_name):
     try:
-        spec = importlib.util.find_spec(package_name)
-        if spec is None or spec.submodule_search_locations is None:
-            return 1
+        # Importiamo la libreria solo per beccare il percorso fisico (__file__)
+        module = importlib.import_module(package_name)
+        root_path = os.path.dirname(module.__file__)
         
-        root_path = Path(spec.submodule_search_locations[0])
         count = 0
-        # Camminiamo nel filesystem senza importare nulla
-        for path in root_path.rglob('*'):
-            # Contiamo file .py (moduli) e cartelle con __init__.py (packages)
-            if path.suffix == '.py' or (path.is_dir() and (path / '__init__.py').exists()):
-                count += 1
+        # Scansioniamo fisicamente la cartella della libreria
+        for root, dirs, files in os.walk(root_path):
+            for file in files:
+                # Contiamo ogni file .py come un modulo/sottomodulo
+                if file.endswith('.py'):
+                    count += 1
         return count
-    except Exception:
-        return None
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 libraries = [
     'h5py', 'librosa', 'msclap', 'numpy', 
     'pandas', 'scipy', 'soundfile', 'transformers', 'torch'
 ]
 
-print(f"{'Library':<15} | {'Physical Modules Count':<25}")
+print(f"{'Library':<15} | {'Physical Python Files':<25}")
 print("-" * 45)
 
 for lib in libraries:
-    count = count_files_and_dirs(lib)
-    print(f"{lib:<15} | {count if count else 'Error/Not Found':<25}")
+    count = count_physical_modules(lib)
+    print(f"{lib:<15} | {count:<25}")
 EOF
 
 echo "Running module count inside SIF..."
