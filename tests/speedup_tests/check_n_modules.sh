@@ -1,6 +1,11 @@
 #!/bin/bash
 
-TMP_DIR="./.tmp"
+MY_USER=$(whoami)
+BASE_DIR="/leonardo_scratch/large/userexternal/${MY_USER}"
+PROJECT_DIR="${BASE_DIR}/SEC_pipeline"
+TMP_DIR="${PROJECT_DIR}/.tmp"
+SIF="${PROJECT_DIR}/.containers/clap_pipeline.sif"
+
 mkdir -p "$TMP_DIR"
 
 PYTHON_SCRIPT="$TMP_DIR/count_modules_internal.py"
@@ -40,7 +45,10 @@ for lib in libraries:
 EOF
 
 echo "Running module count inside SIF..."
-python3 "$PYTHON_SCRIPT"
+singularity exec --no-home \
+    --bind "/leonardo_scratch:/leonardo_scratch" \
+    "$SIF" \
+    python3 "$PYTHON_SCRIPT"
 
 rm -rf "$TMP_DIR"
 echo "Done. Temporary files removed."
