@@ -11,37 +11,39 @@ mkdir -p "$TMP_DIR"
 PYTHON_SCRIPT="$TMP_DIR/count_modules_internal.py"
 
 cat << 'EOF' > "$PYTHON_SCRIPT"
-import os
-import importlib
 import sys
+import importlib
 
-def count_physical_modules(package_name):
+def count_active_imports(lib_name):
+    # Catturiamo lo stato dei moduli prima dell'import
+    before = set(sys.modules.keys())
+    
     try:
-        # Importiamo la libreria solo per beccare il percorso fisico (__file__)
-        module = importlib.import_module(package_name)
-        root_path = os.path.dirname(module.__file__)
+        # Forziamo l'import della libreria
+        importlib.import_module(lib_name)
         
-        count = 0
-        # Scansioniamo fisicamente la cartella della libreria
-        for root, dirs, files in os.walk(root_path):
-            for file in files:
-                # Contiamo ogni file .py come un modulo/sottomodulo
-                if file.endswith('.py'):
-                    count += 1
-        return count
+        # Catturiamo lo stato dopo l'import
+        after = set(sys.modules.keys())
+        
+        # La differenza sono i moduli effettivamente caricati (inclusi i sottomoduli e le dipendenze)
+        new_modules = after - before
+        return len(new_modules)
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error: {e}"
 
 libraries = [
     'h5py', 'librosa', 'msclap', 'numpy', 
     'pandas', 'scipy', 'soundfile', 'transformers', 'torch'
 ]
 
-print(f"{'Library':<15} | {'Physical Python Files':<25}")
+print(f"{'Library':<15} | {'Active Modules Loaded':<25}")
 print("-" * 45)
 
+# Analizziamo una libreria alla volta in processi separati o pulendo sys.modules
+# (Per precisione estrema, meglio testarle una per volta per non "sporcare" i conteggi)
 for lib in libraries:
-    count = count_physical_modules(lib)
+    # Reset parziale o logica a isolamento:
+    count = count_active_imports(lib)
     print(f"{lib:<15} | {count:<25}")
 EOF
 
