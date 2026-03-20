@@ -19,23 +19,13 @@ def impute_nans_with_class_centroids(X, y, num_classes):
         if not class_mask.any():
             continue
             
-        # Estraiamo i campioni della classe
         class_samples = X_imputed[class_mask]
-        
-        # Calcoliamo il centroide ignorando i NaN (nanmean)
-        # Se una coordinata è NaN per tutti i campioni della classe, nanmean restituisce NaN
         centroid = torch.nanmean(class_samples, dim=0)
-        
-        # Fallback di sicurezza: se il centroide ha ancora NaN, forziamo a 0
         centroid = torch.nan_to_num(centroid, nan=0.0)
         
-        # Identifichiamo dove sono i NaN nei campioni di questa classe
         nan_mask = torch.isnan(class_samples)
         if nan_mask.any():
-            # Troviamo gli indici globali dei campioni della classe
             global_indices = torch.where(class_mask)[0]
-            
-            # Per ogni campione della classe che ha dei NaN, applichiamo il centroide
             for i, idx in enumerate(global_indices):
                 sample_nan_mask = nan_mask[i]
                 if sample_nan_mask.any():
@@ -88,53 +78,58 @@ def main():
 
     for file_rel in args.batch_list:
         h5_path = os.path.join(args.local_root, file_rel)
-        
         dir_rel = os.path.dirname(file_rel).lstrip("./")
         out_dir = os.path.join(args.results_base, dir_rel)
         os.makedirs(out_dir, exist_ok=True)
         
         manager = HDF5EmbeddingDatasetsManager(h5_path, 'r')
         emb_dataset = manager.hf['embedding_dataset']
-        
-        # 1. Embeddings: conversion to float tensor is direct
         X = torch.from_numpy(emb_dataset['embeddings'][:]).float().to(device)
-        
-        # 2. Labels: mapping bytes to integer indices
-        # We need to decode bytes to utf-8 and find the index in the config classes list
         class_to_idx = {cls: i for i, cls in enumerate(classes)}
-        raw_labels = emb_dataset['classes'][:] # or 'subclasses' depending on your logic
+        raw_labels = emb_dataset['classes'][:]
         
         y_list = []
         for rl in raw_labels:
             label_str = rl.decode('utf-8') if isinstance(rl, bytes) else rl
             y_list.append(class_to_idx[label_str])
-            
         y = torch.tensor(y_list).long().to(device)
-        
-        # 3. Keys: kept as bytes for decoding during error saving
         keys = emb_dataset['ID'][:]
         manager.close()
 
-        # 🎯 APPLICAZIONE RECOVERY: Imputazione intelligente prima dell'inferenza
         print(f"🩹 Applying Centroid Imputation to {h5_path}...")
         X = impute_nans_with_class_centroids(X, y, len(classes))
 
         with torch.no_grad():
-            # X = torch.nn.functional.normalize(X, p=2, dim=1)
             logits = model(X)
             preds = torch.argmax(logits, dim=1).cpu().numpy()
             y_true = y.cpu().numpy()
 
-        # Calcolo metriche con bias F0.5
+        # Global metrics
         acc = accuracy_score(y_true, preds)
-        p, r, f05, _ = precision_recall_fscore_support(y_true, preds, average='macro', beta=0.5)
+        p, r, f05, _ = precision_recall_fscore_support(y_true, preds, average='macro', beta=0.5, zero_division=0)
+        
+        # Per-class metrics
+        p_class, r_class, f05_class, support = precision_recall_fscore_support(
+            y_true, preds, average=None, beta=0.5, labels=np.arange(len(classes)), zero_division=0
+        )
+        
         cm = confusion_matrix(y_true, preds)
 
-        # 1. Salvataggio metriche
+        # 1. Save Global Metrics
         pd.DataFrame([{"accuracy": acc, "precision": p, "recall": r, "f05": f05}]).to_csv(
             os.path.join(out_dir, "assessment_metrics.csv"), index=False)
+            
+        # 2. Save Per-Class Metrics (Accuracy per class = Recall)
+        pd.DataFrame({
+            "class": classes,
+            "accuracy": r_class, 
+            "precision": p_class,
+            "recall": r_class,
+            "f05": f05_class,
+            "support": support
+        }).to_csv(os.path.join(out_dir, "per_class_metrics.csv"), index=False)
 
-        # 2. Explainability: Salvataggio chiavi degli errori
+        # 3. Explainability
         mis_mask = preds != y_true
         pd.DataFrame({
             "key": [k.decode('utf-8') for k in keys[mis_mask]],
@@ -142,7 +137,7 @@ def main():
             "pred": [classes[i] for i in preds[mis_mask]]
         }).to_csv(os.path.join(out_dir, "misclassified_keys.csv"), index=False)
 
-        # 3. Plot Confusion Matrix nello stile richiesto
+        # 4. Plot CM
         plot_cm(cm, classes, os.path.join(out_dir, "confusion_matrix.png"), 
                 f"Assessment: {dir_rel} | F0.5: {f05:.4f}")
 
