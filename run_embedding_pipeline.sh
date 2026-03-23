@@ -119,6 +119,8 @@ export PYTHONUNBUFFERED=1
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 export MASTER_ADDR=\$(hostname)
 export MASTER_PORT=\$(expr 20000 + \${SLURM_JOB_ID} % 10000)
+# Set to "True" to bypass internal CLAP Mel extraction
+export INJECT_OCTAVE="True"
 
 srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \\
     singularity exec --nv --no-home --bind "/leonardo_scratch:/leonardo_scratch" --bind "\$TEMP_DIR:/tmp_data" \\
@@ -181,6 +183,8 @@ run_local() {
     export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
     export PYTHONUNBUFFERED=1
     export PYTORCH_ALLOC_CONF=expandable_segments:True
+    # Set to "True" to bypass internal CLAP Mel extraction
+    export INJECT_OCTAVE="True"
 
     echo "🚀 Running local worker..."
     singularity exec --nv --no-home --bind "/leonardo_scratch:/leonardo_scratch" --bind "$TEMP_DIR:/tmp_data" \
