@@ -48,12 +48,27 @@ def universal_path_redirect(*args, **kwargs):
     returns:
      - str: The local path to the model weights.
     """
-    local_path = os.environ.get("MSCLAP_LOCAL_MODEL_PATH")
-    if VERBOSE:
-        print(f"DEBUG: Redirecting model path to {local_path}")
-    return local_path
+    rank = os.environ.get('SLURM_PROCID', '0')
+    weights_path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
+    text_path = os.getenv("CLAP_TEXT_ENCODER_PATH")
 
-# Applying path redirects - DO NOT TOUCH, ALREADY WORKING
+    # Redirect MSCLAP weights specifically
+    if any(x for x in args if 'msclap' in str(x)) or 'CLAP_weights' in str(kwargs):
+        return weights_path
+
+    # Redirect general HuggingFace/Transformers files (like RoBERTa config/vocab)
+    filename = kwargs.get('filename') or (args[1] if len(args) > 1 else None)
+    
+    if filename and text_path:
+        forced_target = os.path.join(text_path, str(filename))
+        # Log patch operations only if diagnostic VERBOSE is active
+        if VERBOSE:
+            print(f"🎯 [Rank {rank}] FIREWALL REDIRECT: {filename} -> {forced_target}", flush=True)
+        return forced_target
+
+    return text_path
+
+# Applying path redirects
 huggingface_hub.hf_hub_download = universal_path_redirect
 transformers.utils.hub.cached_file = universal_path_redirect
 transformers.utils.hub.hf_hub_download = universal_path_redirect
@@ -97,10 +112,13 @@ def parsing():
     """
     Parses command-line arguments for the pipeline.
     """
-    parser = argparse.ArgumentParser(description="CLAP Embedding Pipeline")
-    parser.add_argument('--config_file', type=str, default='config0.yaml')
-    parser.add_argument('--n_octave', type=int, required=True)
-    parser.add_argument('--audio_format', type=str, default='wav')
+    parser = argparse.ArgumentParser(description='Get CLAP embeddings from audio files')
+    parser.add_argument('--config_file', metavar='config_file', dest='config_file',
+            help='config file to load to get model and training params.')
+    parser.add_argument('--n_octave', metavar='n_octave', dest='n_octave', type=int,
+            help='octaveband split for the spectrograms.')
+    parser.add_argument('--audio_format', metavar='audio_format', dest='audio_format',
+            help='audio format to embed; choose between \'wav\', \'mp3\', \'flac\'.')
     
     parser.set_defaults(config_file='config0.yaml')
     parser.set_defaults(audio_format='wav')
