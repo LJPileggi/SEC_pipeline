@@ -75,45 +75,40 @@ transformers.utils.hub.hf_hub_download = universal_path_redirect
 msclap.CLAPWrapper.hf_hub_download = universal_path_redirect
 
 # ==============================================================================
-# 💉 NEW PATCH: AUDIO ENCODER CLASS INJECTION
+# 💉 NEW PATCH: AUDIO ENCODER CLASS INJECTION (Targeting HTSAT_N_Level)
 # ==============================================================================
 if INJECT_OCTAVE:
     try:
-        from msclap.models.htsat import HTSAT
+        # Based on actual msclap source code hierarchy
+        from msclap.models.htsat import HTSAT_N_Level
         
         def patched_forward(self, x):
             """
-            Fixed Monkey Patch based on traceback analysis.
-            HTSAT in msclap has an internal htsat attribute or 
-            logic that calls spectrogram_extractor.
+            Monkey patch for the HTSAT_N_Level forward method.
+            If x is a 4D tensor [B, 1, T, 64], we bypass the 
+            spectrogram_extractor (line 849) and call the backbone directly.
             """
-            # If x is our custom Mel [B, 1, T, 64], we must SKIP spectrogram_extractor
+            # Check if input is our pre-computed Mel spectrogram
             if isinstance(x, torch.Tensor) and x.ndim == 4:
-                # We bypass the spectral extraction (line 849) 
-                # and go straight to the spatial/transformer layers.
-                # In HTSAT, this usually means calling the blocks after extraction.
-                # To do this safely, we mimic what happens AFTER line 849:
-                
-                # Based on HTSAT source, after extraction x is (B, 1, T, F)
-                # We skip: x = self.spectrogram_extractor(x)
-                # We skip: x = self.logmel_extractor(x)
-                
-                # We pass x directly to the backbone
-                # Depending on the version, it might be self.htsat(x) or similar
-                # Let's use the internal logic that processes the feature map:
+                # We skip line 849 (spectrogram_extractor) and 
+                # line 850 (logmel_extractor).
+                # We jump directly to the transformer/convolutions layers.
                 return self.forward_features(x)
             
-            # Standard path for raw audio
+            # Standard path for 1D audio waveforms
             return self.original_forward(x)
 
-        if not hasattr(HTSAT, 'original_forward'):
-            HTSAT.original_forward = HTSAT.forward
-            HTSAT.forward = patched_forward
+        # Apply the patch to the core engine class
+        if not hasattr(HTSAT_N_Level, 'original_forward'):
+            HTSAT_N_Level.original_forward = HTSAT_N_Level.forward
+            HTSAT_N_Level.forward = patched_forward
             
         if VERBOSE:
-            print("💉 MSCLAP PATCH FIXED: HTSAT bypassed spectrogram_extractor.")
-    except (ImportError, AttributeError):
-        pass
+            print("💉 MSCLAP PATCH: HTSAT_N_Level 'forward' successfully bypassed.")
+            
+    except ImportError:
+        if VERBOSE:
+            print("⚠️ WARNING: Could not find HTSAT_N_Level in msclap.models.htsat.")
 # ==============================================================================
 
 def parsing():
