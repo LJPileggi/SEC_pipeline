@@ -1,5 +1,6 @@
 import os
 import torch
+import torch.nn.functional as F
 import numpy as np
 import scipy
 
@@ -206,6 +207,49 @@ def spectrogram_n_octaveband_generator_gpu(wav_batch, sampling_rate, n_octave=3,
     
     res = 20 * torch.log10(rms / ref).permute(0, 2, 1)
     return torch.nan_to_num(res, nan=0.0, posinf=0.0, neginf=0.0)
+
+def convert_octave_to_msclap_mel(spectrogram_gpu, target_mels=64):
+    """
+    Converts an n-octave band spectrogram (Batch, Time, Octave_Bins) 
+    into a Log-Mel spectrogram (Batch, 1, Time, 64) compatible with the 
+    HTS-AT audio encoder used in msclap.
+    
+    args:
+     - spectrogram_gpu (torch.Tensor): Pre-calculated octave spectrogram on GPU [B, T, F_oct].
+     - target_mels (int): Number of Mel bins expected by HTS-AT (standard is 64).
+        
+    returns:
+     - torch.Tensor: Formatted tensor for the audio_encoder forward pass [B, 1, T, 64].
+    """
+    
+    # 1. Prepare tensor for spatial interpolation (B, C, T, F)
+    # HTS-AT expects frequency as the last dimension
+    x = spectrogram_gpu.unsqueeze(1) # Shape: [B, 1, T, F_octave]
+
+    # 2. Resampling to target Mel resolution
+    # Bilinear interpolation acts as a high-fidelity sampler when 
+    # starting from high-resolution (e.g., 1/32 octave) inputs.
+    x_mel = F.interpolate(
+        x, 
+        size=(x.shape[2], target_mels), 
+        mode='bilinear', 
+        align_corners=False
+    )
+
+    # 3. Logarithmic Compression
+    # HTS-AT operates on Log-Mel scale. We use a 1e-6 epsilon to 
+    # maintain numerical stability and match standard PANNs/CLAP pipelines.
+    x_log_mel = torch.log(torch.clamp(x_mel, min=1e-6))
+
+    # 4. Instance-based Normalization
+    # We normalize each spectrogram to zero mean and unit variance.
+    # This step is vital to keep the input within the distribution 
+    # expected by the frozen Transformer weights.
+    mean = x_log_mel.mean(dim=(2, 3), keepdim=True)
+    std = x_log_mel.std(dim=(2, 3), keepdim=True)
+    x_norm = (x_log_mel - mean) / (std + 1e-6)
+
+    return x_norm
 
 class OriginalModel:
     """

@@ -13,7 +13,8 @@ import logging
 import traceback
 import json
 
-from .models import CLAP_initializer, spectrogram_n_octaveband_generator, spectrogram_n_octaveband_generator_gpu
+from .models import CLAP_initializer, spectrogram_n_octaveband_generator, \
+    spectrogram_n_octaveband_generator_gpu, convert_octave_to_msclap_mel
 from .utils import *
 from .dirs_config import *
 
@@ -26,6 +27,7 @@ os.environ["NUMEXPR_NUM_THREADS"] = "1"
 # 🎯 PRODUCTION GLOBAL VARIABLE
 # Reads from environment to toggle detailed diagnostic prints
 VERBOSE = os.environ.get("VERBOSE", "False").lower() == "true"
+INJECT_OCTAVE = os.environ.get("INJECT_OCTAVE", "False").lower() == "true"
 
 def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class_to_process, cut_secs, n_octave, config, audio_dataset_manager=None):
     """
@@ -154,13 +156,23 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
             # Step 2: Perform CLAP Inference in Mixed Precision (FP16)
             # with torch.cuda.amp.autocast():
             with torch.no_grad():
-                # add infinitesimal noise to prevent inner divisions by zero
-                batch_tensor = batch_tensor.to(torch.float32)
-                batch_tensor = batch_tensor + torch.randn_like(batch_tensor) * 1e-6
-                batch_tensor = torch.nan_to_num(batch_tensor, nan=0.0)
-                output = audio_embedding(batch_tensor)
-                embeddings = output[0] if isinstance(output, (tuple, list)) else output
-                if embeddings.dim() > 2: embeddings = embeddings.squeeze(1)
+                if INJECT_OCTAVE:
+                    # 1. Convert the custom octave spectrogram to Log-Mel format compatible with HTS-AT
+                    # The conversion is performed on GPU using the already generated spectrogram_gpu
+                    mel_input = convert_octave_to_msclap_mel(spectrogram_gpu)
+                
+                    # 2. Extract embeddings by calling the audio encoder directly
+                    # Thanks to the monkey patch in get_clap_embeddings.py, the encoder 
+                    # accepts the 4D tensor [B, 1, T, 64] and bypasses internal STFT
+                    embeddings = audio_embedding(mel_input)
+                else:
+                    # add infinitesimal noise to prevent inner divisions by zero
+                    batch_tensor = batch_tensor.to(torch.float32)
+                    batch_tensor = batch_tensor + torch.randn_like(batch_tensor) * 1e-6
+                    batch_tensor = torch.nan_to_num(batch_tensor, nan=0.0)
+                    output = audio_embedding(batch_tensor)
+                    embeddings = output[0] if isinstance(output, (tuple, list)) else output
+                    if embeddings.dim() > 2: embeddings = embeddings.squeeze(1)
 
         # Transfer results back to CPU for HDF5 storage
         embeddings_cpu = embeddings.float().cpu().numpy()
