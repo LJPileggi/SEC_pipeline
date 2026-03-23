@@ -159,7 +159,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
                 if INJECT_OCTAVE:
                     # 1. Convert the custom octave spectrogram to Log-Mel format compatible with HTS-AT
                     # The conversion is performed on GPU using the already generated spectrogram_gpu
-                    mel_input = convert_octave_to_msclap_mel(spectrogram_gpu)
+                    mel_input = convert_octave_to_msclap_mel(specs_gpu)
                 
                     # 2. Extract embeddings by calling the audio encoder directly
                     # Thanks to the monkey patch in get_clap_embeddings.py, the encoder 
