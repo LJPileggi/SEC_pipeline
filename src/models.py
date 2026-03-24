@@ -10,44 +10,54 @@ def CLAP_initializer(device='cpu', use_cuda=False):
     import transformers
     from msclap import CLAP
     
-    text_path = os.getenv("CLAP_TEXT_ENCODER_PATH") # Punta a /tmp_data/roberta-base
+    text_path = os.getenv("CLAP_TEXT_ENCODER_PATH") 
     rank = os.environ.get('SLURM_PROCID', '0')
+    inject_octave = os.environ.get("INJECT_OCTAVE", "False").lower() == "true"
+    verbose = os.environ.get("VERBOSE", "False").lower() == "true"
 
-    # 🎯 PATCH DI FORZA BRUTA: Sovrascriviamo AutoModel e AutoTokenizer
+    # Original methods preserved as per ground truth
     original_model_from_pretrained = transformers.AutoModel.from_pretrained
     original_tokenizer_from_pretrained = transformers.AutoTokenizer.from_pretrained
 
-    # Override per il Modello
     def forced_model_from_pretrained(pretrained_model_name_or_path, *args, **kwargs):
-        print(f"🎯 [RANK {rank}] AutoModel intercettato! Forzo caricamento da {text_path}", flush=True)
         return original_model_from_pretrained(text_path, *args, **kwargs)
 
-    # Override per il Tokenizer
     def forced_tokenizer_from_pretrained(pretrained_model_name_or_path, *args, **kwargs):
-        print(f"🎯 [RANK {rank}] AutoTokenizer intercettato! Forzo caricamento da {text_path}", flush=True)
-        # Forza la libreria a cercare solo localmente per evitare tentativi di connessione
         kwargs['local_files_only'] = True
         return original_tokenizer_from_pretrained(text_path, *args, **kwargs)
 
-    # Iniezione nei namespace globali di transformers
     transformers.AutoModel.from_pretrained = forced_model_from_pretrained
-    transformers.models.auto.AutoModel.from_pretrained = forced_model_from_pretrained
     transformers.AutoTokenizer.from_pretrained = forced_tokenizer_from_pretrained
-    transformers.models.auto.tokenization_auto.AutoTokenizer.from_pretrained = forced_tokenizer_from_pretrained
 
-    print(f"🎯 [RANK {rank}] Inizializzazione CLAP con Override Modello+Tokenizer...", flush=True)
-    
-    # Ora la chiamata interna a CLAP() troverà i metodi di transformers già dirottati
+    # Model initialization
     clap_model = CLAP(version='2023', use_cuda=use_cuda)
 
-    # Configurazione audio encoder (Logica originale)
-    original_parameters = clap_model.clap.audio_encoder.to('cpu').state_dict()
-    clap_model.clap.audio_encoder = clap_model.clap.audio_encoder.to(device)
-    audio_embedding = clap_model.clap.audio_encoder
-    for param in audio_embedding.parameters():
-        param.requires_grad = False
+    # 💉 NEW PATCH: INSTANCE-LEVEL OVERRIDE
+    # We apply the patch directly to the instance to ensure it targets the correct object
+    if inject_octave:
+        # target_instance is the internal HTSAT engine (HTSAT_N_Level)
+        target_instance = clap_model.clap.htsat 
         
-    return clap_model, audio_embedding, original_parameters
+        def patched_forward(self, x):
+            # Bypass logic: if input is 4D, jump to features processing
+            if torch.is_tensor(x) and x.ndim == 4:
+                return self.forward_features(x)
+            return self.original_forward(x)
+
+        if not hasattr(target_instance, 'original_forward'):
+            target_instance.original_forward = target_instance.forward
+            # Rebind the method to the specific instance
+            target_instance.forward = types.MethodType(patched_forward, target_instance)
+            
+        if verbose:
+            print(f"🎯 [RANK {rank}] Instance-level patch for INJECT_OCTAVE applied.", flush=True)
+
+    # Clean up AutoModel/AutoTokenizer overrides
+    transformers.AutoModel.from_pretrained = original_model_from_pretrained
+    transformers.AutoTokenizer.from_pretrained = original_tokenizer_from_pretrained
+
+    audio_embedding = clap_model.get_audio_embeddings
+    return clap_model, audio_embedding, text_path
 
 def spectrogram_n_octaveband_generator(
         wav_data: np.array,
