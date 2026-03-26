@@ -34,30 +34,34 @@ def CLAP_initializer(device='cpu', use_cuda=False):
 
     # 💉 NEW PATCH: AUDIO ENCODER INJECTION ON INSTANCE
     if inject_octave:
-        # Targeting the audio branch which contains the HTS-AT backbone
-        # According to msclap architecture, it is clap_model.clap.audio_branch
-        target_instance = clap_model.clap.audio_branch
-        
-        def patched_forward(self, x):
-            """
-            Monkey patch: if input is 4D (Mel), bypass STFT extractor.
-            """
-            # HTS-AT in MSCLAP expects (Batch, 1, Time, Freq) for direct processing
-            if torch.is_tensor(x) and x.ndim == 4:
-                # Calls forward_features directly to skip spectrogram_extractor
-                # Ensure x is in the correct format for the backbone
-                return self.forward_features(x)
+        try:
+            # Hierarchy based on official Microsoft/CLAP repository:
+            # CLAPWrapper -> .model (CLAP) -> .audio_encoder (HTSAT_Wrapper) -> .base (HTSAT) -> .htsat (HTSAT_N_Level)
+            target_instance = clap_model.model.audio_encoder.base.htsat
             
-            # Original forward handles 1D waveform -> STFT -> Mel -> Backbone
-            return self.original_forward(x)
+            def patched_forward(self, x):
+                """
+                Monkey patch for HTSAT_N_Level forward method.
+                If input is a 4D tensor (pre-computed Mel), bypass STFT extractor (line 849).
+                """
+                if torch.is_tensor(x) and x.ndim == 4:
+                    # Jump directly to feature processing, skipping line 849
+                    return self.forward_features(x)
+                
+                # Standard path for 1D audio waveforms
+                return self.original_forward(x)
 
-        if not hasattr(target_instance, 'original_forward'):
-            target_instance.original_forward = target_instance.forward
-            # Bind the patched method to this specific instance
-            target_instance.forward = types.MethodType(patched_forward, target_instance)
-            
-        if verbose:
-            print(f"🎯 [RANK {rank}] Instance-level patch for INJECT_OCTAVE applied to audio_branch.", flush=True)
+            if not hasattr(target_instance, 'original_forward'):
+                target_instance.original_forward = target_instance.forward
+                # Bind the patched method to the specific instance
+                target_instance.forward = types.MethodType(patched_forward, target_instance)
+                
+            if verbose:
+                print(f"🎯 [RANK {rank}] Successfully patched HTSAT_N_Level engine at clap_model.model.audio_encoder.base.htsat", flush=True)
+                
+        except AttributeError as e:
+            if verbose:
+                print(f"⚠️ [RANK {rank}] Patch failed: could not traverse the model hierarchy. Error: {e}", flush=True)
 
     # Clean up AutoModel/AutoTokenizer overrides
     transformers.AutoModel.from_pretrained = original_model_from_pretrained
