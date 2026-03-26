@@ -160,7 +160,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
                 if INJECT_OCTAVE:
                     # 1. Convert octave spectrogram to Log-Mel [B, 1, T, 64]
                     # Function imported from models.py
-                    mel_input = convert_octave_to_msclap_mel(spectrogram_gpu)
+                    mel_input = convert_octave_to_msclap_mel(specs_gpu)
                 
                     # 2. Directly call the audio_encoder to bypass MSCLAP wrapper logic
                     # Hierarchy: clap_model.model (CLAP) -> .audio_encoder (AudioEncoder)
