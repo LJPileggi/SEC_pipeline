@@ -35,29 +35,26 @@ def CLAP_initializer(device='cpu', use_cuda=False):
     # 💉 NEW PATCH: AUDIO ENCODER INJECTION ON INSTANCE
     if inject_octave:
         try:
-            # Hierarchy based on official Microsoft/CLAP repository:
-            # CLAPWrapper -> .model (CLAP) -> .audio_encoder (HTSAT_Wrapper) -> .base (HTSAT) -> .htsat (HTSAT_N_Level)
-            target_instance = clap_model.model.audio_encoder.base.htsat
+            target_instance = clap_model.clap.audio_encoder.base.htsat
             
             def patched_forward(self, x):
                 """
-                Monkey patch for HTSAT_N_Level forward method.
-                If input is a 4D tensor (pre-computed Mel), bypass STFT extractor (line 849).
+                Monkey patch for HTSAT_Swin_Transformer.
+                If input is 4D (Mel), skip STFT and Log-Mel extraction.
                 """
                 if torch.is_tensor(x) and x.ndim == 4:
-                    # Jump directly to feature processing, skipping line 849
                     return self.forward_features(x)
-                
-                # Standard path for 1D audio waveforms
                 return self.original_forward(x)
 
             if not hasattr(target_instance, 'original_forward'):
                 target_instance.original_forward = target_instance.forward
-                # Bind the patched method to the specific instance
                 target_instance.forward = types.MethodType(patched_forward, target_instance)
                 
             if verbose:
-                print(f"🎯 [RANK {rank}] Successfully patched HTSAT_N_Level engine at clap_model.model.audio_encoder.base.htsat", flush=True)
+                print(f"🎯 [RANK {rank}] Patch INJECT_OCTAVE applied to clap_model.clap.audio_encoder.base.htsat", flush=True)
+        except AttributeError as e:
+            if verbose:
+                print(f"⚠️ [RANK {rank}] Patch failed: {e}", flush=True)
                 
         except AttributeError as e:
             if verbose:

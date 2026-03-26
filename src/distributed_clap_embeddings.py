@@ -167,7 +167,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
                     # This bypasses torchaudio.load and uses our patched HTSAT engine
                     # AudioEncoder.forward returns a tuple: (projected_vec, classification_output)
                     # We only need the projected_vec for embeddings
-                    projected_vec, _ = clap_model.model.audio_encoder(mel_input)
+                    projected_vec, _ = clap_model.clap.audio_encoder(mel_input)
                     
                     # 3. Final Normalization
                     # Embeddings must be unit vectors for correct cosine similarity
