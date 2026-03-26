@@ -32,25 +32,32 @@ def CLAP_initializer(device='cpu', use_cuda=False):
     # Model initialization
     clap_model = CLAP(version='2023', use_cuda=use_cuda)
 
-    # 💉 NEW PATCH: INSTANCE-LEVEL OVERRIDE
-    # We apply the patch directly to the instance to ensure it targets the correct object
+    # 💉 NEW PATCH: AUDIO ENCODER INJECTION ON INSTANCE
     if inject_octave:
-        # target_instance is the internal HTSAT engine (HTSAT_N_Level)
-        target_instance = clap_model.clap.htsat 
+        # Targeting the audio branch which contains the HTS-AT backbone
+        # According to msclap architecture, it is clap_model.clap.audio_branch
+        target_instance = clap_model.clap.audio_branch
         
         def patched_forward(self, x):
-            # Bypass logic: if input is 4D, jump to features processing
+            """
+            Monkey patch: if input is 4D (Mel), bypass STFT extractor.
+            """
+            # HTS-AT in MSCLAP expects (Batch, 1, Time, Freq) for direct processing
             if torch.is_tensor(x) and x.ndim == 4:
+                # Calls forward_features directly to skip spectrogram_extractor
+                # Ensure x is in the correct format for the backbone
                 return self.forward_features(x)
+            
+            # Original forward handles 1D waveform -> STFT -> Mel -> Backbone
             return self.original_forward(x)
 
         if not hasattr(target_instance, 'original_forward'):
             target_instance.original_forward = target_instance.forward
-            # Rebind the method to the specific instance
+            # Bind the patched method to this specific instance
             target_instance.forward = types.MethodType(patched_forward, target_instance)
             
         if verbose:
-            print(f"🎯 [RANK {rank}] Instance-level patch for INJECT_OCTAVE applied.", flush=True)
+            print(f"🎯 [RANK {rank}] Instance-level patch for INJECT_OCTAVE applied to audio_branch.", flush=True)
 
     # Clean up AutoModel/AutoTokenizer overrides
     transformers.AutoModel.from_pretrained = original_model_from_pretrained
