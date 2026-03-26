@@ -5,6 +5,7 @@ import time
 import gc
 import ctypes
 import torch
+import torch.nn.functional as F
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from tqdm_multiprocess.tqdm_multiprocess import MultiProcessTqdm
@@ -157,14 +158,20 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
             # with torch.cuda.amp.autocast():
             with torch.no_grad():
                 if INJECT_OCTAVE:
-                    # 1. Convert the custom octave spectrogram to Log-Mel format compatible with HTS-AT
-                    # The conversion is performed on GPU using the already generated spectrogram_gpu
-                    mel_input = convert_octave_to_msclap_mel(specs_gpu)
+                    # 1. Convert octave spectrogram to Log-Mel [B, 1, T, 64]
+                    # Function imported from models.py
+                    mel_input = convert_octave_to_msclap_mel(spectrogram_gpu)
                 
-                    # 2. Extract embeddings by calling the audio encoder directly
-                    # Thanks to the monkey patch in get_clap_embeddings.py, the encoder 
-                    # accepts the 4D tensor [B, 1, T, 64] and bypasses internal STFT
-                    embeddings = audio_embedding(mel_input)
+                    # 2. Directly call the audio_encoder to bypass MSCLAP wrapper logic
+                    # Hierarchy: clap_model.model (CLAP) -> .audio_encoder (AudioEncoder)
+                    # This bypasses torchaudio.load and uses our patched HTSAT engine
+                    # AudioEncoder.forward returns a tuple: (projected_vec, classification_output)
+                    # We only need the projected_vec for embeddings
+                    projected_vec, _ = clap_model.model.audio_encoder(mel_input)
+                    
+                    # 3. Final Normalization
+                    # Embeddings must be unit vectors for correct cosine similarity
+                    embeddings = F.normalize(projected_vec, p=2, dim=-1)
                 else:
                     # add infinitesimal noise to prevent inner divisions by zero
                     batch_tensor = batch_tensor.to(torch.float32)
