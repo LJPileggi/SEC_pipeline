@@ -158,19 +158,22 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
             # with torch.cuda.amp.autocast():
             with torch.no_grad():
                 if INJECT_OCTAVE:
-                    # 1. Convert octave spectrogram to Log-Mel [B, 1, T, 64]
-                    # Function imported from models.py
+                    # 1. Convert octave spectrogram to Log-Mel [B, 1, T, F]
+                    # convert_octave_to_msclap_mel is in models.py
                     mel_input = convert_octave_to_msclap_mel(specs_gpu)
                 
-                    # 2. Directly call the audio_encoder to bypass MSCLAP wrapper logic
-                    # Hierarchy: clap_model.model (CLAP) -> .audio_encoder (AudioEncoder)
-                    # This bypasses torchaudio.load and uses our patched HTSAT engine
-                    # AudioEncoder.forward returns a tuple: (projected_vec, classification_output)
-                    # We only need the projected_vec for embeddings
-                    projected_vec, _ = clap_model.clap.audio_encoder(mel_input)
+                    # 2. INTERNAL CLAP PREPROCESSING
+                    # We use the existing 'reshape_wav2img' method from the HTSAT instance.
+                    # This ensures the tensor is correctly interpolated to 256x256 and 
+                    # permuted as expected by the Swin Transformer backbone.
+                    # Hierarchy: clap_model.clap.audio_encoder.base.htsat is the HTSAT_Swin_Transformer
+                    x_ready = clap_model.clap.audio_encoder.base.htsat.reshape_wav2img(mel_input)
                     
-                    # 3. Final Normalization
-                    # Embeddings must be unit vectors for correct cosine similarity
+                    # 3. Direct inference through the patched audio_encoder
+                    # The patch in models.py will catch this call and skip the STFT/Log-Mel
+                    projected_vec, _ = clap_model.clap.audio_encoder(x_ready)
+                    
+                    # 4. Final L2 Normalization
                     embeddings = F.normalize(projected_vec, p=2, dim=-1)
                 else:
                     # add infinitesimal noise to prevent inner divisions by zero
