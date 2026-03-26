@@ -9,6 +9,7 @@ from .losses import build_optimizer, get_scores
 def CLAP_initializer(device='cpu', use_cuda=False):
     import transformers
     from msclap import CLAP
+    import types
     
     text_path = os.getenv("CLAP_TEXT_ENCODER_PATH") 
     rank = os.environ.get('SLURM_PROCID', '0')
