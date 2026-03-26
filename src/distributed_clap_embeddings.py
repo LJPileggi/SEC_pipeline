@@ -159,18 +159,26 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
             with torch.no_grad():
                 if INJECT_OCTAVE:
                     # 1. Convert octave spectrogram to Log-Mel [B, 1, T, F]
-                    # convert_octave_to_msclap_mel is in models.py
+                    # convert_octave_to_msclap_mel uses specs_gpu
                     mel_input = convert_octave_to_msclap_mel(specs_gpu)
                 
+                    # 🎯 ENSURE DEVICE COHERENCE
+                    # We must ensure the tensor is on the same device as the model weights
+                    # 'device' is the variable passed to the worker (e.g., 'cuda:3')
+                    mel_input = mel_input.to(device)
+                
                     # 2. INTERNAL CLAP PREPROCESSING
-                    # We use the existing 'reshape_wav2img' method from the HTSAT instance.
-                    # This ensures the tensor is correctly interpolated to 256x256 and 
-                    # permuted as expected by the Swin Transformer backbone.
-                    # Hierarchy: clap_model.clap.audio_encoder.base.htsat is the HTSAT_Swin_Transformer
+                    # reshape_wav2img performs interpolation and permutation
+                    # We call it from the htsat instance
                     x_ready = clap_model.clap.audio_encoder.base.htsat.reshape_wav2img(mel_input)
                     
+                    # 🎯 DOUBLE CHECK MODEL DEVICE
+                    # Force the encoder to the correct device just before inference
+                    # to prevent the 'cuda:0' vs 'cuda:X' conflict
+                    clap_model.clap.audio_encoder.to(device)
+                    
                     # 3. Direct inference through the patched audio_encoder
-                    # The patch in models.py will catch this call and skip the STFT/Log-Mel
+                    # This returns (projected_vec, classification_output)
                     projected_vec, _ = clap_model.clap.audio_encoder(x_ready)
                     
                     # 4. Final L2 Normalization
