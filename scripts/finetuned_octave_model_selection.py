@@ -73,8 +73,10 @@ def main():
     
     for file_rel in args.batch_list:
         h5_path = os.path.join(args.local_root, file_rel)
+        cut_secs_path = os.path.split(h5_path)[0]
         dir_rel = os.path.dirname(file_rel).lstrip("./")
-        dataloaders, classes = load_single_cut_secs_dataloaders(h5_path, args.cut_secs, 1024, device)
+        dataloaders, classes = load_single_cut_secs_dataloaders(os.path.split(cut_secs_path)[0],
+                                                  os.path.split(cut_secs_path)[1], 1024, device)
         model = train(dataloaders['train'], dataloaders['es'], optim_config, epochs, patience, device=device,
                                                   classes=classes, pretrained_path=args.model_path)
         out_dir = os.path.join(args.results_base, dir_rel)
