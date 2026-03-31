@@ -3,7 +3,7 @@ from sklearn.metrics import accuracy_score, precision_recall_fscore_support, con
 
 sys.path.insert(0, '/app')
 from src.utils import HDF5EmbeddingDatasetsManager, get_config_from_yaml, load_single_cut_secs_dataloaders
-from src.models import FinetunedModel
+from src.models import FinetunedModel, train
 
 # ==============================================================================
 # 🎯 RECOVERY STRATEGY: Class-Wise Centroid Imputation
