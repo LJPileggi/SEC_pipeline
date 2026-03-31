@@ -69,7 +69,14 @@ def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     config_data = get_config_from_yaml(args.config_path)
-    classes = config_data[0] 
+    classes = config_data[0]
+    optim_config = {
+        "optimizer" : {
+            "builder" : "Adam",
+            "lr" : 0.01
+        }
+    }
+
     
     for file_rel in args.batch_list:
         h5_path = os.path.join(args.local_root, file_rel)
