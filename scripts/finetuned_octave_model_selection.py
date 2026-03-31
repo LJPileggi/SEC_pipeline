@@ -75,7 +75,7 @@ def main():
         h5_path = os.path.join(args.local_root, file_rel)
         cut_secs_path = os.path.split(h5_path)[0]
         dir_rel = os.path.dirname(file_rel).lstrip("./")
-        print(os.path.split(cut_secs_path))
+        print(h5_path)
         dataloaders, classes = load_single_cut_secs_dataloaders(os.path.split(cut_secs_path)[0],
                                                   os.path.split(cut_secs_path)[1], 1024, device)
         model = train(dataloaders['train'], dataloaders['es'], optim_config, epochs, patience, device=device,
