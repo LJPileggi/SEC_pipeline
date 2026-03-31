@@ -68,9 +68,8 @@ def main():
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
-    _, patience, epochs, batch_size, _, _, _, _, _, _, _ = get_config_from_yaml(args.config_path)
-    classes = config_data[0] 
-    
+    classes, patience, epochs, batch_size, _, _, _, _, _, _, _ = get_config_from_yaml(args.config_path)
+
     model = FinetunedModel(classes, device=device)
     state_dict = torch.load(args.model_path, map_location=device)
     model.load_state_dict(state_dict)
