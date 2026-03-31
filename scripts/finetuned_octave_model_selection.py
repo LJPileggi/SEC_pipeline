@@ -68,7 +68,7 @@ def main():
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
-    config_data = get_config_from_yaml(args.config_path)
+    _, patience, epochs, batch_size, _, _, _, _, _, _, _ = get_config_from_yaml(args.config_path)
     classes = config_data[0]
     optim_config = {
         "optimizer" : {
