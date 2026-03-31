@@ -98,7 +98,7 @@ while [ $CURRENT_IDX -lt $TOTAL_FILES ]; do
         cp "$FILE_ABS_VALID" "$L_TMP/embeddings/$FILE_REL_VALID"
         cp "$FILE_ABS_ES" "$L_TMP/embeddings/$FILE_REL_ES"
         
-        CURRENT_BATCH+=("$FILE_RELVALID")
+        CURRENT_BATCH+=("$FILE_REL_VALID")
         BATCH_SIZE_MB=$((BATCH_SIZE_MB + FILE_SIZE_MB))
         CURRENT_IDX=$((CURRENT_IDX + 1))
     done
