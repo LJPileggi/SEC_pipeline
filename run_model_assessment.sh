@@ -37,7 +37,9 @@ mkdir -p "$L_TMP/embeddings"
 
 # --- 3. PREPARE TASK LIST ---
 cd "${EMB_BASE}"
-mapfile -t H5_LIST < <(find . -path "*/7_secs/combined_valid.h5")
+mapfile -t H5_TRAIN_LIST < <(find . -path "*/7_secs/combined_train.h5")
+mapfile -t H5_VALID_LIST < <(find . -path "*/7_secs/combined_valid.h5")
+mapfile -t H5_ES_LIST < <(find . -path "*/7_secs/combined_es.h5")
 cd "$PROJECT_DIR"
 
 # --- 4. CREATE TEMPORARY AGGREGATOR SCRIPT IN .tmp ---
@@ -70,7 +72,7 @@ if __name__ == "__main__":
 EOF
 
 # --- 5. EXECUTION LOOP WITH QUEUE LOGIC ---
-TOTAL_FILES=${#H5_LIST[@]}
+TOTAL_FILES=${#H5_TRAIN_LIST[@]}
 CURRENT_IDX=0
 
 while [ $CURRENT_IDX -lt $TOTAL_FILES ]; do
@@ -78,27 +80,33 @@ while [ $CURRENT_IDX -lt $TOTAL_FILES ]; do
     CURRENT_BATCH=()
     
     while [ $CURRENT_IDX -lt $TOTAL_FILES ]; do
-        FILE_REL=${H5_LIST[$CURRENT_IDX]}
-        FILE_ABS="${EMB_BASE}/${FILE_REL}"
-        FILE_SIZE_MB=$(( $(du -m "$FILE_ABS" | cut -f1) ))
+        FILE_REL_TRAIN=${H5_TRAIN_LIST[$CURRENT_IDX]}
+        FILE_ABS_TRAIN="${EMB_BASE}/${FILE_REL_TRAIN}"
+        FILE_REL_VALID=${H5_VALID_LIST[$CURRENT_IDX]}
+        FILE_ABS_VALID="${EMB_BASE}/${FILE_REL_VALID}"
+        FILE_REL_ES=${H5_ES_LIST[$CURRENT_IDX]}
+        FILE_ABS_ES="${EMB_BASE}/${FILE_REL_ES}"
+        FILE_SIZE_MB=$(( $(du -m "$FILE_ABS_TRAIN" | cut -f1) + $(du -m "$FILE_ABS_VALID" | cut -f1) + $(du -m "$FILE_ABS_ES" | cut -f1) ))
         
         if [ $((BATCH_SIZE_MB + FILE_SIZE_MB)) -gt $MEM_THRESHOLD_MB ] && [ ${#CURRENT_BATCH[@]} -gt 0 ]; then
             break
         fi
         
-        DIR_REL=$(dirname "$FILE_REL")
+        DIR_REL=$(dirname "$FILE_REL_VALID")
         mkdir -p "$L_TMP/embeddings/$DIR_REL"
-        cp "$FILE_ABS" "$L_TMP/embeddings/$FILE_REL"
+        cp "$FILE_ABS_TRAIN" "$L_TMP/embeddings/$FILE_REL_TRAIN"
+        cp "$FILE_ABS_VALID" "$L_TMP/embeddings/$FILE_REL_VALID"
+        cp "$FILE_ABS_ES" "$L_TMP/embeddings/$FILE_REL_ES"
         
-        CURRENT_BATCH+=("$FILE_REL")
+        CURRENT_BATCH+=("$FILE_RELVALID")
         BATCH_SIZE_MB=$((BATCH_SIZE_MB + FILE_SIZE_MB))
         CURRENT_IDX=$((CURRENT_IDX + 1))
     done
     
     echo "🚀 Processing batch of ${#CURRENT_BATCH[@]} files..."
     
-    for FILE_REL in "${CURRENT_BATCH[@]}"; do
-        echo "📊 Assessing: $FILE_REL"
+    for FILE_REL_VALID in "${CURRENT_BATCH[@]}"; do
+        echo "📊 Assessing: $FILE_REL_VALID"
         
         singularity exec --nv --no-home \
             --bind "$PROJECT_DIR:/app" \
@@ -110,7 +118,7 @@ while [ $CURRENT_IDX -lt $TOTAL_FILES ]; do
                 --model_path "$MODEL_WEIGHTS" \
                 --results_base "$RESULTS_BASE" \
                 --config_path "/app/configs/config0.yaml" \
-                --batch_list "$FILE_REL"
+                --batch_list "$FILE_REL_VALID"
     done
 
     rm -rf "$L_TMP/embeddings/*"
