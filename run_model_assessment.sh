@@ -46,34 +46,35 @@ cd "$PROJECT_DIR"
 cat << 'EOF' > "${TMP_DIR}/metrics_aggregator.py"
 import os, sys, pandas as pd, glob
 def aggregate(results_base):
-    # Cerchiamo assessment_metrics.csv (assessment) o selection_metrics.csv (selection)
-    files = glob.glob(os.path.join(results_base, "**", "*metrics.csv"), recursive=True)
+    files = glob.glob(os.path.join(results_base, "**", "assessment_metrics.csv"), recursive=True)
     all_res = []
+    
     for f in files:
-        if "GLOBAL_ASSESSMENT_REPORT" in f: continue
-        # Il path relativo ci serve per estrarre formato e ottave
         rel_path = os.path.relpath(f, results_base)
         parts = rel_path.split(os.sep)
+        
         if len(parts) >= 4:
             df = pd.read_csv(f)
+            cols_to_keep = ['accuracy', 'precision', 'recall', 'f05']
+            df = df[[c for c in df.columns if c in cols_to_keep]]
+            
             df['format'] = parts[0]
             df['n_octaves'] = parts[1]
             df['cut_secs'] = parts[2]
             all_res.append(df)
     
     if not all_res: 
-        print("⚠️ No metrics files found for aggregation.")
+        print("⚠️ No global metrics files found.")
         return
         
     final_df = pd.concat(all_res).sort_values(by='f05', ascending=False)
     final_df.to_csv(os.path.join(results_base, "GLOBAL_ASSESSMENT_REPORT.csv"), index=False)
-    print("\n🏆 Top 5 Combinations (Ranked by F0.5):")
-    print(final_df.head(5).to_string(index=False))
+    print("\n🏆 GLOBAL REPORT (Ranked by F0.5):")
+    print(final_df.to_string(index=False))
 
 if __name__ == "__main__":
     aggregate(sys.argv[1])
 EOF
-
 # --- 5. EXECUTION LOOP WITH QUEUE LOGIC ---
 TOTAL_FILES=${#H5_TRAIN_LIST[@]}
 CURRENT_IDX=0
