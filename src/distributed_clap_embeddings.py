@@ -189,6 +189,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
                     batch_tensor = batch_tensor + torch.randn_like(batch_tensor) * 1e-6
                     batch_tensor = torch.nan_to_num(batch_tensor, nan=0.0)
                     # output = audio_embedding(batch_tensor)
+                    clap_model.clap.audio_encoder.to(device)
                     output = clap_model.clap.audio_encoder(batch_tensor)
                     embeddings = output[0] if isinstance(output, (tuple, list)) else output
                     if embeddings.dim() > 2: embeddings = embeddings.squeeze(1)
