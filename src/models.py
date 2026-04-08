@@ -227,43 +227,61 @@ def spectrogram_n_octaveband_generator_gpu(wav_batch, sampling_rate, n_octave=3,
     res = 20 * torch.log10(rms / ref).permute(0, 2, 1)
     return torch.nan_to_num(res, nan=0.0, posinf=0.0, neginf=0.0)
 
-def convert_octave_to_msclap_mel(spectrogram_gpu, target_mels=64):
+def get_octave_to_mel_transition_matrix(n_octave, n_mels=64, sample_rate=52000, device='cuda'):
     """
-    Converts an n-octave band spectrogram (Batch, Time, Octave_Bins) 
-    into a Log-Mel spectrogram (Batch, 1, Time, 64) compatible with the 
-    HTS-AT audio encoder used in msclap.
+    Pre-computes the transition matrix W [n_bands x n_mels] for energy projection.
+    """
+    nyquist = sample_rate / 2.0
+    f_ref, f_min, f_max = 1000.0, 20.0, nyquist
+    
+    # Octave center frequencies calculation (matches the generator logic)
+    n_min = int(np.round(n_octave * np.log2(f_min / f_ref)))
+    n_max = int(np.round(n_octave * np.log2(f_max / f_ref)))
+    n_indices = np.arange(n_min, n_max + 1)
+    c_freqs = f_ref * (2**(n_indices / n_octave))
+    c_freqs = c_freqs[c_freqs < f_max - 50.0]
+    
+    # Mel filterbank generation
+    n_fft = 16384 
+    mel_basis = librosa.filters.mel(sr=sample_rate, n_fft=n_fft, n_mels=n_mels)
+    fft_freqs = librosa.fft_frequencies(sr=sample_rate, n_fft=n_fft)
+
+    W = np.zeros((len(c_freqs), n_mels))
+    for i, f_c in enumerate(c_freqs):
+        # Sample the Mel triangles at the octave center frequencies
+        bin_idx = np.abs(fft_freqs - f_c).argmin()
+        W[i, :] = mel_basis[:, bin_idx]
+
+    # Energy conservation normalization (Unit Area)
+    row_sums = W.sum(axis=1)
+    W[row_sums > 0] = W[row_sums > 0] / row_sums[row_sums > 0][:, np.newaxis]
+
+    return torch.from_numpy(W).float().to(device)
+
+def convert_octave_to_msclap_mel(spectrogram_gpu, W_matrix):
+    """
+    Converts octave spectrogram to MS-CLAP Mel scale using a pre-computed 
+    transition matrix.
     
     args:
-     - spectrogram_gpu (torch.Tensor): Pre-calculated octave spectrogram on GPU [B, T, F_oct].
-     - target_mels (int): Number of Mel bins expected by HTS-AT (standard is 64).
+     - spectrogram_gpu (torch.Tensor): [B, T, F_oct].
+     - W_matrix (torch.Tensor): Pre-computed transition matrix [F_oct x 64].
         
     returns:
-     - torch.Tensor: Formatted tensor for the audio_encoder forward pass [B, 1, T, 64].
+     - torch.Tensor: Formatted for HTS-AT [B, 1, T, 64].
     """
-    
-    # 1. Prepare tensor for spatial interpolation (B, C, T, F)
-    # HTS-AT expects frequency as the last dimension
-    x = spectrogram_gpu.unsqueeze(1) # Shape: [B, 1, T, F_octave]
+    # 1. Energy Projection via Matrix Multiplication
+    # [B, T, F_octave] @ [F_octave, 64] -> [B, T, 64]
+    x_mel = torch.matmul(spectrogram_gpu, W_matrix)
 
-    # 2. Resampling to target Mel resolution
-    # Bilinear interpolation acts as a high-fidelity sampler when 
-    # starting from high-resolution (e.g., 1/32 octave) inputs.
-    x_mel = F.interpolate(
-        x, 
-        size=(x.shape[2], target_mels), 
-        mode='bilinear', 
-        align_corners=False
-    )
+    # 2. Shape Formatting for HTS-AT encoder [B, C, T, F]
+    x_mel = x_mel.unsqueeze(1) 
 
-    # 3. Logarithmic Compression
-    # HTS-AT operates on Log-Mel scale. We use a 1e-6 epsilon to 
-    # maintain numerical stability and match standard PANNs/CLAP pipelines.
+    # 3. Logarithmic Compression (matches standard CLAP/PANNs pipeline)
     x_log_mel = torch.log(torch.clamp(x_mel, min=1e-6))
 
     # 4. Instance-based Normalization
-    # We normalize each spectrogram to zero mean and unit variance.
-    # This step is vital to keep the input within the distribution 
-    # expected by the frozen Transformer weights.
+    # Rescales the input to zero mean / unit variance for the Transformer.
     mean = x_log_mel.mean(dim=(2, 3), keepdim=True)
     std = x_log_mel.std(dim=(2, 3), keepdim=True)
     x_norm = (x_log_mel - mean) / (std + 1e-6)

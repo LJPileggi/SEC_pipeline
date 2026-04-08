@@ -15,7 +15,8 @@ import traceback
 import json
 
 from .models import CLAP_initializer, spectrogram_n_octaveband_generator, \
-    spectrogram_n_octaveband_generator_gpu, convert_octave_to_msclap_mel
+    spectrogram_n_octaveband_generator_gpu, convert_octave_to_msclap_mel, \
+    get_octave_to_mel_transition_matrix
 from .utils import *
 from .dirs_config import *
 
@@ -115,6 +116,9 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     adaptive_buffer_size = max(BATCH_SIZE, int(256 / cut_secs))
     torch.set_num_threads(1)
 
+    # Evaluate filterbank-to-mel conversion matrix
+    W_matrix = get_octave_to_mel_transition_matrix(n_octave, sample_rate=sr)
+
     batch_audio = []; batch_meta = []
 
     def flush_batch():
@@ -160,7 +164,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
                 if INJECT_OCTAVE:
                     # 1. Convert octave spectrogram to Log-Mel [B, 1, T, F]
                     # convert_octave_to_msclap_mel uses specs_gpu
-                    mel_input = convert_octave_to_msclap_mel(specs_gpu)
+                    mel_input = convert_octave_to_msclap_mel(specs_gpu, W_matrix)
                 
                     # 🎯 ENSURE DEVICE COHERENCE
                     # We must ensure the tensor is on the same device as the model weights
