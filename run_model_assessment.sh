@@ -139,7 +139,8 @@ while [ $CURRENT_IDX -lt $TOTAL_FILES ]; do
             --bind "$L_TMP:/tmp_node" \
             --bind "$RESULTS_BASE:$RESULTS_BASE" \
             "$SIF_FILE" \
-            python3 /app/scripts/finetuned_octave_model_selection.py \
+            # python3 /app/scripts/finetuned_octave_model_selection.py \
+            python3 /app/scripts/finetuned_model_assessment.py \
                 --local_root "/tmp_node/embeddings" \
                 --model_path "$MODEL_WEIGHTS" \
                 --results_base "$RESULTS_BASE" \
