@@ -16,7 +16,7 @@ import json
 
 from .models import CLAP_initializer, spectrogram_n_octaveband_generator, \
     spectrogram_n_octaveband_generator_gpu, convert_octave_to_msclap_mel, \
-    get_octave_to_mel_transition_matrix, spectrogram_to_audio
+    get_octave_to_mel_transition_matrix, spectrogram_to_audio_batch
 from .utils import *
 from .dirs_config import *
 
@@ -195,7 +195,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
                     batch_tensor = torch.nan_to_num(batch_tensor, nan=0.0)
                     # output = audio_embedding(batch_tensor)
                     clap_model.clap.audio_encoder.to(device)
-                    batch_tensor = spectrogram_to_audio(batch_tensor, sr)
+                    batch_tensor = spectrogram_to_audio_batch(batch_tensor, sr)
                     output = clap_model.clap.audio_encoder(batch_tensor)
                     embeddings = output[0] if isinstance(output, (tuple, list)) else output
                     if embeddings.dim() > 2: embeddings = embeddings.squeeze(1)
