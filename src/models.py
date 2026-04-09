@@ -228,25 +228,55 @@ def spectrogram_n_octaveband_generator_gpu(wav_batch, sampling_rate, n_octave=3,
     res = 20 * torch.log10(rms / ref).permute(0, 2, 1)
     return torch.nan_to_num(res, nan=0.0, posinf=0.0, neginf=0.0)
 
-def spectrogram_to_audio(spec_tensor, sampling_rate, n_fft=2048, n_iter=16):
+def spectrogram_to_audio_batch(spec_tensor, sampling_rate, n_fft=2048, n_iter=16):
     """
-    Maps n-octave spectrogram in STFT bins and recostructs audio.
-    """
-    spec_np = spec_tensor.detach().cpu().numpy().squeeze()
-    if spec_np.ndim == 1: 
-        spec_np = spec_np.reshape(-1, 1)
-        
-    stft_approx = np.zeros((n_fft // 2 + 1, spec_np.shape[1]), dtype=np.float32)
-    n_bins, n_bands = stft_approx.shape[0], spec_np.shape[0]
-    hop = n_bins // n_bands
+    Reconstructs a batch of audio signals from n-octave band spectrograms.
+    This function bridges the gap between octave-based energy representations 
+    and the time-domain signals expected by pre-trained encoders like CLAP.
     
+    Args:
+        spec_tensor (torch.Tensor): Input batch [Batch, Time, Bands].
+        sampling_rate (int): Output audio sampling rate.
+        n_fft (int): STFT window size for reconstruction.
+        n_iter (int): Number of Griffin-Lim iterations for phase estimation.
+        
+    Returns:
+        torch.Tensor: Reconstructed batch [Batch, Samples] on the same device.
+    """
+    device = spec_tensor.device
+    
+    # 1. Prepare data for Librosa (expects Batch x Freq x Time)
+    # Transposing from [B, T, F_oct] to [B, F_oct, T]
+    spec_np = spec_tensor.detach().cpu().numpy().transpose(0, 2, 1)
+    
+    batch_size, n_bands, n_frames = spec_np.shape
+    n_bins = n_fft // 2 + 1
+    
+    # 2. Linear Spectral Mapping (Approximate Inverse Filter Bank)
+    # Initialize an empty STFT magnitude matrix: [Batch, Freq_STFT, Time]
+    stft_approx = np.zeros((batch_size, n_bins, n_frames), dtype=np.float32)
+    
+    # Map octave bands to STFT bins using a Zero-Order Hold approach
+    # This preserves the Power Spectral Density (PSD) across the linear grid
+    hop = n_bins // n_bands
     for i in range(n_bands):
         start_bin = i * hop
         end_bin = min((i + 1) * hop, n_bins)
-        stft_approx[start_bin:end_bin, :] = spec_np[i, :]
+        # Vectorized assignment across the entire batch
+        stft_approx[:, start_bin:end_bin, :] = spec_np[:, i:i+1, :]
 
-    recon_audio = librosa.griffinlim(stft_approx, n_iter=n_iter) 
-    return torch.from_numpy(recon_audio).float().to(spec_tensor.device).unsqueeze(0)
+    # 3. Phase Estimation via Griffin-Lim
+    # Librosa's griffinlim handles 3D tensors by processing each batch element
+    # Hop length is set to standard n_fft // 4 to ensure enough overlap for phase consistency
+    recon_audio = librosa.griffinlim(
+        stft_approx, 
+        n_iter=n_iter, 
+        hop_length=n_fft // 4,
+        momentum=0.99 # Faster convergence for standard acoustic signals
+    )
+    
+    # 4. Final conversion to Tensor [Batch, Samples]
+    return torch.from_numpy(recon_audio).float().to(device)
 
 def get_octave_to_mel_transition_matrix(n_octave, n_mels=64, sample_rate=52000, device='cuda'):
     """
