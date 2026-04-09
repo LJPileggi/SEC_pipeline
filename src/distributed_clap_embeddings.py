@@ -16,7 +16,7 @@ import json
 
 from .models import CLAP_initializer, spectrogram_n_octaveband_generator, \
     spectrogram_n_octaveband_generator_gpu, convert_octave_to_msclap_mel, \
-    get_octave_to_mel_transition_matrix
+    get_octave_to_mel_transition_matrix, spectrogram_to_audio
 from .utils import *
 from .dirs_config import *
 
@@ -164,29 +164,41 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
                 if INJECT_OCTAVE:
                     # 1. Convert octave spectrogram to Log-Mel [B, 1, T, F]
                     # convert_octave_to_msclap_mel uses specs_gpu
-                    mel_input = convert_octave_to_msclap_mel(specs_gpu, W_matrix)
+                    # mel_input = convert_octave_to_msclap_mel(specs_gpu, W_matrix)
                 
                     # 🎯 ENSURE DEVICE COHERENCE
                     # We must ensure the tensor is on the same device as the model weights
                     # 'device' is the variable passed to the worker (e.g., 'cuda:3')
-                    mel_input = mel_input.to(device)
+                    # mel_input = mel_input.to(device)
                 
                     # 2. INTERNAL CLAP PREPROCESSING
                     # reshape_wav2img performs interpolation and permutation
                     # We call it from the htsat instance
-                    x_ready = clap_model.clap.audio_encoder.base.htsat.reshape_wav2img(mel_input)
+                    # x_ready = clap_model.clap.audio_encoder.base.htsat.reshape_wav2img(mel_input)
                     
                     # 🎯 DOUBLE CHECK MODEL DEVICE
                     # Force the encoder to the correct device just before inference
                     # to prevent the 'cuda:0' vs 'cuda:X' conflict
-                    clap_model.clap.audio_encoder.to(device)
+                    # clap_model.clap.audio_encoder.to(device)
                     
                     # 3. Direct inference through the patched audio_encoder
                     # This returns (projected_vec, classification_output)
-                    projected_vec, _ = clap_model.clap.audio_encoder(x_ready)
+                    # projected_vec, _ = clap_model.clap.audio_encoder(x_ready)
                     
                     # 4. Final L2 Normalization
-                    embeddings = F.normalize(projected_vec, p=2, dim=-1)
+                    # embeddings = F.normalize(projected_vec, p=2, dim=-1)
+
+
+                    # add infinitesimal noise to prevent inner divisions by zero
+                    batch_tensor = batch_tensor.to(torch.float32)
+                    batch_tensor = batch_tensor + torch.randn_like(batch_tensor) * 1e-6
+                    batch_tensor = torch.nan_to_num(batch_tensor, nan=0.0)
+                    # output = audio_embedding(batch_tensor)
+                    clap_model.clap.audio_encoder.to(device)
+                    batch_tensor = spectrogram_to_audio(batch_tensor, sr)
+                    output = clap_model.clap.audio_encoder(batch_tensor)
+                    embeddings = output[0] if isinstance(output, (tuple, list)) else output
+                    if embeddings.dim() > 2: embeddings = embeddings.squeeze(1)
                 else:
                     # add infinitesimal noise to prevent inner divisions by zero
                     batch_tensor = batch_tensor.to(torch.float32)

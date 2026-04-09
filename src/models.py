@@ -35,32 +35,32 @@ def CLAP_initializer(device='cpu', use_cuda=False):
     clap_model = CLAP(version='2023', use_cuda=use_cuda)
 
     # 💉 NEW PATCH: AUDIO ENCODER INJECTION ON INSTANCE
-    if inject_octave:
-        try:
-            target_instance = clap_model.clap.audio_encoder.base.htsat
+    # if inject_octave:
+        # try:
+            # target_instance = clap_model.clap.audio_encoder.base.htsat
             
-            def patched_forward(self, x):
-                """
-                Monkey patch for HTSAT_Swin_Transformer.
-                If input is 4D (Mel), skip STFT and Log-Mel extraction.
-                """
-                if torch.is_tensor(x) and x.ndim == 4:
-                    return self.forward_features(x)
-                return self.original_forward(x)
+            # def patched_forward(self, x):
+                # """
+                # Monkey patch for HTSAT_Swin_Transformer.
+                # If input is 4D (Mel), skip STFT and Log-Mel extraction.
+                # """
+                # if torch.is_tensor(x) and x.ndim == 4:
+                    # return self.forward_features(x)
+                # return self.original_forward(x)
 
-            if not hasattr(target_instance, 'original_forward'):
-                target_instance.original_forward = target_instance.forward
-                target_instance.forward = types.MethodType(patched_forward, target_instance)
+            # if not hasattr(target_instance, 'original_forward'):
+                # target_instance.original_forward = target_instance.forward
+                # target_instance.forward = types.MethodType(patched_forward, target_instance)
                 
-            if verbose:
-                print(f"🎯 [RANK {rank}] Patch INJECT_OCTAVE applied to clap_model.clap.audio_encoder.base.htsat", flush=True)
-        except AttributeError as e:
-            if verbose:
-                print(f"⚠️ [RANK {rank}] Patch failed: {e}", flush=True)
+            # if verbose:
+                # print(f"🎯 [RANK {rank}] Patch INJECT_OCTAVE applied to clap_model.clap.audio_encoder.base.htsat", flush=True)
+        # except AttributeError as e:
+            # if verbose:
+                # print(f"⚠️ [RANK {rank}] Patch failed: {e}", flush=True)
                 
-        except AttributeError as e:
-            if verbose:
-                print(f"⚠️ [RANK {rank}] Patch failed: could not traverse the model hierarchy. Error: {e}", flush=True)
+        # except AttributeError as e:
+            # if verbose:
+                # print(f"⚠️ [RANK {rank}] Patch failed: could not traverse the model hierarchy. Error: {e}", flush=True)
 
     # Clean up AutoModel/AutoTokenizer overrides
     transformers.AutoModel.from_pretrained = original_model_from_pretrained
@@ -227,6 +227,26 @@ def spectrogram_n_octaveband_generator_gpu(wav_batch, sampling_rate, n_octave=3,
     
     res = 20 * torch.log10(rms / ref).permute(0, 2, 1)
     return torch.nan_to_num(res, nan=0.0, posinf=0.0, neginf=0.0)
+
+def spectrogram_to_audio(spec_tensor, sampling_rate, n_fft=2048, n_iter=16):
+    """
+    Maps n-octave spectrogram in STFT bins and recostructs audio.
+    """
+    spec_np = spec_tensor.detach().cpu().numpy().squeeze()
+    if spec_np.ndim == 1: 
+        spec_np = spec_np.reshape(-1, 1)
+        
+    stft_approx = np.zeros((n_fft // 2 + 1, spec_np.shape[1]), dtype=np.float32)
+    n_bins, n_bands = stft_approx.shape[0], spec_np.shape[0]
+    hop = n_bins // n_bands
+    
+    for i in range(n_bands):
+        start_bin = i * hop
+        end_bin = min((i + 1) * hop, n_bins)
+        stft_approx[start_bin:end_bin, :] = spec_np[i, :]
+
+    recon_audio = librosa.griffinlim(stft_approx, n_iter=n_iter) 
+    return torch.from_numpy(recon_audio).float().to(spec_tensor.device).unsqueeze(0)
 
 def get_octave_to_mel_transition_matrix(n_octave, n_mels=64, sample_rate=52000, device='cuda'):
     """

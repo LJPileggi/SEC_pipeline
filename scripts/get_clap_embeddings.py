@@ -77,38 +77,38 @@ msclap.CLAPWrapper.hf_hub_download = universal_path_redirect
 # ==============================================================================
 # 💉 NEW PATCH: AUDIO ENCODER CLASS INJECTION (Targeting HTSAT_N_Level)
 # ==============================================================================
-if INJECT_OCTAVE:
-    try:
+# if INJECT_OCTAVE:
+    # try:
         # Based on actual msclap source code hierarchy
-        from msclap.models.htsat import HTSAT_N_Level
+        # from msclap.models.htsat import HTSAT_N_Level
         
-        def patched_forward(self, x):
-            """
-            Monkey patch for the HTSAT_N_Level forward method.
-            If x is a 4D tensor [B, 1, T, 64], we bypass the 
-            spectrogram_extractor (line 849) and call the backbone directly.
-            """
+        # def patched_forward(self, x):
+            # """
+            # Monkey patch for the HTSAT_N_Level forward method.
+            # If x is a 4D tensor [B, 1, T, 64], we bypass the 
+            # spectrogram_extractor (line 849) and call the backbone directly.
+            # """
             # Check if input is our pre-computed Mel spectrogram
-            if isinstance(x, torch.Tensor) and x.ndim == 4:
+            # if isinstance(x, torch.Tensor) and x.ndim == 4:
                 # We skip line 849 (spectrogram_extractor) and 
                 # line 850 (logmel_extractor).
                 # We jump directly to the transformer/convolutions layers.
-                return self.forward_features(x)
+                # return self.forward_features(x)
             
             # Standard path for 1D audio waveforms
-            return self.original_forward(x)
+            # return self.original_forward(x)
 
         # Apply the patch to the core engine class
-        if not hasattr(HTSAT_N_Level, 'original_forward'):
-            HTSAT_N_Level.original_forward = HTSAT_N_Level.forward
-            HTSAT_N_Level.forward = patched_forward
+        # if not hasattr(HTSAT_N_Level, 'original_forward'):
+            # HTSAT_N_Level.original_forward = HTSAT_N_Level.forward
+            # HTSAT_N_Level.forward = patched_forward
             
-        if VERBOSE:
-            print("💉 MSCLAP PATCH: HTSAT_N_Level 'forward' successfully bypassed.")
+        # if VERBOSE:
+            # print("💉 MSCLAP PATCH: HTSAT_N_Level 'forward' successfully bypassed.")
             
-    except ImportError:
-        if VERBOSE:
-            print("⚠️ WARNING: Could not find HTSAT_N_Level in msclap.models.htsat.")
+    # except ImportError:
+        # if VERBOSE:
+            # print("⚠️ WARNING: Could not find HTSAT_N_Level in msclap.models.htsat.")
 # ==============================================================================
 
 def parsing():
