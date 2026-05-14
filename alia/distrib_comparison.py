@@ -14,26 +14,40 @@ from src.utils import HDF5EmbeddingDatasetsManager
 
 def kl_divergence_gaussians(mu_p, sigma_p, mu_q, sigma_q):
     """
-    Computes KL Divergence between two multivariate Gaussians: D_KL(P||Q)
-    Args:
-        mu_p, sigma_p: Mean and Covariance of Source (Audio)
-        mu_q, sigma_q: Mean and Covariance of Target (Octave)
+    Versione robusta della KL Divergence per alta dimensionalità.
+    Usa slogdet per evitare l'underflow del determinante.
     """
-    k = mu_p.shape[0] # Dimensionality (1024 for CLAP)
+    k = mu_p.shape[0]
     
-    # Regularization to ensure invertibility
-    eps = 1e-6 * np.eye(k)
+    # Aumentiamo leggermente la regolarizzazione basandoci sulla scala dei dati
+    # Se gli embedding sono normalizzati, 1e-5 è un buon compromesso
+    eps = 1e-5 * np.eye(k)
     sigma_p_reg = sigma_p + eps
     sigma_q_reg = sigma_q + eps
     
-    inv_sigma_q = np.linalg.inv(sigma_q_reg)
+    try:
+        # Inversa robusta
+        inv_sigma_q = np.linalg.inv(sigma_q_reg)
+        
+        # Calcolo del log-determinante stabile: det(Sigma) = exp(slogdet)
+        # ln(det_q / det_p) = ln(det_q) - ln(det_p)
+        sign_p, logdet_p = np.linalg.slogdet(sigma_p_reg)
+        sign_q, logdet_q = np.linalg.slogdet(sigma_q_reg)
+        
+        if sign_p <= 0 or sign_q <= 0:
+            print("Warning: Matrice di covarianza non definita positiva.")
+            return np.nan
+
+        term1 = np.trace(inv_sigma_q @ sigma_p_reg)
+        term2 = (mu_q - mu_p).T @ inv_sigma_q @ (mu_q - mu_p)
+        term3 = -k
+        term4 = logdet_q - logdet_p
+        
+        return 0.5 * (term1 + term2 + term3 + term4)
     
-    term1 = np.trace(inv_sigma_q @ sigma_p_reg)
-    term2 = (mu_q - mu_p).T @ inv_sigma_q @ (mu_q - mu_p)
-    term3 = -k
-    term4 = np.log(np.linalg.det(sigma_q_reg) / np.linalg.det(sigma_p_reg))
-    
-    return 0.5 * (term1 + term2 + term3 + term4)
+    except np.linalg.LinAlgError:
+        print("Error: Matrice di covarianza singolare anche dopo regolarizzazione.")
+        return np.nan
 
 def main(args):
     # 1. Caricamento Embeddings tramite il tuo Manager
