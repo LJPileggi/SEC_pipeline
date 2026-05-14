@@ -23,7 +23,7 @@ SIF_FILE="$PROJECT_DIR/.containers/clap_pipeline.sif"
 
 echo "🚀 Avvio confronto embeddings su nodo di calcolo..."
 
-apptainer exec --nv \
+singularity exec --nv \
     --bind "/leonardo_scratch:/leonardo_scratch" \
     "$SIF_FILE" python3 alia/distrib_comparison.py \
     --audio_h5 "$AUDIO_H5" \
