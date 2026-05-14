@@ -1,0 +1,103 @@
+import os
+import argparse
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.manifold import TSNE
+import json
+import torch
+
+# Import dal tuo src.utils (Ground Truth)
+from src.utils import HDF5EmbeddingDatasetsManager
+
+def kl_divergence_gaussians(mu_p, sigma_p, mu_q, sigma_q):
+    """
+    Computes KL Divergence between two multivariate Gaussians: D_KL(P||Q)
+    Args:
+        mu_p, sigma_p: Mean and Covariance of Source (Audio)
+        mu_q, sigma_q: Mean and Covariance of Target (Octave)
+    """
+    k = mu_p.shape[0] # Dimensionality (1024 for CLAP)
+    
+    # Regularization to ensure invertibility
+    eps = 1e-6 * np.eye(k)
+    sigma_p_reg = sigma_p + eps
+    sigma_q_reg = sigma_q + eps
+    
+    inv_sigma_q = np.linalg.inv(sigma_q_reg)
+    
+    term1 = np.trace(inv_sigma_q @ sigma_p_reg)
+    term2 = (mu_q - mu_p).T @ inv_sigma_q @ (mu_q - mu_p)
+    term3 = -k
+    term4 = np.log(np.linalg.det(sigma_q_reg) / np.linalg.det(sigma_p_reg))
+    
+    return 0.5 * (term1 + term2 + term3 + term4)
+
+def main(args):
+    # 1. Caricamento Embeddings tramite il tuo Manager
+    print(f"Loading Audio embeddings: {args.audio_h5}")
+    manager_a = HDF5EmbeddingDatasetsManager(args.audio_h5, mode='r')
+    emb_a = manager_a.hf['embedding_dataset']['embeddings'][:]
+    lab_a = manager_a.hf['embedding_dataset']['class_id'][:]
+    
+    print(f"Loading Octave embeddings: {args.octave_h5}")
+    manager_o = HDF5EmbeddingDatasetsManager(args.octave_h5, mode='r')
+    emb_o = manager_o.hf['embedding_dataset']['embeddings'][:]
+    lab_o = manager_o.hf['embedding_dataset']['class_id'][:]
+    
+    # 2. Riduzione dimensionalità (t-SNE) per confronto spaziale
+    print("Running t-SNE reduction...")
+    tsne = TSNE(n_components=2, random_state=42, init='pca', learning_rate='auto')
+    
+    # Calcoliamo le proiezioni
+    proj_a = tsne.fit_transform(emb_a)
+    proj_o = tsne.fit_transform(emb_o)
+    
+    # Plotting side-by-side
+    fig, axes = plt.subplots(1, 2, figsize=(20, 8))
+    
+    # Pannello Audio
+    scatter1 = axes[0].scatter(proj_a[:, 0], proj_a[:, 1], c=lab_a, cmap='tab10', alpha=0.6, s=15)
+    axes[0].set_title("Audio Domain Embeddings (Source)")
+    fig.colorbar(scatter1, ax=axes[0])
+    
+    # Pannello Ottave
+    scatter2 = axes[1].scatter(proj_o[:, 0], proj_o[:, 1], c=lab_o, cmap='tab10', alpha=0.6, s=15)
+    axes[1].set_title("Octave Domain Embeddings (Target)")
+    fig.colorbar(scatter2, ax=axes[1])
+    
+    plot_path = os.path.join(args.output_dir, "tsne_comparison.png")
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+    print(f"Comparison plot saved to {plot_path}")
+    
+    # 3. Confronto statistico (KL Divergence)
+    print("Computing KL Divergence...")
+    mu_a, sigma_a = np.mean(emb_a, axis=0), np.cov(emb_a, rowvar=False)
+    mu_o, sigma_o = np.mean(emb_o, axis=0), np.cov(emb_o, rowvar=False)
+    
+    kl_val = kl_divergence_gaussians(mu_a, sigma_a, mu_o, sigma_o)
+    
+    # Salvataggio statistiche in JSON
+    stats = {
+        "kl_divergence": float(kl_val),
+        "audio_samples": int(emb_a.shape[0]),
+        "octave_samples": int(emb_o.shape[0]),
+        "dim": int(emb_a.shape[1])
+    }
+    
+    stats_path = os.path.join(args.output_dir, "comparison_stats.json")
+    with open(stats_path, "w") as f:
+        json.dump(stats, f, indent=4)
+    
+    print(f"KL Divergence: {kl_val:.4f}")
+    manager_a.close()
+    manager_o.close()
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Embedding Distribution Comparison')
+    parser.add_argument("--audio_h5", type=str, required=True, help="Path to source H5")
+    parser.add_argument("--octave_h5", type=str, required=True, help="Path to target H5")
+    parser.add_argument("--output_dir", type=str, required=True, help="Output directory for plots and stats")
+    args = parser.parse_args()
+    
+    os.makedirs(args.output_dir, exist_ok=True)
+    main(args)

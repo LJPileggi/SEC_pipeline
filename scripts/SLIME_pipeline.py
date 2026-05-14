@@ -12,7 +12,7 @@ from tqdm import tqdm
 # Priorità assoluta moduli locali
 sys.path.insert(0, os.getcwd())
 
-from src.models import FinetunedModel, CLAP_initializer
+from src.models import FinetunedModel, CLAP_initializer, get_octave_to_mel_transition_matrix
 from src.explainability.SLIME import SLIME
 from src.explainability.xai_utils import save_explanation_audio
 from src.utils import (
@@ -66,10 +66,29 @@ def main():
     classifier = FinetunedModel(classes=classes, device=device, weights_path=args.weights_path)
     clap_model, audio_embedding, _ = CLAP_initializer(device=device, use_cuda=torch.cuda.is_available())
     
-    # SLIME inizializzato con il loopback di CLAP
+    # Pre-calcoliamo la matrice di transizione W (dal codice che mi hai incollato)
+    W = get_octave_to_mel_transition_matrix(n_octave=args.n_octave, device=device)
+
+    def embedding_bridge(perturbed_fb):
+        """
+        Ponte tra la filterbank perturbata di SLIME e l'embedding di CLAP.
+        """
+        # perturbed_fb shape: [1, n_bands, n_frames]
+        fb = perturbed_fb.squeeze(0)
+        
+        # Proiezione nello spazio Mel: [n_mels, n_bands] @ [n_bands, n_frames]
+        # Nota: W è [n_bands, n_mels], quindi facciamo fb.T @ W per avere [n_frames, n_mels]
+        mel_spec = torch.matmul(fb.transpose(0, 1), W).transpose(0, 1)
+        
+        # Aggiungiamo dimensione batch e channel per CLAP [1, 1, n_mels, n_frames]
+        mel_spec = mel_spec.unsqueeze(0).unsqueeze(0)
+        
+        return clap_model.get_audio_embedding_from_spectrogram(mel_spec)
+
+    # Inizializza SLIME con questo ponte
     slime = SLIME(
         classifier=classifier, 
-        audio_embedding=audio_embedding, 
+        audio_embedding=embedding_bridge, # <--- CRUCIALE
         explainer_type=args.expl_type, 
         n_samples=args.n_samples
     )

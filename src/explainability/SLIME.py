@@ -27,14 +27,16 @@ class SLIME:
             return components, [f"T{i}" for i in range(n_segments)]
 
         elif self.explainer_type == 'time_frequency':
-            # Time-frequency partitioning into blocks Bi 
-            spec_np = spec_linear.detach().cpu().numpy().squeeze()
-            n_f_seg, n_t_seg = 4, 6 # Common paper configuration [cite: 151, 263]
-            f_step = spec_np.shape[0] // n_f_seg
-            t_step = spec_np.shape[1] // n_t_seg
+            # 'spec_linear' qui sarà la tua filter bank [n_bands, n_frames]
+            fb_np = spec_linear.detach().cpu().numpy().squeeze()
+            n_bands = fb_np.shape[0] # Numero di ottave/terzi d'ottava
+            n_t_seg = 6 # Mantieni i segmenti temporali se vuoi risoluzione nel tempo
             
-            names = [f"B{i}" for i in range(n_f_seg * n_t_seg)]
-            return (n_f_seg, n_t_seg, f_step, t_step), names
+            t_step = fb_np.shape[1] // n_t_seg
+            
+            # Ogni 'componente' è ora una banda specifica in un intervallo temporale
+            names = [f"Banda{b}_Time{t}" for b in range(n_bands) for t in range(n_t_seg)]
+            return (n_bands, n_t_seg, t_step), names
 
     def explain_instance(self, audio_waveform, spec_linear, sampling_rate, class_idx):
         """
@@ -99,11 +101,18 @@ class SLIME:
                     reconstructed[i*seg_len : (i+1)*seg_len] = audio_waveform[i*seg_len : (i+1)*seg_len]
             return reconstructed.unsqueeze(0)
         
-        else: # time_frequency
-            n_f_seg, n_t_seg, f_step, t_step = components
-            spec_masked = spec_linear.clone().squeeze()
+        else: # time_frequency (ora basato su filter bank)
+            n_bands, n_t_seg, t_step = components
+            # Cloniamo la filter bank originale
+            fb_masked = spec_linear.clone().squeeze() # [n_bands, n_frames]
+            
             for idx, val in enumerate(mask_vec):
-                if val == 0:
-                    i, j = divmod(idx, n_t_seg)
-                    spec_masked[i*f_step:(i+1)*f_step, j*t_step:(j+1)*t_step] = 0
-            return spectrogram_to_audio(spec_masked, sampling_rate)
+                if val == 0: # Se il componente è disattivato
+                    b_idx, t_idx = divmod(idx, n_t_seg)
+                    # Azzeriamo il segmento nella filter bank
+                    start_t = t_idx * t_step
+                    end_t = (t_idx + 1) * t_step if t_idx < n_t_seg - 1 else fb_masked.shape[1]
+                    fb_masked[b_idx, start_t:end_t] = 0
+            
+            # 🛑 IMPORTANTE: Restituiamo la matrice, NON l'audio
+            return fb_masked.unsqueeze(0)
