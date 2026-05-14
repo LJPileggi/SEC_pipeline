@@ -40,12 +40,12 @@ def main(args):
     print(f"Loading Audio embeddings: {args.audio_h5}")
     manager_a = HDF5EmbeddingDatasetsManager(args.audio_h5, mode='r')
     emb_a = manager_a.hf['embedding_dataset']['embeddings'][:]
-    lab_a = manager_a.hf['embedding_dataset']['class_id'][:]
+    lab_a = manager_a.hf['embedding_dataset']['classes'][:]
     
     print(f"Loading Octave embeddings: {args.octave_h5}")
     manager_o = HDF5EmbeddingDatasetsManager(args.octave_h5, mode='r')
     emb_o = manager_o.hf['embedding_dataset']['embeddings'][:]
-    lab_o = manager_o.hf['embedding_dataset']['class_id'][:]
+    lab_o = manager_o.hf['embedding_dataset']['classes'][:]
     
     # 2. Riduzione dimensionalità (t-SNE) per confronto spaziale
     print("Running t-SNE reduction...")
