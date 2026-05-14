@@ -1,10 +1,13 @@
 import os
+import sys
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 import json
 import torch
+
+sys.path.insert(0, '/app')
 
 # Import dal tuo src.utils (Ground Truth)
 from src.utils import HDF5EmbeddingDatasetsManager
