@@ -40,13 +40,20 @@ def main(args):
     print(f"Loading Audio embeddings: {args.audio_h5}")
     manager_a = HDF5EmbeddingDatasetsManager(args.audio_h5, mode='r')
     emb_a = manager_a.hf['embedding_dataset']['embeddings'][:]
-    lab_a = manager_a.hf['embedding_dataset']['classes'][:]
+    # FIX: Decodifica bytes e gestione stringhe per le label
+    raw_lab_a = [l.decode('utf-8') if isinstance(l, bytes) else l for l in manager_a.hf['embedding_dataset']['classes'][:]]
     
     print(f"Loading Octave embeddings: {args.octave_h5}")
     manager_o = HDF5EmbeddingDatasetsManager(args.octave_h5, mode='r')
     emb_o = manager_o.hf['embedding_dataset']['embeddings'][:]
-    lab_o = manager_o.hf['embedding_dataset']['classes'][:]
-    
+    raw_lab_o = [l.decode('utf-8') if isinstance(l, bytes) else l for l in manager_o.hf['embedding_dataset']['classes'][:]]
+
+    # Mappatura etichette testuali in indici numerici per il plot
+    unique_labels = sorted(list(set(raw_lab_a + raw_lab_o)))
+    label_to_id = {label: i for i, label in enumerate(unique_labels)}
+    num_lab_a = np.array([label_to_id[l] for l in raw_lab_a])
+    num_lab_o = np.array([label_to_id[l] for l in raw_lab_o])
+
     # 2. Riduzione dimensionalità (t-SNE) per confronto spaziale
     print("Running t-SNE reduction...")
     tsne = TSNE(n_components=2, random_state=42, init='pca', learning_rate='auto')
@@ -59,14 +66,16 @@ def main(args):
     fig, axes = plt.subplots(1, 2, figsize=(20, 8))
     
     # Pannello Audio
-    scatter1 = axes[0].scatter(proj_a[:, 0], proj_a[:, 1], c=lab_a, cmap='tab10', alpha=0.6, s=15)
+    scatter1 = axes[0].scatter(proj_a[:, 0], proj_a[:, 1], c=num_lab_a, cmap='tab10', alpha=0.6, s=15)
     axes[0].set_title("Audio Domain Embeddings (Source)")
-    fig.colorbar(scatter1, ax=axes[0])
     
     # Pannello Ottave
-    scatter2 = axes[1].scatter(proj_o[:, 0], proj_o[:, 1], c=lab_o, cmap='tab10', alpha=0.6, s=15)
+    scatter2 = axes[1].scatter(proj_o[:, 0], proj_o[:, 1], c=num_lab_o, cmap='tab10', alpha=0.6, s=15)
     axes[1].set_title("Octave Domain Embeddings (Target)")
-    fig.colorbar(scatter2, ax=axes[1])
+
+    # Legenda con i nomi reali delle classi
+    handles, _ = scatter2.legend_elements()
+    axes[1].legend(handles, unique_labels, loc="best", title="Classes", markerscale=1.2)
     
     plot_path = os.path.join(args.output_dir, "tsne_comparison.png")
     plt.savefig(plot_path, dpi=300, bbox_inches='tight')
