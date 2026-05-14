@@ -23,11 +23,14 @@ SIF_FILE="$PROJECT_DIR/.containers/clap_pipeline.sif"
 
 echo "🚀 Avvio confronto embeddings su nodo di calcolo..."
 
-singularity exec --nv \
+singularity exec --nv --no-home \
     --bind "/leonardo_scratch:/leonardo_scratch" \
-    "$SIF_FILE" python3 alia/distrib_comparison.py \
-    --audio_h5 "$AUDIO_H5" \
-    --octave_h5 "$OCTAVE_H5" \
-    --output_dir "$OUTPUT_DIR"
+    --bind "$(pwd):/app" \
+    --pwd "/app" \
+    "$SIF_FILE" \
+    python3 alia/distrib_comparison.py \
+        --audio_h5 "$AUDIO_H5" \
+        --octave_h5 "$OCTAVE_H5" \
+        --output_dir "$OUTPUT_DIR"
 
 echo "✅ Completato. Risultati in $OUTPUT_DIR"
