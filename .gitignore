@@ -1,4 +1,5 @@
 old/
+backup/
 .config/git/
 .git/
 .clap_weights/

@@ -1,8 +1,8 @@
 #!/bin/bash
 # run_embedding_pipeline.sh
 
-if [ "$#" -lt 4 ]; then
-    echo "Usage: $0 <config_file> <audio_format> <n_octave> <mode> [world_size]"
+if [ "$#" -lt 5 ]; then
+    echo "Usage: $0 <config_file> <audio_format> <n_octave> <inject_octave> <mode> [world_size]"
     echo "Modes: slurm, local"
     exit 1
 fi
@@ -10,8 +10,14 @@ fi
 CONFIG_FILE=$1
 AUDIO_FORMAT=$2
 N_OCTAVE=$3
-MODE=$4
-WORLD_SIZE=${5:-4} # Default to 4 processes for local mode
+INJECT_OCTAVE_CMD=$4
+MODE=$5
+WORLD_SIZE=${6:-4}
+
+# Se N_OCTAVE è 0, forziamo l'iniezione a False a livello logico
+if [ "$N_OCTAVE" -eq 0 ]; then
+    INJECT_OCTAVE_CMD="False"
+fi
 
 SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/clap_pipeline.sif"
 CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
@@ -28,7 +34,8 @@ sys.path.append('/app')
 from src.utils import join_logs
 from src.dirs_config import basedir_preprocessed
 def main():
-    base_path = os.path.join(basedir_preprocessed, "$AUDIO_FORMAT", "${N_OCTAVE}_octave")
+    suffix = "${N_OCTAVE}_octave_no_inject" if int("${N_OCTAVE}") != 0 and "${INJECT_OCTAVE_CMD}" == "False" else "${N_OCTAVE}_octave"
+    base_path = os.path.join(basedir_preprocessed, "$AUDIO_FORMAT", suffix)
     if not os.path.exists(base_path): return
     for entry in os.listdir(base_path):
         target_dir = os.path.join(base_path, entry)
@@ -44,7 +51,11 @@ INNER_EOF
 run_slurm() {
     local j_name="prod_${AUDIO_FORMAT}_oct${N_OCTAVE}"
     local script="submit_${j_name}.sh"
-    local FINAL_DEST="$DATASEC_GLOBAL/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave"
+    local target_folder="${N_OCTAVE}_octave"
+    if [ "$N_OCTAVE" -ne 0 ] && [ "$INJECT_OCTAVE_CMD" = "False" ]; then
+        target_folder="${N_OCTAVE}_octave_no_inject"
+    fi
+    local FINAL_DEST="$DATASEC_GLOBAL/PREPROCESSED_DATASET/$AUDIO_FORMAT/$target_folder"
 
     cat << EOF > "$script"
 #!/bin/bash
@@ -63,7 +74,7 @@ TEMP_DIR="/leonardo_scratch/large/userexternal/\$USER/tmp_job_\$SLURM_JOB_ID"
 TARGET_GLOBAL="$FINAL_DEST"
 
 mkdir -p "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT"
-mkdir -p "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave"
+mkdir -p "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/$target_folder"
 mkdir -p "\$TEMP_DIR/work_dir/weights"
 mkdir -p "\$TEMP_DIR/roberta-base"
 mkdir -p "\$TEMP_DIR/numba_cache"
@@ -81,7 +92,7 @@ finalize_and_cleanup() {
             python3 scripts/join_hdf5.py --config_file "$CONFIG_FILE" --n_octave "$N_OCTAVE" --audio_format "$AUDIO_FORMAT"
         echo "📦 Stage-out..."
         mkdir -p "\$TARGET_GLOBAL"
-        rsync -rlt "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave/" "\$TARGET_GLOBAL/"
+        rsync -rlt "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/$target_folder/" "\$TARGET_GLOBAL/"
         rm -rf "\$TEMP_DIR"
     fi
     exit 0
@@ -91,7 +102,7 @@ trap 'finalize_and_cleanup' SIGTERM SIGINT
 echo "📦 Stage-in..."
 cp "$CLAP_SCRATCH_WEIGHTS" "\$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth"
 cp -r "$ROBERTA_PATH/." "\$TEMP_DIR/roberta-base/"
-[ -d "\$TARGET_GLOBAL" ] && cp -r "\$TARGET_GLOBAL/." "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave/"
+[ -d "\$TARGET_GLOBAL" ] && cp -r "\$TARGET_GLOBAL/." "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/$target_folder/"
 cp "$DATASEC_GLOBAL/RAW_DATASET/raw_$AUDIO_FORMAT"/*.h5 "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT/" 2>/dev/null
 
 # Create wrapper inside the heredoc
@@ -101,7 +112,8 @@ sys.path.append('/app')
 from src.utils import join_logs
 from src.dirs_config import basedir_preprocessed
 def main():
-    base_path = os.path.join(basedir_preprocessed, "$AUDIO_FORMAT", "${N_OCTAVE}_octave")
+    suffix = "${N_OCTAVE}_octave_no_inject" if int("${N_OCTAVE}") != 0 and "${INJECT_OCTAVE_CMD}" == "False" else "${N_OCTAVE}_octave"
+    base_path = os.path.join(basedir_preprocessed, "$AUDIO_FORMAT", suffix)
     if not os.path.exists(base_path): return
     for entry in os.listdir(base_path):
         target_dir = os.path.join(base_path, entry)
@@ -120,7 +132,7 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True
 export MASTER_ADDR=\$(hostname)
 export MASTER_PORT=\$(expr 20000 + \${SLURM_JOB_ID} % 10000)
 # Set to "True" to bypass internal CLAP Mel extraction
-export INJECT_OCTAVE="True"
+export INJECT_OCTAVE="$INJECT_OCTAVE_CMD"
 
 srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \\
     singularity exec --nv --no-home --bind "/leonardo_scratch:/leonardo_scratch" --bind "\$TEMP_DIR:/tmp_data" \\
@@ -143,8 +155,16 @@ run_local() {
     TEMP_DIR="/tmp/job_local_$(date +%s)"
     TARGET_GLOBAL="$DATASEC_GLOBAL/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave"
 
+    local target_folder="${N_OCTAVE}_octave"
+    if [ "$N_OCTAVE" -ne 0 ] && [ "$INJECT_OCTAVE_CMD" = "False" ]; then
+        target_folder="${N_OCTAVE}_octave_no_inject"
+    fi
+    
+    local TARGET_GLOBAL="/leonardo_scratch/large/userexternal/$USER/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/$target_folder"
+
     mkdir -p "$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT"
-    mkdir -p "$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave"
+    mkdir -p "$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/$target_folder"
+    [ -d "$TARGET_GLOBAL" ] && cp -r "$TARGET_GLOBAL/." "$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/$target_folder/"
     mkdir -p "$TEMP_DIR/work_dir/weights"
     mkdir -p "$TEMP_DIR/roberta-base"
     mkdir -p "$TEMP_DIR/numba_cache"
@@ -161,7 +181,7 @@ run_local() {
             python3 scripts/join_hdf5.py --config_file "$CONFIG_FILE" --n_octave "$N_OCTAVE" --audio_format "$AUDIO_FORMAT"
         # 3. Stage-out
         mkdir -p "$TARGET_GLOBAL"
-        rsync -rlt "$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave/" "$TARGET_GLOBAL/"
+        rsync -rlt "$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/$target_folder/" "$TARGET_GLOBAL/"
         rm -rf "$TEMP_DIR"
         echo "✅ Local consolidation done. Bye!"
         exit 0
@@ -171,7 +191,7 @@ run_local() {
     echo "📦 Staging-in data..."
     cp "$CLAP_SCRATCH_WEIGHTS" "$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth"
     cp -r "$ROBERTA_PATH/." "$TEMP_DIR/roberta-base/"
-    [ -d "$TARGET_GLOBAL" ] && cp -r "$TARGET_GLOBAL/." "$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave/"
+    [ -d "$TARGET_GLOBAL" ] && cp -r "$TARGET_GLOBAL/." "$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/$target_folder/"
     cp "$DATASEC_GLOBAL/RAW_DATASET/raw_$AUDIO_FORMAT"/*.h5 "$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT/" 2>/dev/null
     
     create_log_wrapper "$TEMP_DIR/work_dir/join_logs_wrapper.py"
@@ -184,7 +204,7 @@ run_local() {
     export PYTHONUNBUFFERED=1
     export PYTORCH_ALLOC_CONF=expandable_segments:True
     # Set to "True" to bypass internal CLAP Mel extraction
-    export INJECT_OCTAVE="True"
+    export INJECT_OCTAVE="$INJECT_OCTAVE_CMD"
 
     echo "🚀 Running local worker..."
     singularity exec --nv --no-home --bind "/leonardo_scratch:/leonardo_scratch" --bind "$TEMP_DIR:/tmp_data" \

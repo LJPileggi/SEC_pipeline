@@ -29,6 +29,7 @@ os.environ["NUMEXPR_NUM_THREADS"] = "1"
 # 🎯 PRODUCTION GLOBAL VARIABLE
 # Reads from environment to toggle detailed diagnostic prints
 VERBOSE = os.environ.get("VERBOSE", "False").lower() == "true"
+# Injects the filter bank directly into the model without converting it back into audio
 INJECT_OCTAVE = os.environ.get("INJECT_OCTAVE", "False").lower() == "true"
 
 def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class_to_process, cut_secs, n_octave, config, audio_dataset_manager=None):
@@ -48,7 +49,8 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
      - audio_embedding (torch.nn.Module): The specific sub-model for audio encoding;
      - class_to_process (str): Name of the audio class to process;
      - cut_secs (int/float): Duration of the audio segments in seconds;
-     - n_octave (int): Number of bands per octave for spectrogram generation;
+     - n_octave (int): Number of bands per octave for spectrogram generation; if 0, embeddings are
+       evaluated directly from audio, and spectrograms are evaluated for 3_octave;
      - config (dict): Global configuration dictionary;
      - audio_dataset_manager (HDF5DatasetManager, default: None): Manager for the source audio HDF5.
 
@@ -63,6 +65,12 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     # 🎯 OUTPUT STRUCTURE: Maintained as nested for combine_hdf5_files compatibility
     target_class_dir = os.path.join(root_target, f'{cut_secs}_secs', class_to_process)
     os.makedirs(target_class_dir, exist_ok=True)
+    
+    # n_octave == 0 means we want embeddings from raw audios; we set a flag and substitute n_octave with 3
+    use_specs = True
+    if n_octave == 0:
+        use_specs = False
+        n_octave = 3
     
     audio_format, sr, ref = config['audio']['audio_format'], config['spectrogram']['sr'], config['spectrogram']['ref']
     center_freqs, noise_perc, seed = config['spectrogram']['center_freqs'], config['audio']['noise_perc'], config['audio']['seed']
@@ -161,40 +169,42 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
             # Step 2: Perform CLAP Inference in Mixed Precision (FP16)
             # with torch.cuda.amp.autocast():
             with torch.no_grad():
-                if INJECT_OCTAVE:
-                    # 1. Convert octave spectrogram to Log-Mel [B, 1, T, F]
-                    # convert_octave_to_msclap_mel uses specs_gpu
-                    # mel_input = convert_octave_to_msclap_mel(specs_gpu, W_matrix)
+                if use_specs:
+                    if INJECT_OCTAVE:
+                        # 1. Convert octave spectrogram to Log-Mel [B, 1, T, F]
+                        convert_octave_to_msclap_mel uses specs_gpu
+                        mel_input = convert_octave_to_msclap_mel(specs_gpu, W_matrix)
                 
-                    # 🎯 ENSURE DEVICE COHERENCE
-                    # We must ensure the tensor is on the same device as the model weights
-                    # 'device' is the variable passed to the worker (e.g., 'cuda:3')
-                    # mel_input = mel_input.to(device)
+                        # 🎯 ENSURE DEVICE COHERENCE
+                        # We must ensure the tensor is on the same device as the model weights
+                        # 'device' is the variable passed to the worker (e.g., 'cuda:3')
+                        mel_input = mel_input.to(device)
                 
-                    # 2. INTERNAL CLAP PREPROCESSING
-                    # reshape_wav2img performs interpolation and permutation
-                    # We call it from the htsat instance
-                    # x_ready = clap_model.clap.audio_encoder.base.htsat.reshape_wav2img(mel_input)
+                        # 2. INTERNAL CLAP PREPROCESSING
+                        # reshape_wav2img performs interpolation and permutation
+                        # We call it from the htsat instance
+                        x_ready = clap_model.clap.audio_encoder.base.htsat.reshape_wav2img(mel_input)
                     
-                    # 🎯 DOUBLE CHECK MODEL DEVICE
-                    # Force the encoder to the correct device just before inference
-                    # to prevent the 'cuda:0' vs 'cuda:X' conflict
-                    # clap_model.clap.audio_encoder.to(device)
+                        # 🎯 DOUBLE CHECK MODEL DEVICE
+                        # Force the encoder to the correct device just before inference
+                        # to prevent the 'cuda:0' vs 'cuda:X' conflict
+                        clap_model.clap.audio_encoder.to(device)
                     
-                    # 3. Direct inference through the patched audio_encoder
-                    # This returns (projected_vec, classification_output)
-                    # projected_vec, _ = clap_model.clap.audio_encoder(x_ready)
+                        # 3. Direct inference through the patched audio_encoder
+                        # This returns (projected_vec, classification_output)
+                        projected_vec, _ = clap_model.clap.audio_encoder(x_ready)
                     
-                    # 4. Final L2 Normalization
-                    # embeddings = F.normalize(projected_vec, p=2, dim=-1)
+                        # 4. Final L2 Normalization
+                        embeddings = F.normalize(projected_vec, p=2, dim=-1)
 
 
-                    # add infinitesimal noise to prevent inner divisions by zero
-                    clap_model.clap.audio_encoder.to(device)
-                    resampled_batch = spectrogram_to_audio_batch(specs_gpu, sr)
-                    output = clap_model.clap.audio_encoder(resampled_batch)
-                    embeddings = output[0] if isinstance(output, (tuple, list)) else output
-                    if embeddings.dim() > 2: embeddings = embeddings.squeeze(1)
+                    else:
+                        # add infinitesimal noise to prevent inner divisions by zero
+                        clap_model.clap.audio_encoder.to(device)
+                        resampled_batch = spectrogram_to_audio_batch(specs_gpu, sr)
+                        output = clap_model.clap.audio_encoder(resampled_batch)
+                        embeddings = output[0] if isinstance(output, (tuple, list)) else output
+                        if embeddings.dim() > 2: embeddings = embeddings.squeeze(1)
                 else:
                     # add infinitesimal noise to prevent inner divisions by zero
                     batch_tensor = batch_tensor.to(torch.float32)
@@ -538,7 +548,10 @@ def worker_process_slurm(audio_format, n_octave, config, rank, world_size, my_ta
     config['rank'] = rank
     # Use basedir_raw/preprocessed from dirs_config (respects NODE_TEMP_BASE_DIR)
     config['dirs']['root_source'] = os.path.join(basedir_raw, f'raw_{audio_format}')
-    config['dirs']['root_target'] = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave')
+    if (n_octave != 0) & (not INJECT_OCTAVE):
+        config['dirs']['root_target'] = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave_no_inject')
+    else:
+        config['dirs']['root_target'] = os.path.join(basedir_preprocessed, f'{audio_format}', f'{n_octave}_octave')
     config['audio']['audio_format'] = audio_format
     config['audio']['n_octave'] = n_octave
     config['device'] = str(device)

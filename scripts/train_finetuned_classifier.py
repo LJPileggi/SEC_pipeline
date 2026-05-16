@@ -34,7 +34,16 @@ def main():
     # 🎯 FIX: config_file desunto da args
     _, patience, epochs, batch_size, _, _, _, _, _, _, _ = get_config_from_yaml(args.config_file)
     
-    octaveband_dir = os.path.join(basedir_preprocessed, args.audio_format, f"{args.n_octave}_octave")
+    # Recupero dello stato dell'iniezione dall'ambiente
+    inject_octave = os.environ.get("INJECT_OCTAVE", "True").lower() != "false"
+
+    # Composizione dinamica del percorso coerente con la pipeline
+    if int(args.n_octave) != 0 and not inject_octave:
+        target_folder = f"{args.n_octave}_octave_no_inject"
+    else:
+        target_folder = f"{args.n_octave}_octave"
+
+    octaveband_dir = os.path.join(basedir_preprocessed, args.audio_format, target_folder)
     validation_filepath = os.path.join(results_validation_filepath_project, args.audio_format, args.n_octave)
     os.makedirs(validation_filepath, exist_ok=True)
 

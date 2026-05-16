@@ -13,9 +13,24 @@ DATASEC_DIR="/leonardo_scratch/large/userexternal/$USER/dataSEC"
 EMB_BASE="${DATASEC_DIR}/PREPROCESSED_DATASET"
 RESULTS_BASE="${DATASEC_DIR}/results"
 SIF_FILE="${PROJECT_DIR}/.containers/clap_pipeline.sif"
-MODEL_WEIGHTS="${PROJECT_DIR}/.models/finetuned_model_Adam_0.01_7_secs.torch"
-# MODEL_WEIGHTS="${PROJECT_DIR}/.models/finetuned_model_RECOVERY_7_secs.torch"
 CONFIG_FILE="${PROJECT_DIR}/configs/config0.yaml"
+
+# Parametri sbloccati passati da riga di comando
+AUDIO_FORMAT=${1:-"wav"}
+N_OCTAVE=${2:-"3"}
+INJECT_OCTAVE_CMD=${3:-"True"}
+
+if [ "$N_OCTAVE" -eq 0 ]; then
+    INJECT_OCTAVE_CMD="False"
+fi
+
+# Determinazione del suffisso della cartella e del modello accoppiato
+target_folder="${N_OCTAVE}_octave"
+local_suffix=""
+if [ "$N_OCTAVE" -ne 0 ] && [ "$INJECT_OCTAVE_CMD" = "False" ]; then
+    target_folder="${N_OCTAVE}_octave_no_inject"
+    local_suffix="_no_inject"
+fi
 
 TMP_DIR="${PROJECT_DIR}/.tmp"
 L_TMP="/tmp/assessment_marathon"
@@ -38,9 +53,9 @@ mkdir -p "$L_TMP/embeddings"
 # --- 3. PREPARE TASK LIST (GROUND TRUTH: Ricerca sull'albero) ---
 cd "${EMB_BASE}"
 # Troviamo i file relativi partendo dalla root del dataset
-mapfile -t H5_TRAIN_LIST < <(find . -path "*/7_secs/combined_train.h5" | sed 's|^\./||')
-mapfile -t H5_VALID_LIST < <(find . -path "*/7_secs/combined_valid.h5" | sed 's|^\./||')
-mapfile -t H5_ES_LIST < <(find . -path "*/7_secs/combined_es.h5" | sed 's|^\./||')
+mapfile -t H5_TRAIN_LIST < <(find "./${AUDIO_FORMAT}/${target_folder}" -path "*/7_secs/combined_train.h5" | sed 's|^\./||')
+mapfile -t H5_VALID_LIST < <(find "./${AUDIO_FORMAT}/${target_folder}" -path "*/7_secs/combined_valid.h5" | sed 's|^\./||')
+mapfile -t H5_ES_LIST < <(find "./${AUDIO_FORMAT}/${target_folder}" -path "*/7_secs/combined_es.h5" | sed 's|^\./||')
 cd "$PROJECT_DIR"
 
 # --- 4. CREATE TEMPORARY AGGREGATOR SCRIPT IN .tmp ---
@@ -60,8 +75,9 @@ def aggregate(results_base):
             df = df[[c for c in df.columns if c in cols_to_keep]]
             
             df['format'] = parts[0]
-            df['n_octaves'] = parts[1]
+            df['n_octaves'] = parts[1].replace('_no_inject', '')
             df['cut_secs'] = parts[2]
+            df['injection'] = 'False' if 'no_inject' in parts[1] else 'True'
             all_res.append(df)
     
     if not all_res: 
@@ -135,6 +151,15 @@ while [ $CURRENT_IDX -lt $TOTAL_FILES ]; do
         OCT=$(echo "$FILE_REL_VALID" | cut -d'/' -f2 | cut -d'_' -f1)
 
             # python3 /app/scripts/finetuned_octave_model_selection.py \
+
+        # Estrae i secondi dal path (Es: da "./wav/3_octave/7_secs/combined_valid.h5" estrae "7")
+        CUT_SECS=$(echo "$FILE_REL_VALID" | cut -d'/' -f3 | cut -d'_' -f1)
+
+        # Generazione dinamica e impeccabile del percorso dei pesi del modello
+        MODEL_WEIGHTS="${PROJECT_DIR}/.models/finetuned_model_RECOVERY_${CUT_SECS}_secs${local_suffix}.torch"
+
+        export INJECT_OCTAVE="$INJECT_OCTAVE_CMD"
+
         singularity exec --nv --no-home \
             --bind "$PROJECT_DIR:/app" \
             --bind "$L_TMP:/tmp_node" \

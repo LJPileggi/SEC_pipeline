@@ -6,6 +6,9 @@ sys.path.append('.')
 from src.utils import get_config_from_yaml, combine_hdf5_files
 from src.dirs_config import basedir_preprocessed
 
+# Injects the filter bank directly into the model without converting it back into audio
+INJECT_OCTAVE = os.environ.get("INJECT_OCTAVE", "False").lower() == "true"
+
 def parsing():
     parser = argparse.ArgumentParser(description='Utility to join intermediate hdf5 files.')
     parser.add_argument('--config_file', type=str, default='config0.yaml',
@@ -19,7 +22,10 @@ def parsing():
 def main():
     args = parsing()
     classes, _, _, _, sample_rate, ref, noise_perc, seed, _, valid_cut_secs, splits_list = get_config_from_yaml(args.config_file)
-    octaveband_dir = os.path.join(basedir_preprocessed, f'{args.audio_format}', f'{args.n_octave}_octave')
+    if (n_octave != 0) & (not INJECT_OCTAVE):
+        octaveband_dir = os.path.join(basedir_preprocessed, f'{args.audio_format}', f'{args.n_octave}_octave_no_inject')
+    else:
+        octaveband_dir = os.path.join(basedir_preprocessed, f'{args.audio_format}', f'{args.n_octave}_octave')
 
     combine_hdf5_files(
         root_dir=octaveband_dir, 

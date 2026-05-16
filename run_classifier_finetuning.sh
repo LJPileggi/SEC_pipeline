@@ -18,12 +18,23 @@ CONFIG_FILE="${PROJECT_DIR}/configs/config0.yaml"
 # Model paths
 MODEL_DIR="${PROJECT_DIR}/.models"
 PRETRAINED_MODEL="${MODEL_DIR}/finetuned_model_Adam_0.01_7_secs.torch"
-export FINAL_MODEL_PATH="${MODEL_DIR}/finetuned_model_RECOVERY_7_secs.torch"
+local_suffix=""
+if [ "$N_OCTAVE" -ne 0 ] && [ "$INJECT_OCTAVE_CMD" = "False" ]; then
+    local_suffix="_no_inject"
+fi
 
-# Training parameters
-AUDIO_FORMAT="wav"
-N_OCTAVE="3"
-CUT_SECS=7
+export FINAL_MODEL_PATH="${MODEL_DIR}/finetuned_model_RECOVERY_${CUT_SECS}_secs${local_suffix}.torch"
+
+# Training parameters (Sbloccati da riga di comando con valori di default)
+AUDIO_FORMAT=${1:-"wav"}
+N_OCTAVE=${2:-"3"}
+INJECT_OCTAVE_CMD=${3:-"True"}
+CUT_SECS=${4:-7}
+
+# Forzatura logica di coerenza
+if [ "$N_OCTAVE" -eq 0 ]; then
+    INJECT_OCTAVE_CMD="False"
+fi
 
 # --- 2. RUN TRAINING ---
 echo "🚀 Starting Finetune Recovery (Target: ${FINAL_MODEL_PATH})..."
@@ -31,6 +42,8 @@ echo "🚀 Starting Finetune Recovery (Target: ${FINAL_MODEL_PATH})..."
 # Bind necessari: 
 # - PROJECT_DIR per lo script e i moduli src
 # - DATASEC_DIR per caricare gli embeddings HDF5
+export INJECT_OCTAVE="$INJECT_OCTAVE_CMD"
+
 singularity exec --nv --no-home \
     --bind "${BASEDIR}:/app" \
     --bind "${PROJECT_DIR}:/app/${PROJECT_DIR}" \

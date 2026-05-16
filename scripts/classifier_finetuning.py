@@ -61,7 +61,16 @@ def main():
         rank = 0
         world_size = 1 # In interattivo default 1 processo (o più se mp.spawn)
 
-    octaveband_dir = os.path.join(basedir_preprocessed, args.audio_format, f"{args.n_octave}_octave")
+    # Leggiamo lo stato dell'iniezione dall'ambiente (default True se non specificato)
+    inject_octave = os.environ.get("INJECT_OCTAVE", "True").lower() != "false"
+
+    # Gestione dinamica del percorso coerente con la pipeline di estrazione
+    if int(args.n_octave) != 0 and not inject_octave:
+        target_folder = f"{args.n_octave}_octave_no_inject"
+    else:
+        target_folder = f"{args.n_octave}_octave"
+        
+    octaveband_dir = os.path.join(basedir_preprocessed, args.audio_format, target_folder)
     validation_filepath = os.path.join(results_validation_filepath_project, args.audio_format, args.n_octave)
     os.makedirs(validation_filepath, exist_ok=True)
 
@@ -79,7 +88,7 @@ def main():
         # Modalità Locale: puoi scegliere mp.spawn o chiamata diretta se world_size=1
         if world_size > 1:
             import torch.multiprocessing as mp
-            mp.spawn(main_worker_local, nprocs=world_size, args=(world_size, validation_filepath, octaveband_dir, cut_secs_list, epochs, patience, clap_model, args.model_type))
+            mp.spawn(run_local_worker, nprocs=world_size, args=(world_size, validation_filepath, octaveband_dir, cut_secs_list, epochs, patience, clap_model, args.model_type))
         else:
             select_optim_distributed(0, 1, validation_filepath, octaveband_dir, cut_secs_list, None, epochs, patience, clap_model, args.model_type)
 
