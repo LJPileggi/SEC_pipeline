@@ -172,7 +172,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
                 if use_specs:
                     if INJECT_OCTAVE:
                         # 1. Convert octave spectrogram to Log-Mel [B, 1, T, F]
-                        convert_octave_to_msclap_mel uses specs_gpu
+                        # convert_octave_to_msclap_mel uses specs_gpu
                         mel_input = convert_octave_to_msclap_mel(specs_gpu, W_matrix)
                 
                         # 🎯 ENSURE DEVICE COHERENCE
