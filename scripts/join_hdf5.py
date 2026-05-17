@@ -22,7 +22,7 @@ def parsing():
 def main():
     args = parsing()
     classes, _, _, _, sample_rate, ref, noise_perc, seed, _, valid_cut_secs, splits_list = get_config_from_yaml(args.config_file)
-    if (n_octave != 0) & (not INJECT_OCTAVE):
+    if (args.n_octave != 0) & (not INJECT_OCTAVE):
         octaveband_dir = os.path.join(basedir_preprocessed, f'{args.audio_format}', f'{args.n_octave}_octave_no_inject')
     else:
         octaveband_dir = os.path.join(basedir_preprocessed, f'{args.audio_format}', f'{args.n_octave}_octave')
