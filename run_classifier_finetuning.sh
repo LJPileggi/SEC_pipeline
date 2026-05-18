@@ -54,7 +54,7 @@ singularity exec --nv --no-home \
         --config_file "$CONFIG_FILE" \
         --audio_format "$AUDIO_FORMAT" \
         --n_octave "$N_OCTAVE" \
-        --cut_secs "$CUT_SECS" \
-        --pretrained_path "$PRETRAINED_MODEL"
+        --cut_secs "$CUT_SECS" # \
+        # --pretrained_path "$PRETRAINED_MODEL"
 
 echo "✅ Training completed. Check ${FINAL_MODEL_PATH} for results."
