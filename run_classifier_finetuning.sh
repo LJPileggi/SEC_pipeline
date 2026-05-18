@@ -29,7 +29,7 @@ export FINAL_MODEL_PATH="${MODEL_DIR}/finetuned_model_RECOVERY_${CUT_SECS}_secs$
 AUDIO_FORMAT=${1:-"wav"}
 N_OCTAVE=${2:-"3"}
 INJECT_OCTAVE_CMD=${3:-"True"}
-CUT_SECS=${4:-7}
+CUT_SECS=${4:-"7"}
 
 # Forzatura logica di coerenza
 if [ "$N_OCTAVE" -eq 0 ]; then
