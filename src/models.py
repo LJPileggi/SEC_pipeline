@@ -35,32 +35,32 @@ def CLAP_initializer(device='cpu', use_cuda=False):
     clap_model = CLAP(version='2023', use_cuda=use_cuda)
 
     # 💉 NEW PATCH: AUDIO ENCODER INJECTION ON INSTANCE
-    if inject_octave:
-        try:
-            target_instance = clap_model.clap.audio_encoder.base.htsat
-            
-            def patched_forward(self, x):
-                """
-                Monkey patch for HTSAT_Swin_Transformer.
-                If input is 4D (Mel), skip STFT and Log-Mel extraction.
-                """
-                if torch.is_tensor(x) and x.ndim == 4:
-                    return self.forward_features(x)
-                return self.original_forward(x)
+    # if inject_octave:
+    #     try:
+    #         target_instance = clap_model.clap.audio_encoder.base.htsat
+    #         
+    #         def patched_forward(self, x):
+    #             """
+    #             Monkey patch for HTSAT_Swin_Transformer.
+    #             If input is 4D (Mel), skip STFT and Log-Mel extraction.
+    #             """
+    #             if torch.is_tensor(x) and x.ndim == 4:
+    #                 return self.forward_features(x)
+    #             return self.original_forward(x)
 
-            if not hasattr(target_instance, 'original_forward'):
-                target_instance.original_forward = target_instance.forward
-                target_instance.forward = types.MethodType(patched_forward, target_instance)
+    #         if not hasattr(target_instance, 'original_forward'):
+    #             target_instance.original_forward = target_instance.forward
+    #             target_instance.forward = types.MethodType(patched_forward, target_instance)
                 
-            if verbose:
-                print(f"🎯 [RANK {rank}] Patch INJECT_OCTAVE applied to clap_model.clap.audio_encoder.base.htsat", flush=True)
-        except AttributeError as e:
-            if verbose:
-                print(f"⚠️ [RANK {rank}] Patch failed: {e}", flush=True)
+    #         if verbose:
+    #             print(f"🎯 [RANK {rank}] Patch INJECT_OCTAVE applied to clap_model.clap.audio_encoder.base.htsat", flush=True)
+    #     except AttributeError as e:
+    #         if verbose:
+    #             print(f"⚠️ [RANK {rank}] Patch failed: {e}", flush=True)
                 
-        except AttributeError as e:
-            if verbose:
-                print(f"⚠️ [RANK {rank}] Patch failed: could not traverse the model hierarchy. Error: {e}", flush=True)
+    #     except AttributeError as e:
+    #         if verbose:
+    #             print(f"⚠️ [RANK {rank}] Patch failed: could not traverse the model hierarchy. Error: {e}", flush=True)
 
     # Clean up AutoModel/AutoTokenizer overrides
     transformers.AutoModel.from_pretrained = original_model_from_pretrained
