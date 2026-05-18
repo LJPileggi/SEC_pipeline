@@ -44,6 +44,7 @@ def main():
         target_folder = f"{args.n_octave}_octave"
 
     octaveband_dir = os.path.join(basedir_preprocessed, args.audio_format, target_folder)
+    print(octaveband_dir)
     validation_filepath = os.path.join(results_validation_filepath_project, args.audio_format, args.n_octave)
     os.makedirs(validation_filepath, exist_ok=True)
 
