@@ -15,16 +15,6 @@ DATASEC_DIR="${BASEDIR}/dataSEC"
 SIF_FILE="${PROJECT_DIR}/.containers/clap_pipeline.sif"
 CONFIG_FILE="${PROJECT_DIR}/configs/config0.yaml"
 
-# Model paths
-MODEL_DIR="${PROJECT_DIR}/.models"
-PRETRAINED_MODEL="${MODEL_DIR}/finetuned_model_Adam_0.01_7_secs.torch"
-local_suffix=""
-if [ "$N_OCTAVE" -ne 0 ] && [ "$INJECT_OCTAVE_CMD" = "False" ]; then
-    local_suffix="_no_inject"
-fi
-
-export FINAL_MODEL_PATH="${MODEL_DIR}/finetuned_model_RECOVERY_${CUT_SECS}_secs${local_suffix}.torch"
-
 # Training parameters (Sbloccati da riga di comando con valori di default)
 AUDIO_FORMAT=${1:-"wav"}
 N_OCTAVE=${2:-"3"}
@@ -35,6 +25,16 @@ CUT_SECS=${4:-"7"}
 if [ "$N_OCTAVE" -eq 0 ]; then
     INJECT_OCTAVE_CMD="False"
 fi
+
+# Model paths
+MODEL_DIR="${PROJECT_DIR}/.models"
+PRETRAINED_MODEL="${MODEL_DIR}/finetuned_model_Adam_0.01_7_secs.torch"
+local_suffix=""
+if [ "$N_OCTAVE" -ne 0 ] && [ "$INJECT_OCTAVE_CMD" = "False" ]; then
+    local_suffix="_no_inject"
+fi
+
+export FINAL_MODEL_PATH="${MODEL_DIR}/finetuned_model_RECOVERY_${CUT_SECS}_secs_${N_OCTAVE}_octave${local_suffix}.torch"
 
 # --- 2. RUN TRAINING ---
 echo "🚀 Starting Finetune Recovery (Target: ${FINAL_MODEL_PATH})..."
