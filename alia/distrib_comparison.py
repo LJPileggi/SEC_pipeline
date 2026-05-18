@@ -62,11 +62,17 @@ def main(args):
     emb_o = manager_o.hf['embedding_dataset']['embeddings'][:]
     raw_lab_o = [l.decode('utf-8') if isinstance(l, bytes) else l for l in manager_o.hf['embedding_dataset']['classes'][:]]
 
+    print(f"Loading No-Injection embeddings: {args.no_inject_h5}")
+    manager_n = HDF5EmbeddingDatasetsManager(args.no_inject_h5, mode='r')
+    emb_n = manager_n.hf['embedding_dataset']['embeddings'][:]
+    raw_lab_n = [l.decode('utf-8') if isinstance(l, bytes) else l for l in manager_n.hf['embedding_dataset']['classes'][:]]
+
     # Mappatura etichette testuali in indici numerici per il plot
-    unique_labels = sorted(list(set(raw_lab_a + raw_lab_o)))
+    unique_labels = sorted(list(set(raw_lab_a + raw_lab_o + raw_lab_n)))
     label_to_id = {label: i for i, label in enumerate(unique_labels)}
     num_lab_a = np.array([label_to_id[l] for l in raw_lab_a])
     num_lab_o = np.array([label_to_id[l] for l in raw_lab_o])
+    num_lab_n = np.array([label_to_id[l] for l in raw_lab_n])
 
     # 2. Riduzione dimensionalità (t-SNE) per confronto spaziale
     print("Running t-SNE reduction...")
@@ -75,17 +81,22 @@ def main(args):
     # Calcoliamo le proiezioni
     proj_a = tsne.fit_transform(emb_a)
     proj_o = tsne.fit_transform(emb_o)
+    proj_n = tsne.fit_transform(emb_n)
     
     # Plotting side-by-side
-    fig, axes = plt.subplots(1, 2, figsize=(20, 8))
+    fig, axes = plt.subplots(1, 3, figsize=(20, 8))
     
     # Pannello Audio
     scatter1 = axes[0].scatter(proj_a[:, 0], proj_a[:, 1], c=num_lab_a, cmap='tab10', alpha=0.6, s=15)
-    axes[0].set_title("Audio Domain Embeddings (Source)")
+    axes[0].set_title("Audio Domain Embeddings (Audio)")
     
     # Pannello Ottave
     scatter2 = axes[1].scatter(proj_o[:, 0], proj_o[:, 1], c=num_lab_o, cmap='tab10', alpha=0.6, s=15)
-    axes[1].set_title("Octave Domain Embeddings (Target)")
+    axes[1].set_title("Octave Domain Embeddings (Spectrograms)")
+
+    # Pannello No-Injection
+    scatter3 = axes[2].scatter(proj_n[:, 0], proj_n[:, 1], c=num_lab_n, cmap='tab10', alpha=0.6, s=15)
+    axes[2].set_title("Octave Domain Embeddings (Spectrograms; no injection)")
 
     # Legenda con i nomi reali delle classi
     handles, _ = scatter2.legend_elements()
@@ -99,29 +110,50 @@ def main(args):
     print("Computing KL Divergence...")
     mu_a, sigma_a = np.mean(emb_a, axis=0), np.cov(emb_a, rowvar=False)
     mu_o, sigma_o = np.mean(emb_o, axis=0), np.cov(emb_o, rowvar=False)
+    mu_n, sigma_n = np.mean(emb_n, axis=0), np.cov(emb_n, rowvar=False)
     
-    kl_val = kl_divergence_gaussians(mu_a, sigma_a, mu_o, sigma_o)
-    
+    kl_val_ao = kl_divergence_gaussians(mu_a, sigma_a, mu_o, sigma_o)
+    kl_val_on = kl_divergence_gaussians(mu_o, sigma_o, mu_n, sigma_n)
+    kl_val_na = kl_divergence_gaussians(mu_n, sigma_n, mu_a, sigma_a)
+
     # Salvataggio statistiche in JSON
     stats = {
-        "kl_divergence": float(kl_val),
-        "audio_samples": int(emb_a.shape[0]),
-        "octave_samples": int(emb_o.shape[0]),
-        "dim": int(emb_a.shape[1])
+        "Audio vs Spectrograms" : {
+            "kl_divergence" : float(kl_val_ao),
+            "audio_samples" : int(emb_a.shape[0]),
+            "octave_samples" : int(emb_o.shape[0]),
+            "dim" : int(emb_a.shape[1])
+        },
+        "Spectrograms vs No-Injection" : {
+            "kl_divergence" : float(kl_val_on),
+            "octave_samples" : int(emb_o.shape[0]),
+            "no_inject_samples" : int(emb_n.shape[0]),
+            "dim" : int(emb_o.shape[1])
+        },
+        "No-Injection vs Audio" : {
+            "kl_divergence" : float(kl_val_na),
+            "no_inject_samples" : int(emb_n.shape[0]),
+            "audio_samples" : int(emb_a.shape[0]),
+            "dim" : int(emb_n.shape[1])
+        }
     }
     
     stats_path = os.path.join(args.output_dir, "comparison_stats.json")
     with open(stats_path, "w") as f:
         json.dump(stats, f, indent=4)
     
-    print(f"KL Divergence: {kl_val:.4f}")
+    print(f"KL Divergence, Audio vs Spectrograms: {kl_val_ao:.4f}")
+    print(f"KL Divergence, Spectrograms vs No-Injection: {kl_val_on:.4f}")
+    print(f"KL Divergence, No-Injection vs Audio: {kl_val_na:.4f}")
     manager_a.close()
     manager_o.close()
+    manager_n.close()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Embedding Distribution Comparison')
-    parser.add_argument("--audio_h5", type=str, required=True, help="Path to source H5")
-    parser.add_argument("--octave_h5", type=str, required=True, help="Path to target H5")
+    parser.add_argument("--audio_h5", type=str, required=True, help="Path to audio H5")
+    parser.add_argument("--octave_h5", type=str, required=True, help="Path to spectrogram H5")
+    parser.add_argument("--no_inject_h5", type=str, required=True, help="Path to no-injection H5")
     parser.add_argument("--output_dir", type=str, required=True, help="Output directory for plots and stats")
     args = parser.parse_args()
     
