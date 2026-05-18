@@ -11,7 +11,6 @@
 PROJECT_DIR="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline"
 DATASEC_DIR="/leonardo_scratch/large/userexternal/$USER/dataSEC"
 EMB_BASE="${DATASEC_DIR}/PREPROCESSED_DATASET"
-RESULTS_BASE="${DATASEC_DIR}/results"
 SIF_FILE="${PROJECT_DIR}/.containers/clap_pipeline.sif"
 CONFIG_FILE="${PROJECT_DIR}/configs/config0.yaml"
 
@@ -31,6 +30,8 @@ if [ "$N_OCTAVE" -ne 0 ] && [ "$INJECT_OCTAVE_CMD" = "False" ]; then
     target_folder="${N_OCTAVE}_octave_no_inject"
     local_suffix="_no_inject"
 fi
+
+RESULTS_BASE="${DATASEC_DIR}/results_${target_folder}"
 
 TMP_DIR="${PROJECT_DIR}/.tmp"
 L_TMP="/tmp/assessment_marathon"
@@ -156,7 +157,7 @@ while [ $CURRENT_IDX -lt $TOTAL_FILES ]; do
         CUT_SECS=$(echo "$FILE_REL_VALID" | cut -d'/' -f3 | cut -d'_' -f1)
 
         # Generazione dinamica e impeccabile del percorso dei pesi del modello
-        MODEL_WEIGHTS="${PROJECT_DIR}/.models/finetuned_model_RECOVERY_${CUT_SECS}_secs${local_suffix}.torch"
+        MODEL_WEIGHTS="${PROJECT_DIR}/.models/finetuned_model_RECOVERY_${CUT_SECS}_secs_${N_OCTAVE}_octave${local_suffix}.torch"
 
         export INJECT_OCTAVE="$INJECT_OCTAVE_CMD"
 
