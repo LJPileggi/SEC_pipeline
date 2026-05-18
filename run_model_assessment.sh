@@ -56,20 +56,20 @@ mkdir -p "$L_TMP/embeddings"
 cd "${EMB_BASE}"
 # Troviamo i file relativi partendo dalla root del dataset
 if [ "$N_OCTAVE" -eq 0 ]; then
-    # Macro-gruppo Audio Grezzo: prende solo 0_octave
-    mapfile -t H5_TRAIN_LIST < <(find "./${AUDIO_FORMAT}" -type f -path "*/0_octave/7_secs/combined_train.h5" | sed 's|^\./||')
-    mapfile -t H5_VALID_LIST < <(find "./${AUDIO_FORMAT}" -type f -path "*/0_octave/7_secs/combined_valid.h5" | sed 's|^\./||')
-    mapfile -t H5_ES_LIST    < <(find "./${AUDIO_FORMAT}" -type f -path "*/0_octave/7_secs/combined_es.h5" | sed 's|^\./||')
+    # Macro-gruppo Audio Grezzo: prende tutti i formati, ma solo sotto cartelle 0_octave
+    mapfile -t H5_TRAIN_LIST < <(find . -type f -path "*/0_octave/7_secs/combined_train.h5" | sed 's|^\./||')
+    mapfile -t H5_VALID_LIST < <(find . -type f -path "*/0_octave/7_secs/combined_valid.h5" | sed 's|^\./||')
+    mapfile -t H5_ES_LIST    < <(find . -type f -path "*/0_octave/7_secs/combined_es.h5" | sed 's|^\./||')
 elif [ "$INJECT_OCTAVE_CMD" = "False" ]; then
-    # Macro-gruppo No Injection: prende tutte le cartelle con no_inject (esclude 0_octave)
-    mapfile -t H5_TRAIN_LIST < <(find "./${AUDIO_FORMAT}" -type f -path "*/7_secs/combined_train.h5" -path "*no_inject*" ! -path "*0_octave*" | sed 's|^\./||')
-    mapfile -t H5_VALID_LIST < <(find "./${AUDIO_FORMAT}" -type f -path "*/7_secs/combined_valid.h5" -path "*no_inject*" ! -path "*0_octave*" | sed 's|^\./||')
-    mapfile -t H5_ES_LIST    < <(find "./${AUDIO_FORMAT}" -type f -path "*/7_secs/combined_es.h5" -path "*no_inject*" ! -path "*0_octave*" | sed 's|^\./||')
+    # Macro-gruppo No Injection: prende tutti i formati e tutte le ottave con no_inject (esclude 0_octave)
+    mapfile -t H5_TRAIN_LIST < <(find . -type f -path "*/7_secs/combined_train.h5" -path "*no_inject*" ! -path "*0_octave*" | sed 's|^\./||')
+    mapfile -t H5_VALID_LIST < <(find . -type f -path "*/7_secs/combined_valid.h5" -path "*no_inject*" ! -path "*0_octave*" | sed 's|^\./||')
+    mapfile -t H5_ES_LIST    < <(find . -type f -path "*/7_secs/combined_es.h5" -path "*no_inject*" ! -path "*0_octave*" | sed 's|^\./||')
 else
-    # Macro-gruppo Injection: prende tutte le cartelle standard (esclude no_inject e 0_octave)
-    mapfile -t H5_TRAIN_LIST < <(find "./${AUDIO_FORMAT}" -type f -path "*/7_secs/combined_train.h5" ! -path "*no_inject*" ! -path "*0_octave*" | sed 's|^\./||')
-    mapfile -t H5_VALID_LIST < <(find "./${AUDIO_FORMAT}" -type f -path "*/7_secs/combined_valid.h5" ! -path "*no_inject*" ! -path "*0_octave*" | sed 's|^\./||')
-    mapfile -t H5_ES_LIST    < <(find "./${AUDIO_FORMAT}" -type f -path "*/7_secs/combined_es.h5" ! -path "*no_inject*" ! -path "*0_octave*" | sed 's|^\./||')
+    # Macro-gruppo Injection: prende tutti i formati e tutte le ottave standard (esclude no_inject e 0_octave)
+    mapfile -t H5_TRAIN_LIST < <(find . -type f -path "*/7_secs/combined_train.h5" ! -path "*no_inject*" ! -path "*0_octave*" | sed 's|^\./||')
+    mapfile -t H5_VALID_LIST < <(find . -type f -path "*/7_secs/combined_valid.h5" ! -path "*no_inject*" ! -path "*0_octave*" | sed 's|^\./||')
+    mapfile -t H5_ES_LIST    < <(find . -type f -path "*/7_secs/combined_es.h5" ! -path "*no_inject*" ! -path "*0_octave*" | sed 's|^\./||')
 fi
 cd "$PROJECT_DIR"
 
