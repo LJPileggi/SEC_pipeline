@@ -328,17 +328,15 @@ def convert_octave_to_msclap_mel(spectrogram_gpu, W_matrix):
     # 2. Shape Formatting for HTS-AT encoder [B, C, T, F]
     x_mel = x_mel.unsqueeze(1) 
 
-    # 3. Conversione logaritmica in Decibel nativa (Base 10) coerente con CLAP/HTS-AT
-    # Evita il logaritmo naturale che deforma la distribuzione geometrica delle feature
-    ref_value = 1.0
-    amin = 1e-10
-    
-    # Formula standard del log-mel spectrogram: 10 * log10(max(amin, x) / ref)
-    x_log_mel = 10.0 * torch.log10(torch.clamp(x_mel, min=amin) / ref_value)
-    
-    # 4. Rimuoviamo la normalizzazione d'istanza locale distruttiva. 
-    # Il Transformer lavora direttamente sulla copertina dei decibel scalata.
-    return x_log_mel
+    # 3. Logarithmic Compression (matches standard CLAP/PANNs pipeline)
+    x_log_mel = torch.log(torch.clamp(x_mel, min=1e-6))
+
+    # 4. Instance-based Normalization
+    # Rescales the input to zero mean / unit variance for the Transformer.
+    mean = x_log_mel.mean(dim=(2, 3), keepdim=True)
+    std = x_log_mel.std(dim=(2, 3), keepdim=True)
+    x_norm = (x_log_mel - mean) / (std + 1e-6)
+    return x_norm
 
 class OriginalModel:
     """
