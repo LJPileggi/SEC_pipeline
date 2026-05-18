@@ -333,10 +333,10 @@ def convert_octave_to_msclap_mel(spectrogram_gpu, W_matrix):
 
     # 4. Instance-based Normalization
     # Rescales the input to zero mean / unit variance for the Transformer.
-    mean = x_log_mel.mean(dim=(2, 3), keepdim=True)
-    std = x_log_mel.std(dim=(2, 3), keepdim=True)
-    x_norm = (x_log_mel - mean) / (std + 1e-6)
-    return x_norm
+    # mean = x_log_mel.mean(dim=(2, 3), keepdim=True)
+    # std = x_log_mel.std(dim=(2, 3), keepdim=True)
+    # x_norm = (x_log_mel - mean) / (std + 1e-6)
+    return x_log_mel # x_norm
 
 class OriginalModel:
     """
