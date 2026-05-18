@@ -321,7 +321,7 @@ def convert_octave_to_msclap_mel(spectrogram_gpu, W_matrix):
     # 2. 🎯 LA PERMUTAZIONE DEGLI ASSI
     # Scambiamo l'asse 1 (Tempo) con l'asse 2 (Frequenze Mel)
     # Il tensore passa da [B, T, 64] a [B, 64, T]
-    x_mel = x_mel.permute(0, 2, 1)
+    # x_mel = x_mel.permute(0, 2, 1)
 
     # 3. Shape Formatting for HTS-AT encoder [B, C, F, T] (Diventa [B, 1, 64, T])
     x_mel = x_mel.unsqueeze(1) 
