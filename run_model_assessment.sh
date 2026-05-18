@@ -18,6 +18,7 @@ CONFIG_FILE="${PROJECT_DIR}/configs/config0.yaml"
 AUDIO_FORMAT=${1:-"wav"}
 N_OCTAVE=${2:-"3"}
 INJECT_OCTAVE_CMD=${3:-"True"}
+CUT_SECS=${4:-"7"}
 
 if [ "$N_OCTAVE" -eq 0 ]; then
     INJECT_OCTAVE_CMD="False"
