@@ -125,7 +125,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     torch.set_num_threads(1)
 
     # Evaluate filterbank-to-mel conversion matrix
-    W_matrix = get_octave_to_mel_transition_matrix(n_octave, sample_rate=sr).to(device)
+    W_matrix = get_octave_to_mel_transition_matrix(n_octave, sample_rate=sr)# .to(device)
 
     batch_audio = []; batch_meta = []
 
