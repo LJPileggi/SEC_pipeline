@@ -312,31 +312,31 @@ def get_octave_to_mel_transition_matrix(n_octave, n_mels=64, sample_rate=52000, 
 def convert_octave_to_msclap_mel(spectrogram_gpu, W_matrix):
     """
     Converts octave spectrogram to MS-CLAP Mel scale using a pre-computed 
-    transition matrix.
-    
-    args:
-     - spectrogram_gpu (torch.Tensor): [B, T, F_oct].
-     - W_matrix (torch.Tensor): Pre-computed transition matrix [F_oct x 64].
-        
-    returns:
-     - torch.Tensor: Formatted for HTS-AT [B, 1, T, 64].
+    transition matrix, fixing both the return statement and the axis orientation.
     """
     # 1. Energy Projection via Matrix Multiplication
-    # [B, T, F_octave] @ [F_octave, 64] -> [B, T, 64]
+    # Output dimension: [B, T, F_octave] @ [F_octave, 64] -> [B, T, 64]
     x_mel = torch.matmul(spectrogram_gpu, W_matrix)
 
-    # 2. Shape Formatting for HTS-AT encoder [B, C, T, F]
+    # 2. 🎯 LA PERMUTAZIONE DEGLI ASSI
+    # Scambiamo l'asse 1 (Tempo) con l'asse 2 (Frequenze Mel)
+    # Il tensore passa da [B, T, 64] a [B, 64, T]
+    x_mel = x_mel.permute(0, 2, 1)
+
+    # 3. Shape Formatting for HTS-AT encoder [B, C, F, T] (Diventa [B, 1, 64, T])
     x_mel = x_mel.unsqueeze(1) 
 
-    # 3. Logarithmic Compression (matches standard CLAP/PANNs pipeline)
+    # 4. Logarithmic Compression
     x_log_mel = torch.log(torch.clamp(x_mel, min=1e-6))
 
-    # 4. Instance-based Normalization
-    # Rescales the input to zero mean / unit variance for the Transformer.
-    # mean = x_log_mel.mean(dim=(2, 3), keepdim=True)
-    # std = x_log_mel.std(dim=(2, 3), keepdim=True)
-    # x_norm = (x_log_mel - mean) / (std + 1e-6)
-    return x_log_mel # x_norm
+    # 5. Instance-based Normalization
+    # Ora calcola media e varianza sulla fetta bidimensionale [64, T] correttamente orientata
+    mean = x_log_mel.mean(dim=(2, 3), keepdim=True)
+    std = x_log_mel.std(dim=(2, 3), keepdim=True)
+    x_norm = (x_log_mel - mean) / (std + 1e-6)
+
+    # 6. Restituzione del tensore raddrizzato e normalizzato
+    return x_norm
 
 class OriginalModel:
     """
