@@ -125,7 +125,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     torch.set_num_threads(1)
 
     # Evaluate filterbank-to-mel conversion matrix
-    W_matrix = get_octave_to_mel_transition_matrix(n_octave, sample_rate=sr)# .to(device)
+    # W_matrix = get_octave_to_mel_transition_matrix(n_octave, sample_rate=sr, device=device)# .to(device)
 
     batch_audio = []; batch_meta = []
 
@@ -173,7 +173,8 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
                     if INJECT_OCTAVE:
                         # 1. Convert octave spectrogram to Log-Mel [B, 1, T, F]
                         # convert_octave_to_msclap_mel uses specs_gpu
-                        mel_input = convert_octave_to_msclap_mel(specs_gpu, W_matrix)
+                        # mel_input = convert_octave_to_msclap_mel(specs_gpu, W_matrix)
+                        mel_input = convert_octave_to_msclap_mel(specs_gpu)
                 
                         # 🎯 ENSURE DEVICE COHERENCE
                         # We must ensure the tensor is on the same device as the model weights
