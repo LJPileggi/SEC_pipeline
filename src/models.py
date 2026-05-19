@@ -338,7 +338,7 @@ def get_octave_to_mel_transition_matrix(n_octave, n_mels=64, sample_rate=52000, 
     # 6. Restituzione del tensore raddrizzato e normalizzato
 #     return x_norm
 
-def convert_octave_to_msclap_mel(spectrogram_gpu):
+def convert_octave_to_msclap_mel(spectrogram_gpu, target_mels=64):
     """
     Converts octave spectrogram to MS-CLAP Mel scale using a pre-computed 
     transition matrix, fixing both the return statement and the axis orientation.
