@@ -100,7 +100,12 @@ def main():
     
     # 🎯 PERCORSO DEL DATASET RAW SPACCETTATO SU LEONARDO SCRATCH
     # Ogni classe ha il suo file .h5 dedicato nella forma: raw_dataset_{class_name}.h5
-    raw_audio_root = F"/app/dataSEC/RAW_DATASET/raw_{args.audio_format}"
+    raw_audio_root = os.path.join(
+        os.environ.get("BASEDIR", "/leonardo_scratch/large/userexternal/user"),
+        "dataSEC",
+        "RAW_DATASET",
+        f"raw_{args.audio_format}"
+        )
     
     per_audio_results = []
     
