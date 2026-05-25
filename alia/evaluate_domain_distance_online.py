@@ -96,7 +96,7 @@ def apply_online_pipeline(raw_audio, sr, cut_secs, hts_at_engine, W_matrix, n_oc
         # Applying the active conversion pipeline from models.py (Interpolation + Compression + InstanceNorm)
         x_injected_norm = convert_octave_to_msclap_mel(specs_cpu)
         
-        # Temporal axis alignment via bicubic interpolation if frames shapes mismatch
+        # Temporal axis alignment via bilinear interpolation if frames shapes mismatch
         if x_native_norm.shape[2] != x_injected_norm.shape[2]:
             x_injected_norm = F.interpolate(
                 x_injected_norm, size=(x_native_norm.shape[2], 64), mode='bicubic', align_corners=True
@@ -116,7 +116,7 @@ def main():
     # Load native CLAP primitives directly onto CPU
     print("-> Caricamento modello CLAP nativo su CPU...")
     clap_model, _, _ = CLAP_initializer(device='cpu', use_cuda=False)
-    hts_at_engine = clap_model.clap.audio_encoder.base.htsat
+    hts_at_engine = clap_model.model.audio_encoder.base.htsat
     hts_at_engine.eval()
     
     classes, _, _, _, sr, _, _, _, _, _, _ = get_config_from_yaml(args.config_file)
@@ -129,7 +129,7 @@ def main():
         "dataSEC",
         "RAW_DATASET",
         f"raw_{args.audio_format}"
-        )
+    )
     
     per_audio_results = []
     
@@ -137,13 +137,12 @@ def main():
     
     # Iterating over classes: opening and closing one HDF5 container at a time
     for class_name in classes:
-        class_h5_path = os.path.join(raw_audio_root, f"{class_name}.h5")
+        # 🎯 GROUND TRUTH FIX: Match the exact naming convention from convert_audio_dataset_to_hdf5.py
+        class_h5_path = os.path.join(raw_audio_root, f"{class_name}_{args.audio_format}_dataset.h5")
         
         # Structural fallback check for naming variations
         if not os.path.exists(class_h5_path):
-            class_h5_path = os.path.join(raw_audio_root, f"{class_name}.h5")
-            if not os.path.exists(class_h5_path):
-                continue
+            continue
                 
         try:
             # Instantiating your stable HDF5DatasetManager for the current class file
@@ -159,7 +158,9 @@ def main():
             # Slicing the file sequentially line by line up to the sampling limit
             for idx in range(samples_to_extract):
                 raw_audio, meta_dict = audio_manager.get_audio_and_metadata(idx)
-                track_id = meta_dict.get('track_id', f"{class_name}_tr_{idx}")
+                
+                # 🎯 GROUND TRUTH FIX: Extract 'track_name' following METADATA_DTYPE of the converter
+                track_id = meta_dict.get('track_name', f"{class_name}_tr_{idx}")
                 
                 # Executing the clean dual-pipeline in RAM
                 p_tensor, q_tensor = apply_online_pipeline(
