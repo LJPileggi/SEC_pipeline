@@ -17,8 +17,6 @@ echo "⏳ Esecuzione Analisi di Dominio Online (50 campioni/classe)..."
 
 singularity exec --no-home \
     --bind "/leonardo_scratch:/leonardo_scratch" \
-    --bind "$(pwd):/app" \
-    --pwd "/app" \
     "$SIF_FILE" \
     python3 alia/evaluate_domain_distance_online.py \
         --config_file "$CONFIG_FILE" \
