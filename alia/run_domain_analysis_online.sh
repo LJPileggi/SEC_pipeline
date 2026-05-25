@@ -8,6 +8,8 @@ DATASEC_DIR="${BASEDIR}/dataSEC"
 SIF_FILE="${PROJECT_DIR}/.containers/clap_pipeline.sif"
 CONFIG_FILE="${PROJECT_DIR}/configs/config0.yaml"
 
+export BASEDIR="$BASEDIR"
+
 # 🎯 PARAMETRI COMPILATI SUI PESI DI FABBRICA (Ispirati da run_embedding_pipeline.sh)
 CLAP_SCRATCH_WEIGHTS="${PROJECT_DIR}/.clap_weights/CLAP_weights_2023.pth"
 ROBERTA_PATH="${PROJECT_DIR}/.clap_weights/roberta-base"
