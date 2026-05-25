@@ -178,9 +178,25 @@ def main():
                     'wasserstein': wass
                 })
                 
+                # 🎯 ANTI-OOM MILESTONE: Radical RAM memory cleanup at each iteration
+                # Inspired by the local execution management in distributed_clap_embeddings.py
+                del p_tensor, q_tensor, raw_audio, meta_dict
+                import gc
+                gc.collect()
+                
             # 🎯 CRITICAL STEP: Close current file handle and flush cache before moving to the next class
             if audio_manager.hf is not None:
                 audio_manager.hf.close()
+                
+            # Extra flush after closing the dataset container
+            import gc
+            gc.collect()
+                
+        except Exception as e:
+            print(f"   ⚠️ Errore critico saltato nella classe {class_name}: {e}")
+            import gc
+            gc.collect()
+            continue
                 
         except Exception as e:
             print(f"   ⚠️ Errore critico saltato nella classe {class_name}: {e}")
