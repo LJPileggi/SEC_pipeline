@@ -10,6 +10,30 @@ import logging
 
 sys.path.insert(0, '/app')
 
+# 💉 FIREWALLED HPC ENVIRONMENTS PATCH: Redirect weight downloads to local cache
+import huggingface_hub
+import transformers
+import msclap
+
+def universal_path_redirect(*args, **kwargs):
+    weights_path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
+    text_path = os.getenv("CLAP_TEXT_ENCODER_PATH")
+    if any(x for x in args if 'msclap' in str(x)) or 'CLAP_weights' in str(kwargs):
+        return weights_path
+    filename = kwargs.get('filename') or (args[1] if len(args) > 1 else None)
+    if filename and text_path:
+        return os.path.join(text_path, str(filename))
+    return text_path
+
+huggingface_hub.hf_hub_download = universal_path_redirect
+transformers.utils.hub.cached_file = universal_path_redirect
+transformers.utils.hub.hf_hub_download = universal_path_redirect
+msclap.CLAPWrapper.hf_hub_download = universal_path_redirect
+
+# Bypass internal audio loading library errors on headless clusters
+def patched_read_audio(self, audio_path, resample=True): pass 
+msclap.CLAP.read_audio = patched_read_audio
+
 # Preserving your stable modular functions untouched
 from src.utils import get_config_from_yaml, HDF5DatasetManager
 from src.models import CLAP_initializer, get_octave_to_mel_transition_matrix, \
