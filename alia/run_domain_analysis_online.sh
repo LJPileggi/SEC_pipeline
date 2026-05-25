@@ -38,7 +38,7 @@ singularity exec --no-home \
     --bind "$(pwd):/app" \
     --pwd "/app" \
     "$SIF_FILE" \
-    python3 scripts/evaluate_domain_distance_online.py \
+    python3 alia/evaluate_domain_distance_online.py \
         --config_file "$CONFIG_FILE" \
         --n_octave "3" \
         --audio_format "wav" \
