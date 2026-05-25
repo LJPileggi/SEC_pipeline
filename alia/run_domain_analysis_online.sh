@@ -24,7 +24,7 @@ singularity exec --no-home \
     python3 alia/evaluate_domain_distance_online.py \
         --config_file "$CONFIG_FILE" \
         --n_octave "3" \
-        --audio_format "wav \
+        --audio_format "wav" \
         --cut_secs 7 \
         --samples_per_class 50
 
