@@ -23,6 +23,10 @@ export HF_HUB_OFFLINE=1
 export PYTHONUNBUFFERED=1
 export INJECT_OCTAVE="False" # Ci serve il preprocessore nativo intatto per estrarre la GT
 
+# 🎯 SOLUZIONE CRITICA: Devia la cache di Numba in una cartella locale con permessi di scrittura
+export NUMBA_CACHE_DIR="${PROJECT_DIR}/.numba_cache"
+mkdir -p "$NUMBA_CACHE_DIR"
+
 # Colleghiamo i percorsi reali dello scratch che la patch Python andrà a intercettare
 export LOCAL_CLAP_WEIGHTS_PATH="$CLAP_SCRATCH_WEIGHTS"
 export CLAP_TEXT_ENCODER_PATH="$ROBERTA_PATH"
