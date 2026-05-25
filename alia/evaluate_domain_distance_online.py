@@ -1,4 +1,5 @@
 import os
+import sys
 import argparse
 import torch
 import torch.nn.functional as F
@@ -6,6 +7,8 @@ import numpy as np
 import pandas as pd
 import scipy.stats
 import logging
+
+sys.path.insert(0, '/app')
 
 # Preserving your stable modular functions untouched
 from src.utils import get_config_from_yaml, HDF5DatasetManager
