@@ -116,7 +116,7 @@ def main():
     # Load native CLAP primitives directly onto CPU
     print("-> Caricamento modello CLAP nativo su CPU...")
     clap_model, _, _ = CLAP_initializer(device='cpu', use_cuda=False)
-    hts_at_engine = clap_model.model.audio_encoder.base.htsat
+    hts_at_engine = clap_model.clap.audio_encoder.base.htsat
     hts_at_engine.eval()
     
     classes, _, _, _, sr, _, _, _, _, _, _ = get_config_from_yaml(args.config_file)
