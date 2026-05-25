@@ -188,18 +188,25 @@ def main():
             if audio_manager.hf is not None:
                 audio_manager.hf.close()
                 
-            # Extra flush after closing the dataset container
+            # 🎯 AGGRESSIVE CPU RECOVERY: Force system-level glibc malloc trim back to the OS
+            # Directly mirroring the production setup found in distributed_clap_embeddings.py
             import gc
+            import ctypes
             gc.collect()
+            try:
+                ctypes.CDLL('libc.so.6').malloc_trim(0)
+            except Exception:
+                pass
                 
         except Exception as e:
             print(f"   ⚠️ Errore critico saltato nella classe {class_name}: {e}")
             import gc
+            import ctypes
             gc.collect()
-            continue
-                
-        except Exception as e:
-            print(f"   ⚠️ Errore critico saltato nella classe {class_name}: {e}")
+            try:
+                ctypes.CDLL('libc.so.6').malloc_trim(0)
+            except Exception:
+                pass
             continue
 
     # --- DATAFRAME REPORT GENERATION ---
