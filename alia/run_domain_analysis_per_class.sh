@@ -74,7 +74,7 @@ for CLASSE in $CLASSES_LIST; do
     echo "✅ Tranche classe $CLASSE conclusa. Risorse RAM interamente riacquisite."
 done
 
-# --- 5. AGGREGAZIONE FINALE DEI RISULTATI ---
+# --- 5. AGGREGAZIONE FINALE DEI RISULTATI NUMERICI ---
 echo "============================================================"
 echo "📊 AVVIO SCRIPT DI CONSOLIDAMENTO E ANALISI GLOBALE dataSEC"
 echo "============================================================"
@@ -88,4 +88,18 @@ singularity exec --no-home \
         --results_dir "results/domain_analysis_online" \
         --output_dir "results/domain_analysis_final"
 
-echo "🎉 Pipeline dataSEC completata con successo in totale sicurezza hardware."
+# --- 6. GENERAZIONE DEI BOXPLOT SPETTRALI PER CANALE MEL ---
+echo "============================================================"
+echo "📈 AVVIO GENERATORE AUTOMATICO DI BOXPLOT PER CANALE MEL"
+echo "============================================================"
+
+singularity exec --no-home \
+    --bind "/leonardo_scratch:/leonardo_scratch" \
+    --bind "$(pwd):/app" \
+    --pwd "/app" \
+    "$SIF_FILE" \
+    python3 alia/plot_mel_boxplots.py \
+        --results_dir "results/domain_analysis_online" \
+        --output_dir "results/domain_analysis_plots"
+
+echo "🎉 Pipeline dataSEC completata con successo. Controlla i grafici in results/domain_analysis_plots/"
