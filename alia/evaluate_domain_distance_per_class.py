@@ -70,7 +70,7 @@ def apply_online_pipeline(raw_audio, sr, cut_secs, hts_at_engine, W_matrix, n_oc
         x_native_norm = hts_at_engine.bn0(x_native_logmel.transpose(1, 3)).transpose(1, 3)
         
         specs_cpu = spectrogram_n_octaveband_generator_gpu(
-            audio_tensor, sr, int(n_octave), center_freqs=None, ref=1.0, device='cpu'
+            audio_tensor, sr, int(n_octave), center_freqs=None, device='cpu'
         )
         x_injected_norm = convert_octave_to_msclap_mel(specs_cpu)
         
