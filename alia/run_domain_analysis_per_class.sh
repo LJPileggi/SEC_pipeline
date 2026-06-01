@@ -12,8 +12,8 @@ CONFIG_FILE="${PROJECT_DIR}/configs/config0.yaml"
 export BASEDIR="$BASEDIR"
 
 # 🎯 MACRO VARIABILI PER LE MATRICI DI CONFUSIONE REALI (Passate come richiesto)
-CONF_MATRIX_0_OCTAVE="results/misclassified_keys_0_octave.csv"
-CONF_MATRIX_3_OCTAVE="results/misclassified_keys_3_octave.csv"
+CONF_MATRIX_0_OCTAVE="${DATASEC_DIR}/results_0_octave/wav/0_octave/7_secs/misclassified_keys.csv"
+CONF_MATRIX_3_OCTAVE="${DATASEC_DIR}/results_3_octave/wav/3_octave/7_secs/misclassified_keys.csv"
 
 # PARAMETRI COMPILATI SUI PESI DI FABBRICA
 CLAP_SCRATCH_WEIGHTS="${PROJECT_DIR}/.clap_weights/CLAP_weights_2023.pth"
