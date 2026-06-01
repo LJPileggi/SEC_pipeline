@@ -149,12 +149,13 @@ def main():
                         'discrepancy': float(val)
                     })
 
-                # 🎯 CONFIGURAZIONE NATIVA (Log-Mel CLAP): Shape [1, 1, Time, 64] -> [64, Time]
-                spec_2d_native = p_tensor.squeeze().detach().cpu().numpy().T
+                # 🎯 CONFIGURAZIONE NATIVA (Log-Mel CLAP): Forziamo lo squeeze solo di batch e canale [0, 1]
+                # Portiamo da [1, 1, Time, 64] a [Time, 64] e poi trasponiamo in [64, Time]
+                spec_2d_native = p_tensor.squeeze(0).squeeze(0).detach().cpu().numpy().T
                 class_time_resolved_specs_native.append(spec_2d_native)
                 
-                # 🎯 CONFIGURAZIONE INIETTATA (Le nostre Ottave): Shape [1, 1, Time, 64] -> [64, Time]
-                spec_2d_injected = q_tensor.squeeze().detach().cpu().numpy().T
+                # 🎯 CONFIGURAZIONE INIETTATA (Le nostre Ottave): Stessa identica chirurgia geometrica
+                spec_2d_injected = q_tensor.squeeze(0).squeeze(0).detach().cpu().numpy().T
                 class_time_resolved_specs_injected.append(spec_2d_injected)
 
                 del p_tensor, q_tensor, raw_audio, meta_dict
@@ -185,16 +186,16 @@ def main():
         # 🎯 CONSOLIDAMENTO CENTROIDE CONFIGURAZIONE NATIVA
         if len(class_time_resolved_specs_native) > 0:
             stacked_native = np.stack(class_time_resolved_specs_native, axis=0)
-            mean_native_spec_2d = np.mean(stacked_native, axis=0)
+            mean_native_spec_2d = np.mean(stacked_native, axis=0) # [64, Time]
             np.save(f"{output_dir}/spectral_centroid_native{class_suffix}.npy", mean_native_spec_2d)
-            print(f"   • Centroide Spettrale Nativo salvato.")
+            print(f"   • Centroide Spettrale Nativo [64, Time] salvato con successo.")
             
         # 🎯 CONSOLIDAMENTO CENTROIDE CONFIGURAZIONE INIETTATA (3 OTTAVE)
         if len(class_time_resolved_specs_injected) > 0:
             stacked_injected = np.stack(class_time_resolved_specs_injected, axis=0)
-            mean_injected_spec_2d = np.mean(stacked_injected, axis=0)
+            mean_injected_spec_2d = np.mean(stacked_injected, axis=0) # [64, Time]
             np.save(f"{output_dir}/spectral_centroid_injected{class_suffix}.npy", mean_injected_spec_2d)
-            print(f"   • Centroide Spettrale a Ottave salvato.")
+            print(f"   • Centroide Spettrale a Ottave [64, Time] salvato con successo.")
 
 if __name__ == "__main__":
     main()
