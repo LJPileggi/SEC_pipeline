@@ -29,7 +29,7 @@ export CUDA_VISIBLE_DEVICES=""
 
 export HF_HUB_OFFLINE=1
 export PYTHONUNBUFFERED=1
-export INJECT_OCTAVE="False" 
+export INJECT_OCTAVE="True" 
 
 export NUMBA_CACHE_DIR="${PROJECT_DIR}/.numba_cache"
 mkdir -p "$NUMBA_CACHE_DIR"
