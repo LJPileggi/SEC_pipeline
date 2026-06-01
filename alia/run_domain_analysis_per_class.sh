@@ -7,6 +7,7 @@ PROJECT_DIR="${BASEDIR}/SEC_pipeline"
 DATASEC_DIR="${BASEDIR}/dataSEC"
 SIF_FILE="${PROJECT_DIR}/.containers/clap_pipeline.sif"
 CONFIG_FILE="${PROJECT_DIR}/configs/config0.yaml"
+RESULT_DIR="${DATASEC_DIR}/distrib_comp_results/"
 
 # Esportazione esplicita per consentire la corretta interpretazione dei percorsi spaccettati nel container
 export BASEDIR="$BASEDIR"
@@ -83,8 +84,8 @@ singularity exec --no-home \
     --pwd "/app" \
     "$SIF_FILE" \
     python3 alia/aggregate_domain_results.py \
-        --results_dir "results/domain_analysis_online" \
-        --output_dir "results/domain_analysis_final"
+        --results_dir "${RESULT_DIR}/domain_analysis_online" \
+        --output_dir "${RESULT_DIR}/domain_analysis_final"
 
 # --- 6. GENERAZIONE DEI BOXPLOT SPETTRALI PER CANALE MEL ---
 echo "============================================================"
@@ -97,8 +98,8 @@ singularity exec --no-home \
     --pwd "/app" \
     "$SIF_FILE" \
     python3 alia/plot_mel_boxplots.py \
-        --results_dir "results/domain_analysis_online" \
-        --output_dir "results/domain_analysis_plots"
+        --results_dir "${RESULT_DIR}/domain_analysis_online" \
+        --output_dir "${RESULT_DIR}/domain_analysis_plots"
 
 # --- 7. NEW: CALCOLO DELLE DISTANZE INTERCLASSE E CORRELAZIONE MATRICE DI CONFUSIONE ---
 echo "============================================================"
@@ -111,8 +112,8 @@ singularity exec --no-home \
     --pwd "/app" \
     "$SIF_FILE" \
     python3 alia/compute_interclass_distances.py \
-        --results_dir "results/domain_analysis_online" \
-        --output_dir "results/domain_analysis_interclass" \
+        --results_dir "${RESULT_DIR}/domain_analysis_online" \
+        --output_dir "${RESULT_DIR}/domain_analysis_interclass" \
         --conf_0 "$CONF_MATRIX_0_OCTAVE" \
         --conf_3 "$CONF_MATRIX_3_OCTAVE"
 

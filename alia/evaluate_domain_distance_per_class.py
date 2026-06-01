@@ -102,8 +102,9 @@ def main():
     per_audio_results = []
     # 🎯 Accumulatore di dizionari per mantenere il dato di ogni traccia e ogni bin (Long Format)
     granular_mel_rows = []
-    # 🎯 INTEGRAZIONE META-ANALISI 2: Accumulatore per le matrici temporali della tranche
-    class_time_resolved_specs = []
+    # 🎯 ABBIAMO DUE CONFIGURAZIONI: Accumulatori per le matrici temporali native e iniettate
+    class_time_resolved_specs_native = []
+    class_time_resolved_specs_injected = []
     
     for class_name in classes:
         if args.class_to_process and class_name != args.class_to_process:
@@ -148,10 +149,13 @@ def main():
                         'discrepancy': float(val)
                     })
 
-                # 🎯 INTEGRAZIONE META-ANALISI 2: Rilevazione dello spettrogramma nativo a piena risoluzione temporale
-                # Portiamo lo shape da [1, 1, Time, 64] a [64, Time] per preservare la dinamica istante per istante
-                native_spec_2d = p_tensor.squeeze().detach().cpu().numpy().T  # Shape: [64, Time]
-                class_time_resolved_specs.append(native_spec_2d)
+                # 🎯 CONFIGURAZIONE NATIVA (Log-Mel CLAP): Shape [1, 1, Time, 64] -> [64, Time]
+                spec_2d_native = p_tensor.squeeze().detach().cpu().numpy().T
+                class_time_resolved_specs_native.append(spec_2d_native)
+                
+                # 🎯 CONFIGURAZIONE INIETTATA (Le nostre Ottave): Shape [1, 1, Time, 64] -> [64, Time]
+                spec_2d_injected = q_tensor.squeeze().detach().cpu().numpy().T
+                class_time_resolved_specs_injected.append(spec_2d_injected)
 
                 del p_tensor, q_tensor, raw_audio, meta_dict
                 import gc; gc.collect()
@@ -167,7 +171,7 @@ def main():
 
     if len(per_audio_results) > 0:
         df = pd.DataFrame(per_audio_results)
-        output_dir = "results/domain_analysis_online"
+        output_dir = os.path.join(os.getenv("RESULTS_DIR"), "domain_analysis_online")
         os.makedirs(output_dir, exist_ok=True)
         
         class_suffix = f"_{args.class_to_process}" if args.class_to_process else ""
@@ -178,17 +182,19 @@ def main():
         df_mel_raw.to_csv(f"{output_dir}/mel_raw_tracks{class_suffix}.csv", index=False)
         print(f"   • File Granulare Mel generato per Boxplot: {output_dir}/mel_raw_tracks{class_suffix}.csv")
         
-        # 🎯 INTEGRAZIONE META-ANALISI 2: Consolidamento dello Spettrogramma Medio della Classe [64, Time]
-        if len(class_time_resolved_specs) > 0:
-            # Stack delle matrici di tutte le 50 tracce -> Shape finale: [N_tracce, 64, Time]
-            stacked_specs = np.stack(class_time_resolved_specs, axis=0)
-            # Calcoliamo la media lungo l'asse delle tracce (axis=0) per ottenere il centroide dinamico della classe
-            mean_class_spec_2d = np.mean(stacked_specs, axis=0)  # Shape finale: [64, Time]
+        # 🎯 CONSOLIDAMENTO CENTROIDE CONFIGURAZIONE NATIVA
+        if len(class_time_resolved_specs_native) > 0:
+            stacked_native = np.stack(class_time_resolved_specs_native, axis=0)
+            mean_native_spec_2d = np.mean(stacked_native, axis=0)
+            np.save(f"{output_dir}/spectral_centroid_native{class_suffix}.npy", mean_native_spec_2d)
+            print(f"   • Centroide Spettrale Nativo salvato.")
             
-            # Salvataggio in formato binario super leggero e RAM-safe
-            npy_output_path = f"{output_dir}/spectral_centroid{class_suffix}.npy"
-            np.save(npy_output_path, mean_class_spec_2d)
-            print(f"   • Spettrogramma Medio della Classe (Preservato Tempo) salvato in: {npy_output_path}")
+        # 🎯 CONSOLIDAMENTO CENTROIDE CONFIGURAZIONE INIETTATA (3 OTTAVE)
+        if len(class_time_resolved_specs_injected) > 0:
+            stacked_injected = np.stack(class_time_resolved_specs_injected, axis=0)
+            mean_injected_spec_2d = np.mean(stacked_injected, axis=0)
+            np.save(f"{output_dir}/spectral_centroid_injected{class_suffix}.npy", mean_injected_spec_2d)
+            print(f"   • Centroide Spettrale a Ottave salvato.")
 
 if __name__ == "__main__":
     main()
