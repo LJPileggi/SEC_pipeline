@@ -102,6 +102,8 @@ def main():
     per_audio_results = []
     # 🎯 Accumulatore di dizionari per mantenere il dato di ogni traccia e ogni bin (Long Format)
     granular_mel_rows = []
+    # 🎯 INTEGRAZIONE META-ANALISI 2: Accumulatore per le matrici temporali della tranche
+    class_time_resolved_specs = []
     
     for class_name in classes:
         if args.class_to_process and class_name != args.class_to_process:
@@ -145,7 +147,12 @@ def main():
                         'mel_bin': bin_idx,
                         'discrepancy': float(val)
                     })
-                
+
+                # 🎯 INTEGRAZIONE META-ANALISI 2: Rilevazione dello spettrogramma nativo a piena risoluzione temporale
+                # Portiamo lo shape da [1, 1, Time, 64] a [64, Time] per preservare la dinamica istante per istante
+                native_spec_2d = p_tensor.squeeze().detach().cpu().numpy().T  # Shape: [64, Time]
+                class_time_resolved_specs.append(native_spec_2d)
+
                 del p_tensor, q_tensor, raw_audio, meta_dict
                 import gc; gc.collect()
                 
@@ -170,6 +177,18 @@ def main():
         df_mel_raw = pd.DataFrame(granular_mel_rows)
         df_mel_raw.to_csv(f"{output_dir}/mel_raw_tracks{class_suffix}.csv", index=False)
         print(f"   • File Granulare Mel generato per Boxplot: {output_dir}/mel_raw_tracks{class_suffix}.csv")
+        
+        # 🎯 INTEGRAZIONE META-ANALISI 2: Consolidamento dello Spettrogramma Medio della Classe [64, Time]
+        if len(class_time_resolved_specs) > 0:
+            # Stack delle matrici di tutte le 50 tracce -> Shape finale: [N_tracce, 64, Time]
+            stacked_specs = np.stack(class_time_resolved_specs, axis=0)
+            # Calcoliamo la media lungo l'asse delle tracce (axis=0) per ottenere il centroide dinamico della classe
+            mean_class_spec_2d = np.mean(stacked_specs, axis=0)  # Shape finale: [64, Time]
+            
+            # Salvataggio in formato binario super leggero e RAM-safe
+            npy_output_path = f"{output_dir}/spectral_centroid{class_suffix}.npy"
+            np.save(npy_output_path, mean_class_spec_2d)
+            print(f"   • Spettrogramma Medio della Classe (Preservato Tempo) salvato in: {npy_output_path}")
 
 if __name__ == "__main__":
     main()

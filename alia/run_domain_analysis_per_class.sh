@@ -11,7 +11,11 @@ CONFIG_FILE="${PROJECT_DIR}/configs/config0.yaml"
 # Esportazione esplicita per consentire la corretta interpretazione dei percorsi spaccettati nel container
 export BASEDIR="$BASEDIR"
 
-# 🎯 PARAMETRI COMPILATI SUI PESI DI FABBRICA (Ispirati da run_embedding_pipeline.sh)
+# 🎯 MACRO VARIABILI PER LE MATRICI DI CONFUSIONE REALI (Passate come richiesto)
+CONF_MATRIX_0_OCTAVE="results/misclassified_keys_0_octave.csv"
+CONF_MATRIX_3_OCTAVE="results/misclassified_keys_3_octave.csv"
+
+# PARAMETRI COMPILATI SUI PESI DI FABBRICA
 CLAP_SCRATCH_WEIGHTS="${PROJECT_DIR}/.clap_weights/CLAP_weights_2023.pth"
 ROBERTA_PATH="${PROJECT_DIR}/.clap_weights/roberta-base"
 
@@ -19,27 +23,21 @@ ROBERTA_PATH="${PROJECT_DIR}/.clap_weights/roberta-base"
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
-export CUDA_VISIBLE_DEVICES="" # Esclude totalmente CUDA per evitare eccezioni driver
+export CUDA_VISIBLE_DEVICES="" 
 
-# 💉 🎯 ESPORTAZIONE VARIABILI GLOBALI PER LA REDIREZIONE LOCALE
 export HF_HUB_OFFLINE=1
 export PYTHONUNBUFFERED=1
-export INJECT_OCTAVE="False" # Ci serve il preprocessore nativo intatto per estrarre la GT
+export INJECT_OCTAVE="False" 
 
-# 🎯 SOLUZIONE CRITICA: Devia la cache di Numba in una cartella locale con permessi di scrittura
 export NUMBA_CACHE_DIR="${PROJECT_DIR}/.numba_cache"
 mkdir -p "$NUMBA_CACHE_DIR"
 
-# Colleghiamo i percorsi reali dello scratch che la patch Python andrà a intercettare
 export LOCAL_CLAP_WEIGHTS_PATH="$CLAP_SCRATCH_WEIGHTS"
 export CLAP_TEXT_ENCODER_PATH="$ROBERTA_PATH"
 
 echo "⏳ Esecuzione Analisi di Dominio dataSEC Online (Modalità Interattiva Offline a Tranche)..."
-echo "   • Pesi CLAP: $LOCAL_CLAP_WEIGHTS_PATH"
-echo "   • Testo RoBERTa: $CLAP_TEXT_ENCODER_PATH"
 
 # --- 3. ESTRAZIONE DINAMICA DELLE CLASSI DAL CONFIG YAML ---
-echo "📦 Recupero della lista delle classi dal file di configurazione dataSEC..."
 CLASSES_LIST=$(singularity exec --no-home \
     --bind "/leonardo_scratch:/leonardo_scratch" \
     --bind "$(pwd):/app" \
@@ -102,4 +100,20 @@ singularity exec --no-home \
         --results_dir "results/domain_analysis_online" \
         --output_dir "results/domain_analysis_plots"
 
-echo "🎉 Pipeline dataSEC completata con successo. Controlla i grafici in results/domain_analysis_plots/"
+# --- 7. NEW: CALCOLO DELLE DISTANZE INTERCLASSE E CORRELAZIONE MATRICE DI CONFUSIONE ---
+echo "============================================================"
+echo "🌐 AVVIO GEOMETRIA INTERCLASSE INTERATTIVA ED INCROCIO CONFUSIONE"
+echo "============================================================"
+
+singularity exec --no-home \
+    --bind "/leonardo_scratch:/leonardo_scratch" \
+    --bind "$(pwd):/app" \
+    --pwd "/app" \
+    "$SIF_FILE" \
+    python3 alia/compute_interclass_distances.py \
+        --results_dir "results/domain_analysis_online" \
+        --output_dir "results/domain_analysis_interclass" \
+        --conf_0 "$CONF_MATRIX_0_OCTAVE" \
+        --conf_3 "$CONF_MATRIX_3_OCTAVE"
+
+echo "🎉 Pipeline dataSEC completata con successo in totale sicurezza hardware."
