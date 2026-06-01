@@ -79,6 +79,7 @@ def apply_online_pipeline(raw_audio, sr, cut_secs, hts_at_engine, W_matrix, n_oc
                 x_injected_norm, size=(x_native_norm.shape[2], 64), mode='bicubic', align_corners=True
             )
             
+    print(x_injected_norm)
     return x_native_norm, x_injected_norm
 
 def main():
