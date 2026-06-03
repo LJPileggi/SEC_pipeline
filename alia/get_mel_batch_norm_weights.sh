@@ -4,6 +4,7 @@
 MY_USER=$(whoami)
 BASEDIR="/leonardo_scratch/large/userexternal/${MY_USER}"
 PROJECT_DIR="${BASEDIR}/SEC_pipeline"
+SIF_FILE="${PROJECT_DIR}/.containers/clap_pipeline.sif"
 
 # Path del file dei pesi di fabbrica di CLAP
 export LOCAL_CLAP_WEIGHTS_PATH="${PROJECT_DIR}/.clap_weights/CLAP_weights_2023.pth"
@@ -19,9 +20,14 @@ if [ ! -f "$LOCAL_CLAP_WEIGHTS_PATH" ]; then
     exit 1
 fi
 
-# --- 2. ESECUZIONE DEL MINI-SCRIPT PYTHON INLINE (HEREDOC) ---
-# Usiamo python3 del sistema base per estrarre i tensori senza toccare Singularity
-python3 << EOF
+# --- 2. ESECUZIONE DEL MINI-SCRIPT PYTHON INLINE TRAMITE CONTAINER SINGULARITY ---
+# Il blocco Heredoc viene passato direttamente all'eseguibile python3 dentro l'ambiente protetto
+singularity exec --no-home \
+    --bind "/leonardo_scratch:/leonardo_scratch" \
+    --bind "$(pwd):/app" \
+    --pwd "/app" \
+    "$SIF_FILE" \
+    python3 << EOF
 import os
 import torch
 import numpy as np
@@ -57,8 +63,8 @@ except KeyError as e:
 EOF
 
 if [ $? -eq 0 ]; then
-    echo "🎉 Il file .npz è pronto per essere letto da convert_octave_to_msclap_mel."
+    echo "🎉 Estrazione completata nel container. File .npz pronto."
 else
-    echo "❌ Si è verificato un errore durante l'estrazione delle costanti."
+    echo "❌ Errore durante l'esecuzione nel container Singularity."
     exit 1
 fi
