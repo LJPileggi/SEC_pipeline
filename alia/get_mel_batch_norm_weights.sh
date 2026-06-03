@@ -1,0 +1,64 @@
+#!/bin/bash
+
+# --- 1. SELEZIONE DEI PATH (In perfetto allineamento con la tua pipeline) ---
+MY_USER=$(whoami)
+BASEDIR="/leonardo_scratch/large/userexternal/${MY_USER}"
+PROJECT_DIR="${BASEDIR}/SEC_pipeline"
+
+# Path del file dei pesi di fabbrica di CLAP
+export LOCAL_CLAP_WEIGHTS_PATH="${PROJECT_DIR}/.clap_weights/CLAP_weights_2023.pth"
+
+# Path di destinazione dove convert_octave_to_msclap_mel si aspetta di trovare il file .npz
+OUTPUT_DIR="${PROJECT_DIR}/.clap_weights"
+OUTPUT_FILE="${OUTPUT_DIR}/clap_bn0_constants.npz"
+
+echo "⏳ Inizializzazione script di estrazione algebrica costanti bn0..."
+
+if [ ! -f "$LOCAL_CLAP_WEIGHTS_PATH" ]; then
+    echo "❌ Errore: Impossibile trovare il file dei pesi originale in: $LOCAL_CLAP_WEIGHTS_PATH"
+    exit 1
+fi
+
+# --- 2. ESECUZIONE DEL MINI-SCRIPT PYTHON INLINE (HEREDOC) ---
+# Usiamo python3 del sistema base per estrarre i tensori senza toccare Singularity
+python3 << EOF
+import os
+import torch
+import numpy as np
+
+pretrained_path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
+output_file = "$OUTPUT_FILE"
+
+print(f"   📦 Apertura e scansione del dizionario dei pesi: {pretrained_path}")
+
+# Carichiamo in modalità safe su CPU per azzerare il consumo di VRAM
+state_dict = torch.load(pretrained_path, map_location='cpu')
+
+# Prefisso esatto che identifica il blocco Batch Normalization nativo dell'Audio Encoder HTS-AT
+prefix = "clap.audio_encoder.base.htsat.bn0."
+
+try:
+    bn0_params = {
+        'running_mean': state_dict[prefix + 'running_mean'].numpy(),
+        'running_var': state_dict[prefix + 'running_var'].numpy(),
+        'weight': state_dict[prefix + 'weight'].numpy(),
+        'bias': state_dict[prefix + 'bias'].numpy()
+    }
+    
+    # Salvataggio in formato compresso binario nativo di NumPy
+    np.savez(output_file, **bn0_params)
+    print(f"✅ Conversione completata con successo!")
+    print(f"   • Array estratti pronti in: {output_file}")
+    print(f"   • Dimensione vettori: {bn0_params['running_mean'].shape} canali Mel.")
+
+except KeyError as e:
+    print(f"❌ Errore critico: Impossibile mappare la chiave {e}. Verifica la versione di CLAP.")
+    exit(1)
+EOF
+
+if [ $? -eq 0 ]; then
+    echo "🎉 Il file .npz è pronto per essere letto da convert_octave_to_msclap_mel."
+else
+    echo "❌ Si è verificato un errore durante l'estrazione delle costanti."
+    exit 1
+fi
