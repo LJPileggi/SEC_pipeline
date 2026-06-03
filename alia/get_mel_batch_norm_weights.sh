@@ -13,7 +13,7 @@ export LOCAL_CLAP_WEIGHTS_PATH="${PROJECT_DIR}/.clap_weights/CLAP_weights_2023.p
 OUTPUT_DIR="${PROJECT_DIR}/.clap_weights"
 OUTPUT_FILE="${OUTPUT_DIR}/clap_bn0_constants.npz"
 
-echo "⏳ Inizializzazione script di estrazione algebrica costanti bn0 (Modalità Auto-Scansione)..."
+echo "⏳ Inizializzazione script di estrazione algebrica costanti bn0 (Modalità Checkpoint-Unpack)..."
 
 if [ ! -f "$LOCAL_CLAP_WEIGHTS_PATH" ]; then
     echo "❌ Errore: Impossibile trovare il file dei pesi originale in: $LOCAL_CLAP_WEIGHTS_PATH"
@@ -34,27 +34,37 @@ import numpy as np
 pretrained_path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
 output_file = "$OUTPUT_FILE"
 
-print(f"   📦 Apertura e scansione del dizionario dei pesi: {pretrained_path}")
+print(f"   📦 Apertura e spacchettamento del checkpoint: {pretrained_path}")
 
-# Carichiamo in modalità safe su CPU per azzerare il consumo di VRAM
-state_dict = torch.load(pretrained_path, map_location='cpu')
+# Carichiamo il file complessivo su CPU
+checkpoint = torch.load(pretrained_path, map_location='cpu')
 
-# 🔍 STRATEGIA AGNOSTICA: Scansioniamo tutte le chiavi reali del file .pth alla ricerca di bn0
-print("   🔍 Ricerca automatica delle chiavi della BatchNorm 'bn0' nel file dei pesi...")
+# Estraiamo lo state_dict reale nascosto dentro la macro-chiave 'model'
+if isinstance(checkpoint, dict) and 'model' in checkpoint:
+    print("   🎯 Macro-chiave 'model' individuata. Estrazione dello state_dict dei pesi...")
+    state_dict = checkpoint['model']
+elif isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+    print("   🎯 Macro-chiave 'state_dict' individuata. Estrazione dello state_dict dei pesi...")
+    state_dict = checkpoint['state_dict']
+else:
+    print("   ℹ️ Il file sembra essere già uno state_dict pulito.")
+    state_dict = checkpoint
+
+# Ora eseguiamo la ricerca agnostica sul dizionario interno dei pesi effettivi
+print("   🔍 Ricerca automatica delle chiavi della BatchNorm 'bn0'...")
 found_keys = [k for k in state_dict.keys() if "bn0" in k]
 
 if not found_keys:
-    print("❌ Errore: Nessuna chiave contenente 'bn0' è stata trovata nel file dei pesi.")
-    print("Ecco un campione delle prime 15 chiavi disponibili nel file per verifica:")
+    print("❌ Errore: Nessuna chiave contenente 'bn0' trovata nemmeno dentro lo state_dict interno.")
+    print("Ecco le prime 15 chiavi dei pesi effettivi per verifica:")
     for k in list(state_dict.keys())[:15]:
         print(f"   - {k}")
     exit(1)
 
-# Identifichiamo il prefisso esatto basandoci su una qualsiasi delle chiavi trovate (es. escludendo la fine)
-# Ad esempio, se trova 'model.audio_encoder.htsat.bn0.weight', isola il prefisso corretto.
+# Isolianto il prefisso esatto della BatchNorm
 target_sample = found_keys[0]
 prefix = target_sample.split("bn0.")[0] + "bn0."
-print(f"   🎯 Prefisso reale rilevato con successo: '{prefix}'")
+print(f"   🎯 Prefisso reale dei pesi rilevato: '{prefix}'")
 
 try:
     bn0_params = {
@@ -64,15 +74,15 @@ try:
         'bias': state_dict[prefix + 'bias'].numpy()
     }
     
-    # Salvataggio in formato compresso binario nativo di NumPy
+    # Salvataggio nel formato compresso binario di NumPy
     np.savez(output_file, **bn0_params)
     print(f"✅ Conversione completata con successo!")
     print(f"   • Array estratti pronti in: {output_file}")
     print(f"   • Dimensione vettori: {bn0_params['running_mean'].shape} canali Mel.")
 
 except KeyError as e:
-    print(f"❌ Errore critico: Nonostante il prefisso, impossibile mappare la sotto-chiave specifica {e}.")
-    print("Chiavi 'bn0' effettivamente presenti nel tuo file:")
+    print(f"❌ Errore critico: Impossibile mappare la sotto-chiave specifica {e}.")
+    print("Chiavi 'bn0' effettivamente presenti:")
     for fk in found_keys:
         print(f"   - {fk}")
     exit(1)
