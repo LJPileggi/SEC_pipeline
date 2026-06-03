@@ -13,7 +13,7 @@ export LOCAL_CLAP_WEIGHTS_PATH="${PROJECT_DIR}/.clap_weights/CLAP_weights_2023.p
 OUTPUT_DIR="${PROJECT_DIR}/.clap_weights"
 OUTPUT_FILE="${OUTPUT_DIR}/clap_bn0_constants.npz"
 
-echo "⏳ Inizializzazione script di estrazione algebrica costanti bn0..."
+echo "⏳ Inizializzazione script di estrazione algebrica costanti bn0 (Modalità Auto-Scansione)..."
 
 if [ ! -f "$LOCAL_CLAP_WEIGHTS_PATH" ]; then
     echo "❌ Errore: Impossibile trovare il file dei pesi originale in: $LOCAL_CLAP_WEIGHTS_PATH"
@@ -21,7 +21,6 @@ if [ ! -f "$LOCAL_CLAP_WEIGHTS_PATH" ]; then
 fi
 
 # --- 2. ESECUZIONE DEL MINI-SCRIPT PYTHON INLINE TRAMITE CONTAINER SINGULARITY ---
-# Il blocco Heredoc viene passato direttamente all'eseguibile python3 dentro l'ambiente protetto
 singularity exec --no-home \
     --bind "/leonardo_scratch:/leonardo_scratch" \
     --bind "$(pwd):/app" \
@@ -40,8 +39,22 @@ print(f"   📦 Apertura e scansione del dizionario dei pesi: {pretrained_path}"
 # Carichiamo in modalità safe su CPU per azzerare il consumo di VRAM
 state_dict = torch.load(pretrained_path, map_location='cpu')
 
-# Prefisso esatto che identifica il blocco Batch Normalization nativo dell'Audio Encoder HTS-AT
-prefix = "clap.audio_encoder.base.htsat.bn0."
+# 🔍 STRATEGIA AGNOSTICA: Scansioniamo tutte le chiavi reali del file .pth alla ricerca di bn0
+print("   🔍 Ricerca automatica delle chiavi della BatchNorm 'bn0' nel file dei pesi...")
+found_keys = [k for k in state_dict.keys() if "bn0" in k]
+
+if not found_keys:
+    print("❌ Errore: Nessuna chiave contenente 'bn0' è stata trovata nel file dei pesi.")
+    print("Ecco un campione delle prime 15 chiavi disponibili nel file per verifica:")
+    for k in list(state_dict.keys())[:15]:
+        print(f"   - {k}")
+    exit(1)
+
+# Identifichiamo il prefisso esatto basandoci su una qualsiasi delle chiavi trovate (es. escludendo la fine)
+# Ad esempio, se trova 'model.audio_encoder.htsat.bn0.weight', isola il prefisso corretto.
+target_sample = found_keys[0]
+prefix = target_sample.split("bn0.")[0] + "bn0."
+print(f"   🎯 Prefisso reale rilevato con successo: '{prefix}'")
 
 try:
     bn0_params = {
@@ -58,7 +71,10 @@ try:
     print(f"   • Dimensione vettori: {bn0_params['running_mean'].shape} canali Mel.")
 
 except KeyError as e:
-    print(f"❌ Errore critico: Impossibile mappare la chiave {e}. Verifica la versione di CLAP.")
+    print(f"❌ Errore critico: Nonostante il prefisso, impossibile mappare la sotto-chiave specifica {e}.")
+    print("Chiavi 'bn0' effettivamente presenti nel tuo file:")
+    for fk in found_keys:
+        print(f"   - {fk}")
     exit(1)
 EOF
 
