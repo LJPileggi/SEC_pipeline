@@ -7,6 +7,78 @@ import logging
 
 sys.path.insert(0, '/app')
 
+# --- NON-LINEAR METRICS FOR GLOBAL SPEC DISCREPANCY ---
+def compute_agnostic_mmd(x, y, alphas=[0.1, 1.0, 10.0]):
+    """
+    Compute Maximum Mean Discrepancy (MMD) between two matrices using a multi-scale RBF kernel.
+    """
+    import torch
+    if not isinstance(x, torch.Tensor):
+        x = torch.from_numpy(x).float()
+    if not isinstance(y, torch.Tensor):
+        y = torch.from_numpy(y).float()
+        
+    if x.ndim > 2:
+        x = x.squeeze()
+    if y.ndim > 2:
+        y = y.squeeze()
+        
+    x_size = x.size(0)
+    y_size = y.size(0)
+    
+    xx = torch.pow(torch.norm(x, dim=1, keepdim=True), 2)
+    yy = torch.pow(torch.norm(y, dim=1, keepdim=True), 2)
+    
+    dist_xx = xx + xx.t() - 2 * torch.mm(x, x.t())
+    dist_yy = yy + yy.t() - 2 * torch.mm(y, y.t())
+    dist_xy = xx + yy.t() - 2 * torch.mm(x, y.t())
+    
+    kernel_xx, kernel_yy, kernel_xy = 0.0, 0.0, 0.0
+    for alpha in alphas:
+        kernel_xx += torch.exp(-dist_xx / (2 * alpha))
+        kernel_yy += torch.exp(-dist_yy / (2 * alpha))
+        kernel_xy += torch.exp(-dist_xy / (2 * alpha))
+        
+    mmd = (kernel_xx.sum() / (x_size * x_size) + 
+           kernel_yy.sum() / (y_size * y_size) - 
+           2 * kernel_xy.sum() / (x_size * y_size))
+           
+    return torch.clamp(mmd, min=0.0).item()
+
+def compute_agnostic_wasserstein(p_mat, q_mat, epsilon=0.01, max_iter=100):
+    """
+    Compute 2D Wasserstein distance using the Sinkhorn algorithm with entropic regularization.
+    """
+    import torch
+    import torch.nn.functional as F
+    if not isinstance(p_mat, torch.Tensor):
+        p_mat = torch.from_numpy(p_mat).float()
+    if not isinstance(q_mat, torch.Tensor):
+        q_mat = torch.from_numpy(q_mat).float()
+        
+    if p_mat.ndim > 2:
+        p_mat = p_mat.squeeze()
+    if q_mat.ndim > 2:
+        q_mat = q_mat.squeeze()
+
+    a = F.softmax(p_mat.flatten(), dim=0).unsqueeze(1) 
+    b = F.softmax(q_mat.flatten(), dim=0).unsqueeze(1) 
+    
+    dim = a.size(0)
+    grid = torch.arange(dim, dtype=torch.float32).unsqueeze(1)
+    C = torch.pow(grid - grid.t(), 2)
+    C = C / C.max() 
+    
+    K = torch.exp(-C / epsilon)
+    u = torch.ones((dim, 1), dtype=torch.float32) / dim
+    
+    for _ in range(max_iter):
+        v = b / (torch.mm(K.t(), u) + 1e-8)
+        u = a / (torch.mm(K, v) + 1e-8)
+        
+    transport_plan = u * K * v.t()
+    return torch.sum(transport_plan * C).item()
+
 def parsing():
     parser = argparse.ArgumentParser(description='Aggregate Tranched Domain Distance Results')
     parser.add_argument('--results_dir', default='results/domain_analysis_online', help='Directory containing partial CSVs')
@@ -98,6 +170,47 @@ def main():
     print("\n📉 TOP 5 DOMAINS WITH LOWEST DISCREPANCY (STABLE Targets):")
     print(class_summary_df[['class', 'wasserstein_mean', 'kl_mean', 'frobenius_mean']].tail(5).to_string(index=False))
     
+    # 4. EVALUATION LEVEL C: Global Non-linear Metrics via Accumulated Class Centroids
+    print("\n🌐 COMPLIANCE VERIFICATION VIA SPECTRAL CENTROIDS (NON-LINEAR METRICS)")
+    native_files = [f for f in os.listdir(args.results_dir) if f.startswith("spectral_centroid_native_") and f.endswith(".npy")]
+    injected_files = [f for f in os.listdir(args.results_dir) if f.startswith("spectral_centroid_injected_") and f.endswith(".npy")]
+    
+    native_centroids = []
+    injected_centroids = []
+    
+    for f in native_files:
+        try:
+            native_centroids.append(np.load(os.path.join(args.results_dir, f)))
+        except Exception:
+            continue
+            
+    for f in injected_files:
+        try:
+            injected_centroids.append(np.load(os.path.join(args.results_dir, f)))
+        except Exception:
+            continue
+            
+    if native_centroids and injected_centroids:
+        # Linear aggregation of spectral matrices across distributed chunks
+        global_native_centroid = np.mean(native_centroids, axis=0)
+        global_injected_centroid = np.mean(injected_centroids, axis=0)
+        
+        # MMD expects [Samples, Features], transpose time axis to treat frames as samples [Time, 64]
+        global_mmd = compute_agnostic_mmd(global_native_centroid.T, global_injected_centroid.T)
+        global_wasserstein_2d = compute_agnostic_wasserstein(global_native_centroid, global_injected_centroid)
+        
+        print(f"   • GLOBAL DATASET SHIFT - Maximum Mean Discrepancy (MMD): {global_mmd:.6f}")
+        print(f"   • GLOBAL DATASET SHIFT - 2D Optimal Transport (Wasserstein): {global_wasserstein_2d:.6f}")
+        
+        summary_scalar_path = os.path.join(args.output_dir, "global_non_linear_distances.csv")
+        pd.DataFrame([
+            {'metric': 'MMD_global_centroids', 'value': global_mmd},
+            {'metric': 'Wasserstein_2D_global_centroids', 'value': global_wasserstein_2d}
+        ]).to_csv(summary_scalar_path, index=False)
+        print(f"   • Global non-linear report exported to: {summary_scalar_path}")
+    else:
+        print("   ⚠️ Warning: Spectral centroid npy files not found or mismatch occurred. Skipping global non-linear computation.")
+
     print(f"\n✅ Consolidation complete. Final outputs exported to: {args.output_dir}/")
 
 if __name__ == "__main__":
