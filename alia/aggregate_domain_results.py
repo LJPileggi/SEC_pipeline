@@ -47,7 +47,8 @@ def compute_agnostic_mmd(x, y, alphas=[0.1, 1.0, 10.0]):
 
 def compute_agnostic_wasserstein(p_mat, q_mat, epsilon=0.01, max_iter=100):
     """
-    Compute 2D Wasserstein distance using the Sinkhorn algorithm with entropic regularization.
+    Compute Wasserstein distance using the Sinkhorn algorithm with entropic regularization.
+    Optimized profile-wise over frequency channels to prevent memory explosion.
     """
     import torch
     import torch.nn.functional as F
@@ -61,10 +62,15 @@ def compute_agnostic_wasserstein(p_mat, q_mat, epsilon=0.01, max_iter=100):
     if q_mat.ndim > 2:
         q_mat = q_mat.squeeze()
 
-    a = F.softmax(p_mat.flatten(), dim=0).unsqueeze(1) 
-    b = F.softmax(q_mat.flatten(), dim=0).unsqueeze(1) 
+    # Per evitare matrici di costo mastodontiche [64*Time, 64*Time], 
+    # mediamo sull'asse del tempo per ottenere la distribuzione di energia sui 64 canali Mel
+    p_profile = torch.mean(p_mat, dim=1) if p_mat.shape[0] == 64 else torch.mean(p_mat, dim=0)
+    q_profile = torch.mean(q_mat, dim=1) if q_mat.shape[0] == 64 else torch.mean(q_mat, dim=0)
+
+    a = F.softmax(p_profile, dim=0).unsqueeze(1) 
+    b = F.softmax(q_profile, dim=0).unsqueeze(1) 
     
-    dim = a.size(0)
+    dim = a.size(0) # Sarà rigorosamente 64
     grid = torch.arange(dim, dtype=torch.float32).unsqueeze(1)
     C = torch.pow(grid - grid.t(), 2)
     C = C / C.max() 
