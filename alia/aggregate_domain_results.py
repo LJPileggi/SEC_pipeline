@@ -202,16 +202,66 @@ def main():
         print(f"   • GLOBAL DATASET SHIFT - Maximum Mean Discrepancy (MMD): {global_mmd:.6f}")
         print(f"   • GLOBAL DATASET SHIFT - 2D Optimal Transport (Wasserstein): {global_wasserstein_2d:.6f}")
         
+        # 🎯 1. CALCOLO DELLA SOGLIA DI VARIANZA INTRINSECA (BASELINE H0)
+        # Dividiamo il centroide nativo a metà lungo l'asse temporale per simulare due sotto-porzioni dello stesso dominio
+        time_steps = global_native_centroid.shape[1]
+        half_time = time_steps // 2
+        native_part_A = global_native_centroid[:, :half_time]
+        native_part_B = global_native_centroid[:, half_time:(half_time * 2)]
+        
+        # Calcolo del rumore di fondo statistico della metrica
+        h0_wasserstein = compute_agnostic_wasserstein(native_part_A, native_part_B)
+        print(f"   • METRIC BACKGROUND NOISE (H0 Baseline): {h0_wasserstein:.6f}")
+
+        # 🎯 2.ESTRAZIONE AUTOMATICA SOGLIA INTERCLASSE NATIVA (SEPARABILITÀ)
+        # Cerchiamo i file generati da compute_interclass_distances.py per estrarre la distanza minima tra classi native
+        interclass_dir = os.path.join(os.path.dirname(args.output_dir), "domain_analysis_interclass")
+        threshold_separability = None
+        
+        if os.path.exists(interclass_dir):
+            interclass_files = [f for f in os.listdir(interclass_dir) if f.startswith("interclass_NATIVE_mean_matrix_")]
+            frob_values = []
+            for f in interclass_files:
+                try:
+                    ic_df = pd.read_csv(os.path.join(interclass_dir, f), index_col=0)
+                    # Estraiamo i valori della riga di riepilogo globale escludendo gli zeri sulla diagonale della stessa classe
+                    global_row = ic_df.loc['GLOBAL_CENTROID_DISTANCE']
+                    valid_distances = [float(v) for v in global_row.values if float(v) > 1e-5]
+                    if valid_distances:
+                        frob_values.append(min(valid_distances))
+                except Exception:
+                    continue
+            if frob_values:
+                # La soglia è definita dal margine di separazione minimo riscontrato tra due classi sani
+                threshold_separability = min(frob_values)
+                print(f"   • NATIVE INTERCLASS SEPARABILITY THRESHOLD: {threshold_separability:.6f}")
+
+        # 🎯 3. VERIFICA MATEMATICA DEI BOUND E REGIME DI ADATTAMENTO
+        print("\n⚖️ DOMAIN SHIFT REASONING OVER BEN-DAVID THEOREMS:")
+        if global_wasserstein_2d <= h0_wasserstein:
+            print("   👉 STATUS: NEGligible ShIFT. Target domain matches Source distribution statistics.")
+            print("      Action: Standard training or simple linear alignment is sufficient.")
+        elif threshold_separability and global_wasserstein_2d >= threshold_separability:
+            print("   🚨 STATUS: THEORETICAL IMPOSSIBILITY TRIGGERED.")
+            print("      Reason: Tool-induced shift exceeds the geometric separation between native classes.")
+            print("      Effect: Joint hypothesis error (lambda) explodes due to density overlap.")
+            print("      Action: Classical Domain Adaptation is ineffective. Generative Feature Restoration (Diffusion) is required.")
+        else:
+            print("   ⚠️ STATUS: MODERATE NON-LINEAR SHIFT.")
+            print("      Reason: Shift is above statistical noise but within class decision boundaries.")
+            print("      Action: Deep representation learning or conditional adaptation recommended.")
+
+        # Esportazione finale del report scalare consolidato
         summary_scalar_path = os.path.join(args.output_dir, "global_non_linear_distances.csv")
         pd.DataFrame([
             {'metric': 'MMD_global_centroids', 'value': global_mmd},
-            {'metric': 'Wasserstein_2D_global_centroids', 'value': global_wasserstein_2d}
+            {'metric': 'Wasserstein_2D_global_centroids', 'value': global_wasserstein_2d},
+            {'metric': 'H0_Wasserstein_baseline', 'value': h0_wasserstein},
+            {'metric': 'Interclass_Separability_Threshold', 'value': threshold_separability if threshold_separability else -1.0}
         ]).to_csv(summary_scalar_path, index=False)
-        print(f"   • Global non-linear report exported to: {summary_scalar_path}")
+        print(f"\n   • Global non-linear report exported to: {summary_scalar_path}")
     else:
         print("   ⚠️ Warning: Spectral centroid npy files not found or mismatch occurred. Skipping global non-linear computation.")
-
-    print(f"\n✅ Consolidation complete. Final outputs exported to: {args.output_dir}/")
 
 if __name__ == "__main__":
     main()
