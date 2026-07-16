@@ -6,7 +6,7 @@
 #SBATCH --mem=128G
 #SBATCH --gres=gpu:4
 #SBATCH -p boost_usr_prod
-#SBATCH -A IscrC_Pb-skite
+#SBATCH -A IscrC_BrISkite
 
 """
 Test script for verifying the CLAP embedding pipeline on the Leonardo Cluster.

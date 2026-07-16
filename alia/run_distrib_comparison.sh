@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --time=01:00:00
 #SBATCH --mem=64GB
-#SBATCH --account=IscrC_Pb-skite
+#SBATCH --account=IscrC_BrISkite
 #SBATCH --output=%x_%j.out
 
 # --- CONFIGURAZIONE ---

@@ -70,7 +70,7 @@ cat << 'EOF' > "$SLURM_SCRIPT"
 #SBATCH --nodes=1
 #SBATCH --time=05:00:00
 #SBATCH --gres=gpu:1
-#SBATCH -A IscrC_Pb-skite
+#SBATCH -A IscrC_BrISkite
 #SBATCH --output=/dev/null
 
 RUN_ID=$1; STREAM_LOG=$2; VENV_PATH=$3; TMP_DIR=$4; SIF_FILE=$5; FINAL_CSV=$6; PROJECT_DIR=$7

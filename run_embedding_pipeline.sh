@@ -67,7 +67,7 @@ run_slurm() {
 #SBATCH --mem=128G
 #SBATCH --gres=gpu:4
 #SBATCH -p boost_usr_prod
-#SBATCH -A IscrC_Pb-skite
+#SBATCH -A IscrC_BrISkite
 #SBATCH --output=%x_%j.out
 
 TEMP_DIR="/leonardo_scratch/large/userexternal/\$USER/tmp_job_\$SLURM_JOB_ID"

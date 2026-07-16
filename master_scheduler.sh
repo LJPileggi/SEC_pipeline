@@ -13,7 +13,7 @@
 #SBATCH --mem=8G                     # Minimal RAM for Python management
 #SBATCH --gres=gpu:0                 # 🎯 MANDATORY: Request ZERO GPUs for the Master
 #SBATCH --time=24:00:00              # Maximum limit for Leonardo production
-#SBATCH --account=IscrC_Pb-skite
+#SBATCH --account=IscrC_BrISkite
 #SBATCH --output=master_campaign_%j.out
 
 # 🎯 ENSURE SEQUENTIALITY:

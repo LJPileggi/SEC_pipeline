@@ -5,7 +5,7 @@
 #SBATCH --time=01:00:00
 #SBATCH --exclusive                   # O --exclusive, o --gpus-per-task=1
 #SBATCH --gres=gpu:4                   # Richiedi 4 GPU per il nodo
-#SBATCH -A IscrC_Pb-skite
+#SBATCH -A IscrC_BrISkite
 #SBATCH -p boost_usr_prod
 
 # --- VARIABILI GLOBALI ---

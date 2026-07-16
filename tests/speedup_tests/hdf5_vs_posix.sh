@@ -41,7 +41,7 @@ cat << 'EOF' > "${L_TMP}/run_final.sh"
 #SBATCH --nodes=1
 #SBATCH --time=00:30:00
 #SBATCH --gres=gpu:1
-#SBATCH -A IscrC_Pb-skite
+#SBATCH -A IscrC_BrISkite
 #SBATCH --output=/dev/null
 #SBATCH --error=/dev/null
 

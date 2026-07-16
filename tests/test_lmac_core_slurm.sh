@@ -7,7 +7,7 @@
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
 #SBATCH -p boost_usr_prod
-#SBATCH -A IscrC_Pb-skite
+#SBATCH -A IscrC_BrISkite
 #SBATCH --output=test_lmac_core_%j.out
 
 # --- 1. CONFIGURATION (Identica alla pipeline di produzione) ---

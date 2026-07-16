@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:4
 #SBATCH --time=00:10:00
 #SBATCH -p boost_usr_prod
-#SBATCH -A IscrC_Pb-skite
+#SBATCH -A IscrC_BrISkite
 
 # Configura qui i tuoi percorsi
 SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/clap_pipeline.sif"
