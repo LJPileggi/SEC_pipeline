@@ -11,7 +11,7 @@
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
 
-# Define job-isolated high-speed scratch directories
+# Define job-isolated high-speed scratch directories[cite: 19]
 TEMP_DIR="/leonardo_scratch/large/userexternal/$USER/tmp_train_$SLURM_JOB_ID"
 SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/clap_pipeline.sif"
 CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
@@ -54,5 +54,13 @@ srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \
     --bind "$(pwd):/app" --pwd "/app" \
     "$SIF_FILE" \
     python3 -m src/filterbank_diffusion/pipeline/train.py
+
+echo "🔬 Launching Standalone Reconstruction Validation..."
+singularity exec --nv --no-home \
+    --bind "/leonardo_scratch:/leonardo_scratch" \
+    --bind "$TEMP_DIR:/tmp_data" \
+    --bind "$(pwd):/app" --pwd "/app" \
+    "$SIF_FILE" \
+    python3 -m src/filterbank_diffusion/pipeline/validate.py
 
 cleanup_job_scratch

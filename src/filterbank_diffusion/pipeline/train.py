@@ -1,17 +1,18 @@
 import os
 import sys
 import torch
-import nn = torch.nn
+import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 import numpy as np
 
-# Dynamic root injection to safely import core production modules from src/
+# Dynamic root injection to safely import core production modules from src/[cite: 13]
 current_dir = os.path.dirname(os.path.abspath(__file__))
 src_root = os.path.abspath(os.path.join(current_dir, "..", ".."))
 if src_root not in sys.path:
     sys.path.insert(0, src_root)
 
+# Import production components and distributed utilities from core architectures[cite: 13]
 from utils import setup_environ_vars, setup_distributed_environment, cleanup_distributed_environment, get_config_from_yaml
 from filterbank_diffusion.models.unet import ConditionalUNet
 from filterbank_diffusion.models.diffusion import GaussianDiffusion
@@ -19,7 +20,7 @@ from filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
 from filterbank_diffusion.pipeline.spectral import OnlineSpectrogramPipeline
 
 def main():
-    # 1. Initialize distributed architecture handlers
+    # 1. Initialize distributed architecture handlers[cite: 13]
     rank, world_size = setup_environ_vars(slurm=True)
     device = setup_distributed_environment(rank, world_size, slurm=True)
     
@@ -31,18 +32,18 @@ def main():
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(local_seed)
 
-    # 2. Extract path variable to load pure isolated HTS-AT layers
+    # 2. Extract path variable to load pure isolated HTS-AT layers[cite: 13]
     weights_path = os.environ.get("LOCAL_CLAP_WEIGHTS_PATH", ".clap_weights/CLAP_weights_2023.pth")
     spectral_pipeline = OnlineSpectrogramPipeline(weights_path=weights_path, sample_rate=sampling_rate, device=device).to(device)
 
-    # 3. Distributed Data loading matching storage stage-in layout
+    # 3. Distributed Data loading matching storage stage-in layout[cite: 13]
     raw_dataset_root = os.path.join(os.environ.get("BASEDIR", "/tmp"), "dataSEC", "RAW_DATASET", "raw_wav")
     dataset = DistributedAudioRAWDataset(base_dir=raw_dataset_root, target_samples_per_class=500)
     
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=seed)
     dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler, num_workers=8, pin_memory=True, drop_last=True)
 
-    # 4. Generative Models Initialization
+    # 4. Generative Models Initialization[cite: 13]
     unet = ConditionalUNet(num_classes=len(classes_list), base_channels=64, emb_dim=256).to(device)
     diffusion_scheduler = GaussianDiffusion(unet_model=unet, timesteps=1000).to(device)
     
@@ -93,14 +94,22 @@ def main():
         if rank == 0:
             avg_loss = epoch_loss / len(dataloader)
             print(f"📢 Epoch {epoch:03d} Complete. Master Average Loss MSE: {avg_loss:.6f}")
-            checkpoint_path = os.path.join("logs", f"unet_epoch_{epoch}.pt")
-            os.makedirs("logs", exist_ok=True)
+            
+            # 🎯 DIRECTORY AND CHECKPOINT RESOLUTION
+            # Save state dicts inside the specified hidden directory structure
+            target_model_dir = os.path.join(src_root, ".models", "diff_model")
+            os.makedirs(target_model_dir, exist_ok=True)
+            
+            checkpoint_path = os.path.join(target_model_dir, f"unet_epoch_{epoch}.pt")
+            
             torch.save({
                 'epoch': epoch,
-                'model_state_dict': unet.module.state_dict(),
+                'model_state_dict': unet.module.state_dict(), # Correctly extract original weights from the DDP wrapper
                 'optimizer_state_dict': optimizer.state_dict(),
                 'loss': avg_loss,
             }, checkpoint_path)
+            
+            print(f"💾 Checkpoint saved cleanly to: {checkpoint_path}")
 
     dataset.close()
     cleanup_distributed_environment(rank)
