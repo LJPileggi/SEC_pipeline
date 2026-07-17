@@ -25,13 +25,17 @@ class OnlineSpectrogramPipeline(nn.Module):
         # Explicit import of the underlying standalone HTS-AT Swin-Transformer structure from msclap
         from msclap.models.htsat import HTSAT_Swin_Transformer
         
+        # 🎯 FISSA IL BUG: Creiamo l'oggetto config che msclap si aspetta internamente
+        mock_config = SimpleNamespace(mel_bins=64)
+        
         # Instantiate the pure standalone backbone with Microsoft factory parameters
         self.htsat = HTSAT_Swin_Transformer(
             spec_size=256,
             num_classes=527,
             depths=[2, 2, 6, 2],
             num_heads=[4, 8, 16, 32],
-            window_size=8
+            window_size=8,
+            config=mock_config # 🎯 Passiamo la configurazione per evitare il NoneType
         )
         
         # Load audio encoder weights directly filtering out text/projection constraints
