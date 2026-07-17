@@ -11,7 +11,7 @@ if src_root not in sys.path:
     sys.path.insert(0, src_root)
 
 # Import production processing components directly from core modules
-from models import spectrogram_n_octaveband_generator_gpu, convert_octave_to_msclap_mel
+from src.models import spectrogram_n_octaveband_generator_gpu, convert_octave_to_msclap_mel
 
 class OnlineSpectrogramPipeline(nn.Module):
     """

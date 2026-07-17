@@ -5,7 +5,7 @@ import librosa
 import numpy as np
 import scipy
 
-from .losses import build_optimizer, get_scores
+from src.losses import build_optimizer, get_scores
 
 def CLAP_initializer(device='cpu', use_cuda=False):
     import transformers
