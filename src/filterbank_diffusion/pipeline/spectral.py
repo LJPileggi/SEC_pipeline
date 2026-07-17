@@ -54,12 +54,25 @@ class OnlineSpectrogramPipeline(nn.Module):
         # Load audio encoder weights directly filtering out text/projection constraints
         if os.path.exists(weights_path):
             full_state = torch.load(weights_path, map_location='cpu')
-            # Extract state entries belonging strictly to the structural audio_encoder tower
+            
+            # Se i pesi sono impacchettati in un dizionario 'state_dict' radice
+            if 'state_dict' in full_state:
+                full_state = full_state['state_dict']
+                
             audio_state = {}
             for k, v in full_state.items():
-                if k.startswith('clap.audio_encoder.base.htsat.'):
-                    new_k = k.replace('clap.audio_encoder.base.htsat.', '')
+                # 🎯 SOLUZIONE: Intercettiamo la radice htsat dinamica ovunque sia posizionata
+                if 'htsat.' in k:
+                    # Tronchiamo tutto ciò che si trova prima di 'htsat.' per isolare i pesi del modulo
+                    new_k = k.split('htsat.')[-1]
                     audio_state[new_k] = v
+            
+            # Verifichiamo che il dizionario non sia vuoto prima di caricarlo
+            if not audio_state:
+                raise RuntimeError(
+                    f"Impossibile estrarre i pesi HTS-AT. Verificare la struttura delle chiavi nel file: {weights_path}\n"
+                    f"Chiavi di esempio trovate nel file: {list(full_state.keys())[:5]}"
+                )
                     
             self.htsat.load_state_dict(audio_state, strict=True)
         else:
