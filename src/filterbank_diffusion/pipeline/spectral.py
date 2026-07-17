@@ -157,14 +157,19 @@ class OnlineSpectrogramPipeline(nn.Module):
         x_native_norm = x_native_norm.permute(0, 1, 3, 2) 
 
         # 3. Generate low-resolution structural condition filterbank C
-        octave_spec = spectrogram_n_octaveband_generator_gpu(
-            wav_batch=audio_signal,
-            sampling_rate=self.sample_rate,
-            n_octave=fraction_id,
-            center_freqs=None,
-            ref=2e-5,
-            device=device
-        )
+        # 🎯 FISSA LA MINA 1: Disattiviamo temporaneamente l'AMP per forzare il calcolo a 32-bit
+        with torch.cuda.amp.autocast(enabled=False):
+            # Ci assicuriamo che il segnale sia un float32 pulito prima del filtro
+            audio_signal_fp32 = audio_signal.float() 
+            
+            octave_spec = spectrogram_n_octaveband_generator_gpu(
+                wav_batch=audio_signal_fp32,
+                sampling_rate=self.sample_rate,
+                n_octave=fraction_id,
+                center_freqs=None,
+                ref=2e-5,
+                device=device
+            )
         
         octave_spec = octave_spec.permute(0, 2, 1)
         conditioning_C = convert_octave_to_msclap_mel(octave_spec, target_mels=329)
