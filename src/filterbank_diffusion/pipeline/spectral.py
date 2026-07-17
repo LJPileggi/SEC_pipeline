@@ -3,6 +3,9 @@ import sys
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import huggingface_hub
+import transformers
+import msclap
 
 # Mantengo intatto il tuo blocco originale di iniezione dei percorsi
 current_dir = os.path.dirname(os.path.abspath(__file__))
