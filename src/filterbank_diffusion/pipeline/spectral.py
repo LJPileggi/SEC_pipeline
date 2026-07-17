@@ -13,6 +13,8 @@ src_root = os.path.abspath(os.path.join(current_dir, "..", "..", ".."))
 if src_root not in sys.path: 
     sys.path.insert(0, src_root)
 
+from src.utils import VERBOSE
+
 # 🎯 PRODUCTION GLOBAL VARIABLE
 # If True, the audio encoder will be patched to accept pre-computed Mel spectrograms
 INJECT_OCTAVE = os.environ.get("INJECT_OCTAVE", "False").lower() == "true"
