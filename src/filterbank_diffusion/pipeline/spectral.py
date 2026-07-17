@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 # Dynamic root injection to safely import core production modules from src/
 current_dir = os.path.dirname(os.path.abspath(__file__))
-src_root = os.path.abspath(os.path.join(current_dir, "..", ".."))
+src_root = os.path.abspath(os.path.join(current_dir, "..", "..", ".."))
 if src_root not in sys.path:
     sys.path.insert(0, src_root)
 
