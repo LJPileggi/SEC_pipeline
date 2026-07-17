@@ -4,83 +4,37 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# Mantengo intatto il tuo blocco originale di iniezione dei percorsi
 current_dir = os.path.dirname(os.path.abspath(__file__))
 src_root = os.path.abspath(os.path.join(current_dir, "..", "..", ".."))
 if src_root not in sys.path: 
     sys.path.insert(0, src_root)
 
-from src.models import spectrogram_n_octaveband_generator_gpu, convert_octave_to_msclap_mel
+# Importiamo i moduli di elaborazione spettrale e l'inizializzatore con la patch dal tuo file core models
+from src.models import spectrogram_n_octaveband_generator_gpu, convert_octave_to_msclap_mel, CLAP_initializer
 
 class OnlineSpectrogramPipeline(nn.Module):
     """
-    GPU-accelerated spectral transformation engine. Isolates and loads the HTS-AT backbone 
-    directly from CLAP state_dict checkpoints, bypassing RoBERTa initialization.
+    GPU-accelerated spectral transformation engine. Initializes CLAP cleanly
+    via the native project initialization patch, using variables delegated to the .sh script.
     """
     def __init__(self, weights_path, sample_rate=51200, device='cuda'):
         super().__init__()
         self.sample_rate = sample_rate
         
-        # Explicit import of the underlying standalone HTS-AT Swin-Transformer structure from msclap
-        from msclap.models.htsat import HTSAT_Swin_Transformer
+        # Determiniamo il flag cuda coerentemente con il device del modello
+        use_cuda = True if 'cuda' in str(device) else False
         
-        # 🎯 SOLUZIONE COMPLETA: Configurazione dinamica immune a qualsiasi AttributeError
-        class RobustHTSATConfig:
-            def __init__(self):
-                self.mel_bins = 64
-                self.window_size = 1024
-                self.hop_size = 320
-                self.sample_rate = 32000
-                self.fmin = 50
-                self.fmax = 14000
-                self.enable_tscam = True  # Flag nativo per il token-semantic layer di Microsoft
-
-            def __getattr__(self, name):
-                # Qualsiasi attributo aggiuntivo richiesto internamente da msclap restituisce False 
-                # invece di sollevare un AttributeError, blindando il boot del modello.
-                return False
-
-        config_nativo = RobustHTSATConfig()
+        # Inizializziamo l'istanza CLAP sfruttando la funzione patchata ufficiale del progetto.
+        # Questa leggerà autonomamente le variabili d'ambiente esportate dallo script .sh
+        clap_object, _, _ = CLAP_initializer(device=device, use_cuda=use_cuda)
         
-        # Instantiate the pure standalone backbone with Microsoft factory parameters
-        self.htsat = HTSAT_Swin_Transformer(
-            spec_size=256,
-            num_classes=527,
-            depths=[2, 2, 6, 2],
-            num_heads=[4, 8, 16, 32],
-            window_size=8,
-            config=config_nativo
-        )
-        
-        # Load audio encoder weights directly filtering out text/projection constraints
-        if os.path.exists(weights_path):
-            full_state = torch.load(weights_path, map_location='cpu')
-            
-            # Se i pesi sono impacchettati in un dizionario 'state_dict' radice
-            if 'state_dict' in full_state:
-                full_state = full_state['state_dict']
-                
-            audio_state = {}
-            for k, v in full_state.items():
-                # 🎯 SOLUZIONE: Intercettiamo la radice htsat dinamica ovunque sia posizionata
-                if 'htsat.' in k:
-                    # Tronchiamo tutto ciò che si trova prima di 'htsat.' per isolare i pesi del modulo
-                    new_k = k.split('htsat.')[-1]
-                    audio_state[new_k] = v
-            
-            # Verifichiamo che il dizionario non sia vuoto prima di caricarlo
-            if not audio_state:
-                raise RuntimeError(
-                    f"Impossibile estrarre i pesi HTS-AT. Verificare la struttura delle chiavi nel file: {weights_path}\n"
-                    f"Chiavi di esempio trovate nel file: {list(full_state.keys())[:5]}"
-                )
-                    
-            self.htsat.load_state_dict(audio_state, strict=True)
-        else:
-            raise FileNotFoundError(f"Missing absolute mandatory CLAP weight asset at: {weights_path}")
-            
+        # Estraiamo il backbone HTS-AT già configurato, associato e protetto dalla classe madre
+        self.htsat = clap_object.clap.audio_encoder.base.htsat
         self.htsat.to(device)
-        self.htsat.eval() # Freeze in structural prediction evaluation context
+        self.htsat.eval()
         
+        # Congeliamo i parametri in fase di addestramento/validazione della U-Net
         for param in self.htsat.parameters():
             param.requires_grad = False
 
@@ -129,7 +83,7 @@ class OnlineSpectrogramPipeline(nn.Module):
         conditioning_C = convert_octave_to_msclap_mel(octave_spec, target_mels=329)
         conditioning_C = conditioning_C.permute(0, 1, 3, 2) # Shape: [B, 1, 329, T_blocks]
         
-        # Allineiamo la dimensione temporale preservando l'altezza a 329 canali
+        # Allineiamo la dimensione temporale preservando l'altezza nativa a 329 canali
         if conditioning_C.shape[-1] != x_native_norm.shape[-1]:
             conditioning_C = F.interpolate(
                 conditioning_C,

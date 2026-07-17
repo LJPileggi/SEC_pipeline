@@ -38,6 +38,8 @@ cp "$DATASEC_GLOBAL/RAW_DATASET/raw_wav"/*.h5 "$TEMP_DIR/dataSEC/RAW_DATASET/raw
 export BASEDIR="$TEMP_DIR"
 export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
 export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/weights/CLAP_weights_2023.pth"
+export INJECT_OCTAVE="True"
+export VERBOSE="True"
 export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
 export PYTHONUNBUFFERED=1
 export PYTORCH_ALLOC_CONF=expandable_segments:True
