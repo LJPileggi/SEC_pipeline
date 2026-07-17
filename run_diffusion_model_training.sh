@@ -7,7 +7,7 @@
 #SBATCH --mem=128G
 #SBATCH --gres=gpu:4
 #SBATCH -p boost_qos_bprod
-#SBATCH -A IscrC_BrISkite
+#SBATCH -A IscrC_BrISkite_0
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
 
