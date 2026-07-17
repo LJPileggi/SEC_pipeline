@@ -3,7 +3,6 @@ import sys
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from types import SimpleNamespace
 
 # Dynamic root injection to safely import core production modules from src/
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -26,16 +25,13 @@ class OnlineSpectrogramPipeline(nn.Module):
         # Explicit import of the underlying standalone HTS-AT Swin-Transformer structure from msclap
         from msclap.models.htsat import HTSAT_Swin_Transformer
         
-        # 🎯 LA PEZZA COMPLETA: Definiamo TUTTI i parametri richiesti dal costruttore di msclap
-        class MockHTSATConfig:
-            mel_bins = 64
-            window_size = 1024
-            hop_size = 320
-            sample_rate = 32000
-            fmin = 50
-            fmax = 14000
+        # 🎯 LA SOLUZIONE DEFINITIVA: Recuperiamo il dizionario/oggetto di configurazione originale di MS-CLAP
+        import msclap
+        config_nativo = msclap.config.configs
 
-        config_nativo = MockHTSATConfig()
+        # Impostiamo i mel_bins a 64 in modo esplicito se non già configurati di fabbrica
+        if not hasattr(config_nativo, 'mel_bins'):
+            config_nativo.mel_bins = 64
         
         # Instantiate the pure standalone backbone with Microsoft factory parameters
         self.htsat = HTSAT_Swin_Transformer(
@@ -44,7 +40,7 @@ class OnlineSpectrogramPipeline(nn.Module):
             depths=[2, 2, 6, 2],
             num_heads=[4, 8, 16, 32],
             window_size=8,
-            config=config_nativo # 🎯 Passiamo l'oggetto configurato interamente
+            config=config_nativo # 🎯 Passiamo l'oggetto reale completo di tutte le variabili di libreria
         )
         
         # Load audio encoder weights directly filtering out text/projection constraints
@@ -72,11 +68,11 @@ class OnlineSpectrogramPipeline(nn.Module):
         args:
          - raw_audio_batch: 1D audio tensors batch from CPU DataLoader [B, 358400]
          - format_id: Target audio format codec (0=WAV, 1=MP3)
-         - fraction_id: Active 1/n octave denominator (1, 3, 6, 12)
+         - fraction_id: Active 1/n octave denominator (1, 3, 6, 12, 16, 24, 32)
          - device: Active execution device GPU
         returns:
          - x_native_norm: Pristine targets extracted using CLAP's original sub-layers [B, 1, 64, 700]
-         - conditioning_C: Fused geometric spatial mask anchor [B, 1, 64, 700]
+         - conditioning_C: Fused geometric spatial mask anchor [B, 1, 329, 700]
         """
         audio_signal = raw_audio_batch.to(torch.float32).to(device)
         audio_signal = torch.nan_to_num(audio_signal, nan=0.0, posinf=0.0, neginf=0.0)
@@ -106,13 +102,13 @@ class OnlineSpectrogramPipeline(nn.Module):
             center_freqs=None,
             ref=2e-5,
             device=device
-        ) #
+        )
         
         octave_spec = octave_spec.permute(0, 2, 1)
         conditioning_C = convert_octave_to_msclap_mel(octave_spec, target_mels=329)
         conditioning_C = conditioning_C.permute(0, 1, 3, 2) # Shape: [B, 1, 329, T_blocks]
         
-        # 🎯 MODIFICA: Allineiamo la dimensione temporale preservando l'altezza a 329 canali
+        # Allineiamo la dimensione temporale preservando l'altezza a 329 canali
         if conditioning_C.shape[-1] != x_native_norm.shape[-1]:
             conditioning_C = F.interpolate(
                 conditioning_C,
