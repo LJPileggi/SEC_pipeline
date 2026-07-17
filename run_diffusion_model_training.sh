@@ -53,7 +53,7 @@ srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \
     --bind "$TEMP_DIR:/tmp_data" \
     --bind "$(pwd):/app" --pwd "/app" \
     "$SIF_FILE" \
-    python3 -m src/filterbank_diffusion/pipeline/train.py
+    python3 -m src/filterbank_diffusion/pipeline/train
 
 echo "🔬 Launching Standalone Reconstruction Validation..."
 singularity exec --nv --no-home \
@@ -61,6 +61,6 @@ singularity exec --nv --no-home \
     --bind "$TEMP_DIR:/tmp_data" \
     --bind "$(pwd):/app" --pwd "/app" \
     "$SIF_FILE" \
-    python3 -m src/filterbank_diffusion/pipeline/validate.py
+    python3 -m src/filterbank_diffusion/pipeline/validate
 
 cleanup_job_scratch
