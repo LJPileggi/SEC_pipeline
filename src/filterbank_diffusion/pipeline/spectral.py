@@ -3,6 +3,7 @@ import sys
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from types import SimpleNamespace
 
 # Dynamic root injection to safely import core production modules from src/
 current_dir = os.path.dirname(os.path.abspath(__file__))
