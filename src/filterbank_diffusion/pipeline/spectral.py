@@ -10,6 +10,88 @@ src_root = os.path.abspath(os.path.join(current_dir, "..", "..", ".."))
 if src_root not in sys.path: 
     sys.path.insert(0, src_root)
 
+# 🎯 PRODUCTION GLOBAL VARIABLE
+# If True, the audio encoder will be patched to accept pre-computed Mel spectrograms
+INJECT_OCTAVE = os.environ.get("INJECT_OCTAVE", "False").lower() == "true"
+
+# 🎯 MONKEY PATCH LOGIC
+def universal_path_redirect(*args, **kwargs):
+    """
+    Redirects HuggingFace and MSCLAP download requests to local filesystem paths. 
+    This prevents the library from attempting to connect to external hubs, 
+    using environment variables to locate local weights and encoders.
+
+    args:
+     - *args: Variable length argument list from the original download function;
+     - **kwargs: Arbitrary keyword arguments (e.g., 'filename').
+
+    returns:
+     - str: The local path to the model weights.
+    """
+    rank = os.environ.get('SLURM_PROCID', '0')
+    weights_path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
+    text_path = os.getenv("CLAP_TEXT_ENCODER_PATH")
+
+    # Redirect MSCLAP weights specifically
+    if any(x for x in args if 'msclap' in str(x)) or 'CLAP_weights' in str(kwargs):
+        return weights_path
+
+    # Redirect general HuggingFace/Transformers files (like RoBERTa config/vocab)
+    filename = kwargs.get('filename') or (args[1] if len(args) > 1 else None)
+    
+    if filename and text_path:
+        forced_target = os.path.join(text_path, str(filename))
+        # Log patch operations only if diagnostic VERBOSE is active
+        if VERBOSE:
+            print(f"🎯 [Rank {rank}] FIREWALL REDIRECT: {filename} -> {forced_target}", flush=True)
+        return forced_target
+
+    return text_path
+
+# Applying path redirects
+huggingface_hub.hf_hub_download = universal_path_redirect
+transformers.utils.hub.cached_file = universal_path_redirect
+transformers.utils.hub.hf_hub_download = universal_path_redirect
+msclap.CLAPWrapper.hf_hub_download = universal_path_redirect
+
+# ==============================================================================
+# 💉 NEW PATCH: AUDIO ENCODER CLASS INJECTION (Targeting HTSAT_N_Level)
+# ==============================================================================
+if INJECT_OCTAVE:
+    try:
+        # Based on actual msclap source code hierarchy
+        from msclap.models.htsat import HTSAT_N_Level
+        
+        def patched_forward(self, x):
+            """
+            Monkey patch for the HTSAT_N_Level forward method.
+            If x is a 4D tensor [B, 1, T, 64], we bypass the 
+            spectrogram_extractor (line 849) and call the backbone directly.
+            """
+            # Check if input is our pre-computed Mel spectrogram
+            if isinstance(x, torch.Tensor) and x.ndim == 4:
+                # We skip line 849 (spectrogram_extractor) and 
+                # line 850 (logmel_extractor).
+                # We jump directly to the transformer/convolutions layers.
+                return self.forward_features(x)
+            
+            # Standard path for 1D audio waveforms
+            return self.original_forward(x)
+
+        # Apply the patch to the core engine class
+        if not hasattr(HTSAT_N_Level, 'original_forward'):
+            HTSAT_N_Level.original_forward = HTSAT_N_Level.forward
+            HTSAT_N_Level.forward = patched_forward
+            
+        if VERBOSE:
+            print("💉 MSCLAP PATCH: HTSAT_N_Level 'forward' successfully bypassed.")
+            
+    except ImportError:
+        if VERBOSE:
+            print("⚠️ WARNING: Could not find HTSAT_N_Level in msclap.models.htsat.")
+# ==============================================================================
+
+
 # Importiamo i moduli di elaborazione spettrale e l'inizializzatore con la patch dal tuo file core models
 from src.models import spectrogram_n_octaveband_generator_gpu, convert_octave_to_msclap_mel, CLAP_initializer
 
