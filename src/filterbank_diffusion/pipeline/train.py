@@ -68,7 +68,7 @@ def main():
             class_labels = class_labels.to(device, non_blocking=True)
             
             format_id = np.random.choice([0, 1])          
-            fraction_id = np.random.choice([1, 3, 6, 12]) 
+            fraction_id = np.random.choice([1, 3, 6, 12, 16, 24, 32]) 
             
             optimizer.zero_grad(set_to_none=True)
             

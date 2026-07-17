@@ -68,14 +68,12 @@ class AsymmetricConvBlock(nn.Module):
 
 class ConditionalUNet(nn.Module):
     """
-    Conditional U-Net architecture optimized for high-resolution Log-Mel restoration.
-    Accepts noisy spectrograms concatenated with low-resolution filterbanks as a rigid spatial anchor.
+    Conditional U-Net architecture optimized for 329-channel high-resolution Log-Mel restoration[cite: 15].
     """
     def __init__(self, num_classes=22, base_channels=64, emb_dim=256):
         super().__init__()
         self.num_classes = num_classes
         
-        # 23 slots: indices 0-21 represent core acoustic labels, index 22 holds the "Unknown" null token for CFG
         self.class_embedding = nn.Embedding(num_classes + 1, emb_dim)
         self.time_embedding = nn.Sequential(
             SinusoidalPositionEmbeddings(emb_dim),
@@ -83,66 +81,62 @@ class ConditionalUNet(nn.Module):
             nn.SiLU()
         )
         
-        # Combined condition mapping used to feed the sequential FiLM injectors
         self.comb_emb_projector = nn.Linear(emb_dim * 2, emb_dim)
 
-        # 🎯 INPUT CHANNELS = 2: Channel 0 is x_t (Noisy Mel), Channel 1 is C (Spectral anchor)
+        # 🎯 INPUT: Accetta in ingresso l'ancora spaziale a 329 canali[cite: 15]
         self.inc = AsymmetricConvBlock(2, base_channels, emb_dim)
         
-        # Downsampling Encoder blocks
-        self.down1 = nn.Sequential(nn.MaxPool2d((2, 2)), AsymmetricConvBlock(base_channels, base_channels * 2, emb_dim))
-        self.down2 = nn.Sequential(nn.MaxPool2d((2, 2)), AsymmetricConvBlock(base_channels * 2, base_channels * 4, emb_dim))
+        # 🎯 MODIFICA: Sostituzione dei MaxPool2d con Downsampling tramite Strided Conv asimmetrica per gestire l'altezza dispari (329)[cite: 15]
+        self.down_conv1 = nn.Conv2d(base_channels, base_channels, kernel_size=3, stride=(2, 2), padding=1)
+        self.down1_block = AsymmetricConvBlock(base_channels, base_channels * 2, emb_dim)
         
-        # Bottleneck
+        self.down_conv2 = nn.Conv2d(base_channels * 2, base_channels * 2, kernel_size=3, stride=(2, 2), padding=1)
+        self.down2_block = AsymmetricConvBlock(base_channels * 2, base_channels * 4, emb_dim)
+        
+        # Bottleneck[cite: 15]
         self.mid = AsymmetricConvBlock(base_channels * 4, base_channels * 4, emb_dim)
         
-        # Upsampling Decoder blocks
+        # Decoder[cite: 15]
         self.up1 = nn.ConvTranspose2d(base_channels * 4, base_channels * 2, kernel_size=2, stride=2)
-        self.up_block1 = AsymmetricConvBlock(base_channels * 4, base_channels * 2, emb_dim) # Cat channels: (base*2 + base*2)
+        self.up_block1 = AsymmetricConvBlock(base_channels * 4, base_channels * 2, emb_dim) 
         
         self.up2 = nn.ConvTranspose2d(base_channels * 2, base_channels, kernel_size=2, stride=2)
-        self.up_block2 = AsymmetricConvBlock(base_channels * 2, base_channels, emb_dim) # Cat channels: (base + base)
+        self.up_block2 = AsymmetricConvBlock(base_channels * 2, base_channels, emb_dim) 
         
-        # Final projection layer returning pure predicted noise epsilon matching input shape (1 channel)
         self.outc = nn.Conv2d(base_channels, 1, kernel_size=1)
 
     def forward(self, x_t, t, conditioning_C, class_labels):
         """
-        args:
-         - x_t: Noisy Mel tensor [B, 1, 64, 700]
-         - t: Diffusion timesteps integers [B]
-         - conditioning_C: Spectral mask envelope tensor [B, 1, 64, 700]
-         - class_labels: Numerical semantic indices [B]
+        x_t: [B, 1, 329, 700]
+        conditioning_C: [B, 1, 329, 700][cite: 15]
         """
-        # 1. Spatial conditioning via direct channel-wise concatenation
-        # Shapes check: [B, 1, 64, 700] concat [B, 1, 64, 700] -> [B, 2, 64, 700]
-        x_in = torch.cat([x_t, conditioning_C], dim=1)
+        x_in = torch.cat([x_t, conditioning_C], dim=1) # [B, 2, 329, 700][cite: 15]
 
-        # 2. Extract and concatenate semantic and temporal dense conditions
-        t_emb = self.time_embedding(t)                 # [B, emb_dim]
-        c_emb = self.class_embedding(class_labels)       # [B, emb_dim]
+        t_emb = self.time_embedding(t)                 
+        c_emb = self.class_embedding(class_labels)       
+        fused_emb = self.comb_emb_projector(torch.cat([t_emb, c_emb], dim=-1)) 
+
+        # Downward path con strided conv[cite: 15]
+        h0 = self.inc(x_in, fused_emb)                 # [B, base, 329, 700]
         
-        # Core fused embedding propagated to all FiLM layers
-        fused_emb = self.comb_emb_projector(torch.cat([t_emb, c_emb], dim=-1)) # [B, emb_dim]
+        h1_down = self.down_conv1(h0)                  # [B, base, 165, 350]
+        h1 = self.down1_block(h1_down, fused_emb)      # [B, base*2, 165, 350]
+        
+        h2_down = self.down_conv2(h1)                  # [B, base*2, 83, 175]
+        h2 = self.down2_block(h2_down, fused_emb)      # [B, base*4, 83, 175]
 
-        # 3. Downward structural path
-        h0 = self.inc(x_in, fused_emb)                 # [B, base, 64, 700]
-        h1 = self.down1[1](self.down1[0](h0), fused_emb) # [B, base*2, 32, 350]
-        h2 = self.down2[1](self.down2[0](h1), fused_emb) # [B, base*4, 16, 175]
-
-        # 4. Bottleneck representation
+        # Bottleneck[cite: 15]
         h_mid = self.mid(h2, fused_emb)
 
-        # 5. Upward restorative path incorporating skip connections
-        u1 = self.up1(h_mid)
-        # Interpolation guard to prevent rounding mismatches on odd sizes (e.g. 175 * 2 = 350)
+        # Upward restorative path con allineamento dinamico bilineare delle skip connection[cite: 15]
+        u1 = self.up1(h_mid)                           # Upsample a [B, base*2, 166, 350]
         if u1.shape[-1] != h1.shape[-1] or u1.shape[-2] != h1.shape[-2]:
             u1 = F.interpolate(u1, size=(h1.shape[-2], h1.shape[-1]), mode='bilinear', align_corners=False)
         h_up1 = self.up_block1(torch.cat([u1, h1], dim=1), fused_emb)
 
-        u2 = self.up2(h_up1)
+        u2 = self.up2(h_up1)                           # Upsample a [B, base, 330, 700]
         if u2.shape[-1] != h0.shape[-1] or u2.shape[-2] != h0.shape[-2]:
             u2 = F.interpolate(u2, size=(h0.shape[-2], h0.shape[-1]), mode='bilinear', align_corners=False)
         h_up2 = self.up_block2(torch.cat([u2, h0], dim=1), fused_emb)
 
-        return self.outc(h_up2) # Out shape matches noise target exactly: [B, 1, 64, 700]
+        return self.outc(h_up2) # Output pulito: [B, 1, 329, 700][cite: 15]

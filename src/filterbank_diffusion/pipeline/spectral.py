@@ -96,13 +96,14 @@ class OnlineSpectrogramPipeline(nn.Module):
         ) #
         
         octave_spec = octave_spec.permute(0, 2, 1)
-        conditioning_C = convert_octave_to_msclap_mel(octave_spec, target_mels=64) #
-        conditioning_C = conditioning_C.permute(0, 1, 3, 2)
+        conditioning_C = convert_octave_to_msclap_mel(octave_spec, target_mels=329)
+        conditioning_C = conditioning_C.permute(0, 1, 3, 2) # Shape: [B, 1, 329, T_blocks]
         
+        # 🎯 MODIFICA: Allineiamo la dimensione temporale preservando l'altezza a 329 canali
         if conditioning_C.shape[-1] != x_native_norm.shape[-1]:
             conditioning_C = F.interpolate(
                 conditioning_C,
-                size=(64, x_native_norm.shape[-1]),
+                size=(329, x_native_norm.shape[-1]),
                 mode='bilinear',
                 align_corners=False
             )
