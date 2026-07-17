@@ -4,6 +4,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+current_dir = os.path.dirname(os.path.abspath(__file__))
+src_root = os.path.abspath(os.path.join(current_dir, "..", "..", ".."))
+if src_root not in sys.path: 
+    sys.path.insert(0, src_root)
+
 from src.models import spectrogram_n_octaveband_generator_gpu, convert_octave_to_msclap_mel
 
 class OnlineSpectrogramPipeline(nn.Module):
