@@ -1,8 +1,8 @@
 import os
 import sys
 import torch
-import nn = torch.nn
-import F = torch.nn.functional
+import torch.nn as nn
+import torch.nn.functional as F
 
 # Dynamic root injection to safely import core production modules from src/
 current_dir = os.path.dirname(os.path.abspath(__file__))
