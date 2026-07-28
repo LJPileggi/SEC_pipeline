@@ -64,18 +64,18 @@ def main():
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
     
     # 🎯 CORREZIONE: Mappatura completa e reale delle 7 finezze del progetto
-    target_fractions = [1, 3, 6, 12, 16, 24, 32]
+    target_fractions = [1, 3, 6, 12, 16, 24]
     output_analysis_dir = os.path.join(src_root, "logs", "validation_analysis")
     os.makedirs(output_analysis_dir, exist_ok=True)
     
     print(f"🔬 Evaluating Mel reconstruction discrepancy on {len(test_dataset)} independent samples...")
     
-    # Ciclo esterno per scorporare le performance su tutte e 7 le finezze
+    # Ciclo esterno per scorporare le performance su tutte e 6 le finezze
     for fraction in target_fractions:
         print(f"\n🔄 Running Validation for Octave Fraction 1/{fraction}...")
         
         frob_scores, kl_scores, wass_scores = [], [], []
-        granular_mel_residuals = np.zeros(329)
+        granular_mel_residuals = np.zeros(248)
         total_samples = 0
         
         with torch.no_grad():
@@ -98,8 +98,8 @@ def main():
                     wass_scores.append(wass)
                     
                     # Compute absolute residual per single Mel Bin
-                    abs_residual = torch.abs(x_0[b] - x_reconstructed[b]).squeeze(0) # [329, 700]
-                    mean_mel_profile = torch.mean(abs_residual, dim=-1).cpu().numpy() # [329]
+                    abs_residual = torch.abs(x_0[b] - x_reconstructed[b]).squeeze(0) # [248, 700]
+                    mean_mel_profile = torch.mean(abs_residual, dim=-1).cpu().numpy() # [248]
                     granular_mel_residuals += mean_mel_profile
                     total_samples += 1
                     
