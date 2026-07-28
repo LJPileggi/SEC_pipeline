@@ -362,9 +362,7 @@ def convert_octave_to_msclap_mel(spectrogram_gpu, target_mels=64):
     # 4. 🔥 APPLICAZIONE ALGEBRICA DELLA BATCH NORMALIZATION DI FABBRICA (bn0)
     # Sfrutta il caching statico sull'attributo della funzione per non rileggere il file .npz a ogni iterazione
     if not hasattr(convert_octave_to_msclap_mel, "bn0_data"):
-        # Recuperiamo il percorso coerente con la cartella dei pesi definita nello script .sh
-        my_user = os.getlogin() if hasattr(os, 'getlogin') else os.getenv("USER", "userexternal")
-        constants_path = f"/leonardo_scratch/large/userexternal/{my_user}/SEC_pipeline/.clap_weights/clap_bn0_constants.npz"
+        constants_path = os.getenv("LOCAL_CLAP_BN0_CONSTANTS_PATH")
         
         # Fallback di controllo se i percorsi assoluti differiscono in base all'ambiente corrente
         if not os.path.exists(constants_path):

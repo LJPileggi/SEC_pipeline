@@ -15,6 +15,7 @@
 TEMP_DIR="/leonardo_scratch/large/userexternal/$USER/tmp_train_$SLURM_JOB_ID"
 SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/clap_pipeline.sif"
 CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
+CLAP_BN0_CONSTANTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/clap_bn0_constants.npz"
 DATASEC_GLOBAL="/leonardo_scratch/large/userexternal/$USER/dataSEC"
 
 mkdir -p "$TEMP_DIR/dataSEC/RAW_DATASET/raw_wav"
@@ -38,6 +39,7 @@ cp "$DATASEC_GLOBAL/RAW_DATASET/raw_wav"/*.h5 "$TEMP_DIR/dataSEC/RAW_DATASET/raw
 export BASEDIR="$TEMP_DIR"
 export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
 export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/weights/CLAP_weights_2023.pth"
+export LOCAL_CLAP_BN0_CONSTANTS_PATH="/tmp_data/work_dir/weights/clap_bn0_constants.npz"
 export INJECT_OCTAVE="True"
 export VERBOSE="True"
 export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
