@@ -90,11 +90,6 @@ def main():
             scaler.update()
             
             epoch_loss += loss.item()
-
-            # 🎯 GARBAGE COLLECTION E CLEANUP MEMORIA AD OGNI STEP
-            del x_0, conditioning_C, x_t, noise, noise_pred, loss, raw_audio, class_labels
-            if step % 10 == 0 and torch.cuda.is_available():
-                torch.cuda.empty_cache()
             
         if rank == 0:
             avg_loss = epoch_loss / len(dataloader)
