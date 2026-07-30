@@ -26,7 +26,7 @@ def main():
     classes_list, patience, epochs, _, sampling_rate, _, _, seed, _, _, _ = get_config_from_yaml("config0.yaml")
     
     # 🎯 LOCAL BATCH SIZE INCREMENTATO A 8 PER MASSIMIZZARE LA GPU
-    local_batch_size = 8
+    local_batch_size = 12
     
     local_seed = seed + rank
     torch.manual_seed(local_seed)
