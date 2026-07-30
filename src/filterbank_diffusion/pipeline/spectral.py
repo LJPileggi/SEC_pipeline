@@ -86,6 +86,10 @@ class OnlineSpectrogramPipeline(nn.Module):
             audio_signal = torch.fft.irfft(fft_data, dim=-1)
             audio_signal += torch.randn_like(audio_signal) * 1e-4
 
+        # 🎯 PULIZIA RIGIDA DIVERGENZE NUMERICHE PER EVITARE CUDA LAUNCH FAILURE
+        audio_signal = torch.nan_to_num(audio_signal, nan=0.0, posinf=0.0, neginf=0.0)
+        audio_signal = torch.clamp(audio_signal, min=-10.0, max=10.0)
+
         # 2. Replicate CLAP Native Preprocessing (64 mels target x_0)
         with torch.no_grad():
             x_stft = self.htsat.spectrogram_extractor(audio_signal)

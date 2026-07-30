@@ -45,6 +45,8 @@ export VERBOSE="True"
 export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
 export PYTHONUNBUFFERED=1
 export PYTORCH_ALLOC_CONF=expandable_segments:True
+export CUDA_LAUNCH_BLOCKING=1
+export TORCH_USE_CUDA_DSA=1
 
 export MASTER_ADDR=$(hostname)
 export MASTER_PORT=$(expr 20000 + ${SLURM_JOB_ID} % 10000)
