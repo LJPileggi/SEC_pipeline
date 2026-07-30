@@ -25,7 +25,8 @@ def main():
     
     classes_list, patience, epochs, _, sampling_rate, _, _, seed, _, _, _ = get_config_from_yaml("config0.yaml")
     
-    local_batch_size = 6
+    # 🎯 LOCAL BATCH SIZE INCREMENTATO A 8 PER MASSIMIZZARE LA GPU
+    local_batch_size = 8
     
     local_seed = seed + rank
     torch.manual_seed(local_seed)
@@ -40,7 +41,8 @@ def main():
     dataset = DistributedAudioRAWDataset(base_dir=raw_dataset_root, target_samples_per_class=500)
     
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=seed)
-    dataloader = DataLoader(dataset, batch_size=local_batch_size, sampler=sampler, num_workers=4, pin_memory=True, drop_last=True)
+    # num_workers portato a 8 per non rallentare il caricamento da disco
+    dataloader = DataLoader(dataset, batch_size=local_batch_size, sampler=sampler, num_workers=8, pin_memory=True, drop_last=True)
 
     unet = ConditionalUNet(num_classes=len(classes_list), base_channels=64, emb_dim=256).to(device)
     diffusion_scheduler = GaussianDiffusion(unet_model=unet, timesteps=1000).to(device)
@@ -52,12 +54,11 @@ def main():
 
     optimizer = torch.optim.AdamW(unet.parameters(), lr=2e-4, weight_decay=1e-4)
 
-    # 🎯 ADDIO GRADSCALER: In FP32 puro non serve più!
     total_steps = len(dataloader)
     print_freq = max(1, total_steps // 10)
 
     if rank == 0:
-        print(f"🏁 DDP Init Complete (FP32 Precision). GPUs: {world_size} | Local Batch: {local_batch_size} (Global: {local_batch_size * world_size})")
+        print(f"🏁 DDP Init Complete (BFloat16 Precision). GPUs: {world_size} | Local Batch: {local_batch_size} (Global: {local_batch_size * world_size})")
         print(f"📊 Steps per Epoch: {total_steps} | Print every {print_freq} steps (10%)")
 
     for epoch in range(epochs):
@@ -77,25 +78,22 @@ def main():
             
             optimizer.zero_grad(set_to_none=True)
             
-            # 🎯 FP32 PURO: Niente autocast, calcolo lineare diretto
-            x_0, conditioning_C = spectral_pipeline(raw_audio, format_id, fraction_id, device=device)
-            
-            t = torch.randint(0, 1000, (x_0.shape[0],), device=device).long()
-            noise = torch.randn_like(x_0)
-            x_t = diffusion_scheduler.q_sample(x_0, t, noise)
-            
-            mask_cfg = torch.rand(class_labels.shape, device=device) < 0.15
-            cfg_labels = torch.where(mask_cfg, torch.tensor(len(classes_list), device=device), class_labels)
-            
-            noise_pred = unet(x_t, t, conditioning_C, cfg_labels)
-            loss = nn.functional.mse_loss(noise_pred, noise)
+            # 🎯 BFLOAT16: Massima velocità hardware + Stabilità di FP32 (NO GradScaler, NO NaN!)
+            with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                x_0, conditioning_C = spectral_pipeline(raw_audio, format_id, fraction_id, device=device)
                 
-            # 🎯 CLASSICA BACKPROPAGATION
+                t = torch.randint(0, 1000, (x_0.shape[0],), device=device).long()
+                noise = torch.randn_like(x_0)
+                x_t = diffusion_scheduler.q_sample(x_0, t, noise)
+                
+                mask_cfg = torch.rand(class_labels.shape, device=device) < 0.15
+                cfg_labels = torch.where(mask_cfg, torch.tensor(len(classes_list), device=device), class_labels)
+                
+                noise_pred = unet(x_t, t, conditioning_C, cfg_labels)
+                loss = nn.functional.mse_loss(noise_pred, noise)
+                
             loss.backward()
-            
-            # Il gradient clipping lo manteniamo comunque come buona prassi per i modelli di diffusione (evita exploit improvvisi durante la stima del rumore)
             torch.nn.utils.clip_grad_norm_(unet.parameters(), max_norm=1.0)
-            
             optimizer.step()
             
             current_loss = loss.item()

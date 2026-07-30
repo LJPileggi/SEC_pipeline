@@ -184,13 +184,8 @@ def spectrogram_n_octaveband_generator_gpu(wav_batch, sampling_rate, n_octave=3,
     
     sos_tensor = torch.stack(sos_coeffs).to(device).to(torch.float32)
     
-    # 🎯 MEMORY MANAGEMENT: Define micro-batch size for filtering
-    if n_octave >= 24:
-        MICRO_BATCH_SIZE = 256
-    elif n_octave >= 12:
-        MICRO_BATCH_SIZE = 512
-    else:
-        MICRO_BATCH_SIZE = 1024
+    # 🎯 PARALLELIZZAZIONE MASSIMA: 4096 consente di processare tutte le bande in 1 solo passo CUDA!
+    MICRO_BATCH_SIZE = 4096
     full_expanded_size = batch_size * n_bands
     
     # Repeat audio for each band
