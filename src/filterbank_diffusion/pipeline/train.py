@@ -26,7 +26,7 @@ def main():
     classes_list, patience, epochs, _, sampling_rate, _, _, seed, _, _, _ = get_config_from_yaml("config0.yaml")
     
     # 🎯 HARDCODING BATCH SIZE PER GPU: 4 campioni per GPU (Batch globale = 4 x N_GPU)
-    local_batch_size = 4 
+    local_batch_size = 12
     
     local_seed = seed + rank
     torch.manual_seed(local_seed)
