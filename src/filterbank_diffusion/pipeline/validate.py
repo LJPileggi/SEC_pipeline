@@ -19,10 +19,7 @@ from src.filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
 from src.filterbank_diffusion.pipeline.spectral import OnlineSpectrogramPipeline
 
 def calculate_distribution_metrics(p_tensor, q_tensor):
-    """Computes pure geometric and distributional alignment vectors between log-mels."""
     frob = torch.norm(p_tensor - q_tensor, p='fro').item()
-    
-    # 2D Softmax projection to construct continuous dynamic energy densities
     p_prob = F.softmax(p_tensor.flatten(), dim=0).cpu().numpy()
     q_prob = F.softmax(q_tensor.flatten(), dim=0).cpu().numpy()
     
@@ -35,19 +32,23 @@ def calculate_distribution_metrics(p_tensor, q_tensor):
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    classes_list, _, _, batch_size, sampling_rate, _, _, seed, _, _, _ = get_config_from_yaml("config0.yaml")
+    classes_list, _, _, _, sampling_rate, _, _, seed, _, _, _ = get_config_from_yaml("config0.yaml")
     
-    # 1. Initialize spectral pipeline purely for ground-truth and filterbank extraction
+    # 🎯 HARDCODED VALIDATION BATCH SIZE
+    local_batch_size = 4
+    
     weights_path = os.environ.get("LOCAL_CLAP_WEIGHTS_PATH", ".clap_weights/CLAP_weights_2023.pth")
     spectral_pipeline = OnlineSpectrogramPipeline(weights_path=weights_path, sample_rate=sampling_rate, device=device).to(device)
     
-    # 2. Instantiate and load U-Net weights from the fixed hidden directory
     unet = ConditionalUNet(num_classes=len(classes_list), base_channels=64, emb_dim=256).to(device)
-    target_model_dir = os.path.join(src_root, ".models", "diff_model")
+    
+    # Resolving path dynamically
+    base_model_dir = os.environ.get("MODEL_CHECKPOINT_DIR", src_root)
+    target_model_dir = os.path.join(base_model_dir, ".models", "diff_model")
     
     checkpoints = [f for f in os.listdir(target_model_dir) if f.endswith(".pt")]
     if not checkpoints:
-        print("❌ No checkpoints found in .models/diff_model/. Exiting.")
+        print(f"❌ No checkpoints found in {target_model_dir}. Exiting.")
         return
     latest_checkpoint = sorted(checkpoints)[-1]
     checkpoint_path = os.path.join(target_model_dir, latest_checkpoint)
@@ -58,24 +59,23 @@ def main():
     
     diffusion_scheduler = GaussianDiffusion(unet_model=unet, timesteps=1000).to(device)
     
-    # 3. Dedicated Isolated Test Set Dataloader
     raw_dataset_root = os.path.join(os.environ.get("BASEDIR", "/tmp"), "dataSEC", "RAW_DATASET", "raw_wav")
     test_dataset = DistributedAudioRAWDataset(base_dir=raw_dataset_root, split="test", target_samples_per_class=100)
-    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    test_dataloader = DataLoader(test_dataset, batch_size=local_batch_size, shuffle=False, num_workers=4, pin_memory=True)
     
-    # 🎯 CORREZIONE: Mappatura completa e reale delle 7 finezze del progetto
-    target_fractions = [1, 3, 6, 12, 16, 24]
+    # 🎯 INCLUSE TUTTE LE 7 FRAZIONI FINO A 32
+    target_fractions = [1, 3, 6, 12, 16, 24, 32]
     output_analysis_dir = os.path.join(src_root, "logs", "validation_analysis")
     os.makedirs(output_analysis_dir, exist_ok=True)
     
     print(f"🔬 Evaluating Mel reconstruction discrepancy on {len(test_dataset)} independent samples...")
     
-    # Ciclo esterno per scorporare le performance su tutte e 6 le finezze
     for fraction in target_fractions:
         print(f"\n🔄 Running Validation for Octave Fraction 1/{fraction}...")
         
         frob_scores, kl_scores, wass_scores = [], [], []
-        granular_mel_residuals = np.zeros(248)
+        # 🎯 CANALI ADATTIVI PER LE 32ESIME
+        granular_mel_residuals = np.zeros(332)
         total_samples = 0
         
         with torch.no_grad():
@@ -83,27 +83,33 @@ def main():
                 raw_audio = raw_audio.to(device)
                 class_labels = class_labels.to(device)
                 
-                # Estrazione con la frazione corrente del loop
                 x_0, conditioning_C = spectral_pipeline(raw_audio, format_id=1, fraction_id=fraction, device=device)
                 
-                # Execute 1000 steps reverse diffusion loop via the unconditional null label
                 null_labels = torch.full_like(class_labels, fill_value=len(classes_list))
                 x_reconstructed = diffusion_scheduler.sample_loop_cfg(conditioning_C, null_labels, guidance_scale=3.0)
                 
-                # Extract statistics across batch indices
                 for b in range(x_0.shape[0]):
                     frob, kl, wass = calculate_distribution_metrics(x_0[b], x_reconstructed[b])
                     frob_scores.append(frob)
                     kl_scores.append(kl)
                     wass_scores.append(wass)
                     
-                    # Compute absolute residual per single Mel Bin
-                    abs_residual = torch.abs(x_0[b] - x_reconstructed[b]).squeeze(0) # [248, 700]
-                    mean_mel_profile = torch.mean(abs_residual, dim=-1).cpu().numpy() # [248]
+                    abs_residual = torch.abs(x_0[b] - x_reconstructed[b]).squeeze(0)
+                    mean_mel_profile = torch.mean(abs_residual, dim=-1).cpu().numpy()
+                    
+                    # Pad or trim profile if sizes vary slightly by fraction
+                    if len(mean_mel_profile) < 332:
+                        mean_mel_profile = np.pad(mean_mel_profile, (0, 332 - len(mean_mel_profile)))
+                    else:
+                        mean_mel_profile = mean_mel_profile[:332]
+                        
                     granular_mel_residuals += mean_mel_profile
                     total_samples += 1
                     
-        # Consolidate statistics for the current fraction
+                del x_0, conditioning_C, x_reconstructed, raw_audio, class_labels
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    
         granular_mel_residuals /= total_samples
         
         print(f"📊 --- REPORT FOR 1/{fraction} OCTAVE ---")
@@ -111,9 +117,7 @@ def main():
         print(f"  • Avg Kullback-Leibler Divergence:    {np.mean(kl_scores):.4f}")
         print(f"  • Avg Wasserstein (Earth Mover):      {np.mean(wass_scores):.4f}")
         
-        # Salva file .npy differenziati per ognuna delle 7 finezze
         np.save(os.path.join(output_analysis_dir, f"granular_residuals_octave_1_{fraction}.npy"), granular_mel_residuals)
-        
         summary_metrics = np.array([np.mean(frob_scores), np.mean(kl_scores), np.mean(wass_scores)])
         np.save(os.path.join(output_analysis_dir, f"summary_metrics_octave_1_{fraction}.npy"), summary_metrics)
         print(f"💾 Saved 1/{fraction} profiles successfully to: {output_analysis_dir}")
