@@ -68,7 +68,7 @@ class AsymmetricConvBlock(nn.Module):
 
 class ConditionalUNet(nn.Module):
     """
-    Conditional U-Net architecture optimized for 329-channel high-resolution Log-Mel restoration[cite: 15].
+    Conditional U-Net architecture optimized for high-resolution octave-conditioned Log-Mel restoration.
     """
     def __init__(self, num_classes=22, base_channels=64, emb_dim=256):
         super().__init__()
@@ -80,63 +80,69 @@ class ConditionalUNet(nn.Module):
             nn.Linear(emb_dim, emb_dim),
             nn.SiLU()
         )
-        
         self.comb_emb_projector = nn.Linear(emb_dim * 2, emb_dim)
 
-        # 🎯 INPUT: Accetta in ingresso l'ancora spaziale a 329 canali[cite: 15]
-        self.inc = AsymmetricConvBlock(2, base_channels, emb_dim)
+        # 🎯 1. Cambiato in_channels a 1 (poiché concateniamo su dim=2)
+        self.inc = AsymmetricConvBlock(1, base_channels, emb_dim)
         
-        # 🎯 MODIFICA: Sostituzione dei MaxPool2d con Downsampling tramite Strided Conv asimmetrica per gestire l'altezza dispari (329)[cite: 15]
+        # Downsampling path
         self.down_conv1 = nn.Conv2d(base_channels, base_channels, kernel_size=3, stride=(2, 2), padding=1)
         self.down1_block = AsymmetricConvBlock(base_channels, base_channels * 2, emb_dim)
         
         self.down_conv2 = nn.Conv2d(base_channels * 2, base_channels * 2, kernel_size=3, stride=(2, 2), padding=1)
         self.down2_block = AsymmetricConvBlock(base_channels * 2, base_channels * 4, emb_dim)
         
-        # Bottleneck[cite: 15]
+        # Bottleneck
         self.mid = AsymmetricConvBlock(base_channels * 4, base_channels * 4, emb_dim)
         
-        # Decoder[cite: 15]
+        # Decoder
         self.up1 = nn.ConvTranspose2d(base_channels * 4, base_channels * 2, kernel_size=2, stride=2)
         self.up_block1 = AsymmetricConvBlock(base_channels * 4, base_channels * 2, emb_dim) 
         
         self.up2 = nn.ConvTranspose2d(base_channels * 2, base_channels, kernel_size=2, stride=2)
         self.up_block2 = AsymmetricConvBlock(base_channels * 2, base_channels, emb_dim) 
         
+        # 🎯 Output layer a 1 canale
         self.outc = nn.Conv2d(base_channels, 1, kernel_size=1)
 
     def forward(self, x_t, t, conditioning_C, class_labels):
         """
-        x_t: [B, 1, 329, 700]
-        conditioning_C: [B, 1, 329, 700][cite: 15]
+        x_t: [B, 1, 64, 700] (Target CLAP Log-Mel)
+        conditioning_C: [B, 1, 332, 700] (Ancora spettrale 32esime d'ottava)
         """
-        x_in = torch.cat([x_t, conditioning_C], dim=1) # [B, 2, 329, 700][cite: 15]
+        # 🎯 CONCATENAZIONE SULL'ASSE DELLE FREQUENZE (dim=2)
+        # Produce un unico tensore ad un canale: [B, 1, 396, 700]
+        x_in = torch.cat([x_t, conditioning_C], dim=2)
 
         t_emb = self.time_embedding(t)                 
         c_emb = self.class_embedding(class_labels)       
         fused_emb = self.comb_emb_projector(torch.cat([t_emb, c_emb], dim=-1)) 
 
-        # Downward path con strided conv[cite: 15]
-        h0 = self.inc(x_in, fused_emb)                 # [B, base, 329, 700]
+        # Downward path
+        h0 = self.inc(x_in, fused_emb)                 # [B, base, 396, 700]
         
-        h1_down = self.down_conv1(h0)                  # [B, base, 165, 350]
-        h1 = self.down1_block(h1_down, fused_emb)      # [B, base*2, 165, 350]
+        h1_down = self.down_conv1(h0)                  # [B, base, 198, 350]
+        h1 = self.down1_block(h1_down, fused_emb)      # [B, base*2, 198, 350]
         
-        h2_down = self.down_conv2(h1)                  # [B, base*2, 83, 175]
-        h2 = self.down2_block(h2_down, fused_emb)      # [B, base*4, 83, 175]
+        h2_down = self.down_conv2(h1)                  # [B, base*2, 99, 175]
+        h2 = self.down2_block(h2_down, fused_emb)      # [B, base*4, 99, 175]
 
-        # Bottleneck[cite: 15]
+        # Bottleneck
         h_mid = self.mid(h2, fused_emb)
 
-        # Upward restorative path con allineamento dinamico bilineare delle skip connection[cite: 15]
-        u1 = self.up1(h_mid)                           # Upsample a [B, base*2, 166, 350]
+        # Upward path
+        u1 = self.up1(h_mid)                           # [B, base*2, 198, 350]
         if u1.shape[-1] != h1.shape[-1] or u1.shape[-2] != h1.shape[-2]:
             u1 = F.interpolate(u1, size=(h1.shape[-2], h1.shape[-1]), mode='bilinear', align_corners=False)
         h_up1 = self.up_block1(torch.cat([u1, h1], dim=1), fused_emb)
 
-        u2 = self.up2(h_up1)                           # Upsample a [B, base, 330, 700]
+        u2 = self.up2(h_up1)                           # [B, base, 396, 700]
         if u2.shape[-1] != h0.shape[-1] or u2.shape[-2] != h0.shape[-2]:
             u2 = F.interpolate(u2, size=(h0.shape[-2], h0.shape[-1]), mode='bilinear', align_corners=False)
         h_up2 = self.up_block2(torch.cat([u2, h0], dim=1), fused_emb)
 
-        return self.outc(h_up2) # Output pulito: [B, 1, 329, 700][cite: 15]
+        # 🎯 ISOLAMENTO TARGET: Estraiamo i primi 64 canali (corrispondenti a x_t) 
+        # prima della convoluzione finale 1x1
+        h_target = h_up2[:, :, :x_t.shape[2], :]       # [B, base, 64, 700]
+
+        return self.outc(h_target)                    # Output finale: [B, 1, 64, 700]
