@@ -22,7 +22,7 @@ classes:
  - Wind_turbine
  - Workshop
 patience: 10
-epochs: 100
+epochs: 150
 batch_size: 128
 sampling_rate: 52100
 ref: 2.e-05

@@ -121,8 +121,11 @@ def main():
             total_epoch_time = time.time() - epoch_start_time
             print(f"📢 Epoch {epoch:03d} Complete in {total_epoch_time/60:.2f} min. Master Average Loss MSE: {avg_loss:.6f}\n")
             
-            target_model_dir = os.path.join(src_root, ".models", "diff_model")
+            # 🎯 DIRECTORY DEDICATA CHECKPOINT (con fallback sicuro)
+            base_model_dir = os.environ.get("MODEL_CHECKPOINT_DIR", os.path.join(src_root, ".models", "diff_model"))
+            target_model_dir = base_model_dir if base_model_dir.startswith("/") else os.path.join(src_root, base_model_dir)
             os.makedirs(target_model_dir, exist_ok=True)
+            
             checkpoint_path = os.path.join(target_model_dir, f"unet_epoch_{epoch}.pt")
             
             torch.save({
