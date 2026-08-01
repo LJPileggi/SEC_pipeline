@@ -69,18 +69,18 @@ export TORCH_USE_CUDA_DSA=1
 export MASTER_ADDR=$(hostname)
 export MASTER_PORT=$(expr 20000 + ${SLURM_JOB_ID} % 10000)
 
-# echo "🚀 Launching Distributed Training on 4 ranks (src/filterbank_diffusion/pipeline/train.py)..."
-# srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \
-#     singularity exec --nv --no-home \
-#     --bind "/leonardo_scratch:/leonardo_scratch" \
-#     --bind "$TEMP_DIR:/tmp_data" \
-#     --bind "$(pwd):/app" --pwd "/app" \
-#     "$SIF_FILE" \
-#     python3 src/filterbank_diffusion/pipeline/train.py
+echo "🚀 Launching Distributed Training on 4 ranks (src/filterbank_diffusion/pipeline/train.py)..."
+srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \
+    singularity exec --nv --no-home \
+    --bind "/leonardo_scratch:/leonardo_scratch" \
+    --bind "$TEMP_DIR:/tmp_data" \
+    --bind "$(pwd):/app" --pwd "/app" \
+    "$SIF_FILE" \
+    python3 src/filterbank_diffusion/pipeline/train.py
 
 # 🎯 4. STAGE-OUT IMMEDIATO A FINE TRAINING (Prima della Validation)
-# echo "📦 Syncing trained checkpoints to global SCRATCH before validation..."
-# rsync -rlt "$TEMP_DIR/models/diff_model/" "$MODELS_GLOBAL/"
+echo "📦 Syncing trained checkpoints to global SCRATCH before validation..."
+rsync -rlt "$TEMP_DIR/models/diff_model/" "$MODELS_GLOBAL/"
 
 echo "🔬 Launching Standalone Reconstruction Validation..."
 singularity exec --nv --no-home \
