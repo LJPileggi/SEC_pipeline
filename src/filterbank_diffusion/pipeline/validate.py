@@ -43,8 +43,7 @@ def main():
     unet = ConditionalUNet(num_classes=len(classes_list), base_channels=64, emb_dim=256).to(device)
     
     # Resolving path dynamically
-    base_model_dir = os.environ.get("MODELS_GLOBAL", src_root)
-    target_model_dir = os.path.join(base_model_dir, ".models", "diff_model")
+    target_model_dir = os.environ.get("MODELS_GLOBAL", src_root)
     
     checkpoints = [f for f in os.listdir(target_model_dir) if f.endswith(".pt")]
     if not checkpoints:
