@@ -79,9 +79,8 @@ class GaussianDiffusion(nn.Module):
         """
         self.model.eval()
         device = conditioning_C.device
-        shape = conditioning_C.shape # Mapped directly from the [B, 1, 64, 700] mask anchor
-        
-        # Initialize latent grid with pure white gaussian noise
+        batch_size, _, _, time_steps = conditioning_C.shape
+        shape = (batch_size, 1, 64, time_steps)
         x = torch.randn(shape, device=device)
         
         # Iterate backward through the entire pre-computed timeline

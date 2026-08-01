@@ -13,7 +13,6 @@ if src_root not in sys.path:
     sys.path.insert(0, src_root)
 
 from src.utils import get_config_from_yaml
-from src.models import reshape_spectrogram
 from src.filterbank_diffusion.models.unet import ConditionalUNet
 from src.filterbank_diffusion.models.diffusion import GaussianDiffusion
 from src.filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
@@ -89,13 +88,12 @@ def main():
                 x_reconstructed = diffusion_scheduler.sample_loop_cfg(conditioning_C, null_labels, guidance_scale=3.0)
                 
                 for b in range(x_0.shape[0]):
-                    x_0_reshaped = reshape_spectrogram(x_0, target_dim=332)
-                    frob, kl, wass = calculate_distribution_metrics(x_0_reshaped[b], x_reconstructed[b])
+                    frob, kl, wass = calculate_distribution_metrics(x_0[b], x_reconstructed[b])
                     frob_scores.append(frob)
                     kl_scores.append(kl)
                     wass_scores.append(wass)
                     
-                    abs_residual = torch.abs(x_0_reshaped[b] - x_reconstructed[b]).squeeze(0)
+                    abs_residual = torch.abs(x_0[b] - x_reconstructed[b]).squeeze(0)
                     mean_mel_profile = torch.mean(abs_residual, dim=-1).cpu().numpy()
                     
                     # Pad or trim profile if sizes vary slightly by fraction
@@ -107,7 +105,7 @@ def main():
                     granular_mel_residuals += mean_mel_profile
                     total_samples += 1
                     
-                del x_0, x_0_reshaped, conditioning_C, x_reconstructed, raw_audio, class_labels
+                del x_0, conditioning_C, x_reconstructed, raw_audio, class_labels
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                     
