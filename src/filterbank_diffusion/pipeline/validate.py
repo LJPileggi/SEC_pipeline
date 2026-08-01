@@ -13,6 +13,7 @@ if src_root not in sys.path:
     sys.path.insert(0, src_root)
 
 from src.utils import get_config_from_yaml
+from src.models import reshape_spectrogram
 from src.filterbank_diffusion.models.unet import ConditionalUNet
 from src.filterbank_diffusion.models.diffusion import GaussianDiffusion
 from src.filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
