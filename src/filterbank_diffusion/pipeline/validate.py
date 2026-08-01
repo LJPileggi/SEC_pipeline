@@ -32,7 +32,7 @@ def calculate_distribution_metrics(p_tensor, q_tensor):
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    classes_list, _, _, _, sampling_rate, _, _, seed, _, _, _ = get_config_from_yaml("config0.yaml")
+    classes_list, _, epochs, _, sampling_rate, _, _, seed, _, _, _ = get_config_from_yaml("config0.yaml")
     
     # 🎯 HARDCODED VALIDATION BATCH SIZE
     local_batch_size = 4
@@ -49,7 +49,7 @@ def main():
     if not checkpoints:
         print(f"❌ No checkpoints found in {target_model_dir}. Exiting.")
         return
-    latest_checkpoint = sorted(checkpoints)[-1]
+    latest_checkpoint = f"unet_epoch_{epochs - 1}.pt"
     checkpoint_path = os.path.join(target_model_dir, latest_checkpoint)
     
     checkpoint = torch.load(checkpoint_path, map_location=device)
@@ -88,12 +88,13 @@ def main():
                 x_reconstructed = diffusion_scheduler.sample_loop_cfg(conditioning_C, null_labels, guidance_scale=3.0)
                 
                 for b in range(x_0.shape[0]):
-                    frob, kl, wass = calculate_distribution_metrics(x_0[b], x_reconstructed[b])
+                    x_0_reshaped = reshape_spectrogram(x_0, target_dim=332)
+                    frob, kl, wass = calculate_distribution_metrics(x_0_reshaped[b], x_reconstructed[b])
                     frob_scores.append(frob)
                     kl_scores.append(kl)
                     wass_scores.append(wass)
                     
-                    abs_residual = torch.abs(x_0[b] - x_reconstructed[b]).squeeze(0)
+                    abs_residual = torch.abs(x_0_reshaped[b] - x_reconstructed[b]).squeeze(0)
                     mean_mel_profile = torch.mean(abs_residual, dim=-1).cpu().numpy()
                     
                     # Pad or trim profile if sizes vary slightly by fraction
@@ -105,7 +106,7 @@ def main():
                     granular_mel_residuals += mean_mel_profile
                     total_samples += 1
                     
-                del x_0, conditioning_C, x_reconstructed, raw_audio, class_labels
+                del x_0, x_0_reshaped, conditioning_C, x_reconstructed, raw_audio, class_labels
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                     
