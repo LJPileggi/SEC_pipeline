@@ -308,34 +308,72 @@ def get_octave_to_mel_transition_matrix(n_octave, n_mels=64, sample_rate=52000, 
 
     return torch.from_numpy(W).float().to(device)
 
-# def convert_octave_to_msclap_mel(spectrogram_gpu, W_matrix):
-#     """
-#     Converts octave spectrogram to MS-CLAP Mel scale using a pre-computed 
-#     transition matrix, fixing both the return statement and the axis orientation.
-#     """
-    # 1. Energy Projection via Matrix Multiplication
-    # Output dimension: [B, T, F_octave] @ [F_octave, 64] -> [B, T, 64]
-#     x_mel = torch.matmul(spectrogram_gpu, W_matrix)
+def convert_octave_to_msclap_mel(spectrogram_gpu, W_matrix):
+    """
+    Converts octave spectrogram to MS-CLAP Mel scale, stabilizing the dynamic 
+    range by applying the official CLAP pre-trained BatchNorm parameters algebraically.
+    """
+    # 1. Prepare tensor for spatial interpolation (B, C, T, F)
+    # HTS-AT expects frequency as the last dimension
+    x = spectrogram_gpu.unsqueeze(1) # Shape: [B, 1, T, F_octave]
 
-    # 2. 🎯 LA PERMUTAZIONE DEGLI ASSI
-    # Scambiamo l'asse 1 (Tempo) con l'asse 2 (Frequenze Mel)
-    # Il tensore passa da [B, T, 64] a [B, 64, T]
-    # x_mel = x_mel.permute(0, 2, 1)
+    # 2. Resampling to target Mel resolution
+    # Bilinear interpolation acts as a high-fidelity sampler
+    x_mel = F.interpolate(
+        x, 
+        size=(x.shape[2], target_mels), 
+        mode='bilinear', 
+        align_corners=False
+    )
 
-    # 3. Shape Formatting for HTS-AT encoder [B, C, F, T] (Diventa [B, 1, 64, T])
-#     x_mel = x_mel.unsqueeze(1) 
+    # 3. Logarithmic Compression 
+    x_log_mel = torch.log(torch.clamp(x_mel, min=1e-6)) # Shape: [B, 1, T, 64]
 
-    # 4. Logarithmic Compression
-#     x_log_mel = torch.log(torch.clamp(x_mel, min=1e-6))
+    # 4. 🔥 APPLICAZIONE ALGEBRICA DELLA BATCH NORMALIZATION DI FABBRICA (bn0)
+    # Sfrutta il caching statico sull'attributo della funzione per non rileggere il file .npz a ogni iterazione
+    if not hasattr(convert_octave_to_msclap_mel, "bn0_data"):
+        constants_path = os.getenv("LOCAL_CLAP_BN0_CONSTANTS_PATH")
 
-    # 5. Instance-based Normalization
-    # Ora calcola media e varianza sulla fetta bidimensionale [64, T] correttamente orientata
-#     mean = x_log_mel.mean(dim=(2, 3), keepdim=True)
-#     std = x_log_mel.std(dim=(2, 3), keepdim=True)
-#     x_norm = (x_log_mel - mean) / (std + 1e-6)
+        if os.path.exists(constants_path):
+            try:
+                data = np.load(constants_path)
+                # Convertiamo i vettori estratti in PyTorch tensor, float32, orientandoli per il broadcast.
+                # Lo shape originario è [64]. Per farlo agire direttamente sul nostro tensore [B, 1, T, 64],
+                # eseguiamo un reshape immediato a [1, 1, 1, 64].
+                convert_octave_to_msclap_mel.bn0_data = {
+                    'mean': torch.from_numpy(data['running_mean']).float().view(1, 1, 1, 64),
+                    'var': torch.from_numpy(data['running_var']).float().view(1, 1, 1, 64),
+                    'weight': torch.from_numpy(data['weight']).float().view(1, 1, 1, 64),
+                    'bias': torch.from_numpy(data['bias']).float().view(1, 1, 1, 64)
+                }
+            except Exception as e:
+                print(f"   ⚠️ Impossibile mappare o decodificare le costanti .npz: {e}")
+                convert_octave_to_msclap_mel.bn0_data = None
+        else:
+            print(f"   ⚠️ File delle costanti non trovato in '{constants_path}'. Fallback su normalizzazione locale.")
+            convert_octave_to_msclap_mel.bn0_data = None
 
-    # 6. Restituzione del tensore raddrizzato e normalizzato
-#     return x_norm
+    bn_data = convert_octave_to_msclap_mel.bn0_data
+
+    if bn_data is not None:
+        # Spostiamo istantaneamente le costanti sullo stesso device del tensore audio (CPU o GPU)
+        device = x_log_mel.device
+        m = bn_data['mean'].to(device)
+        v = bn_data['var'].to(device)
+        w = bn_data['weight'].to(device)
+        b = bn_data['bias'].to(device)
+
+        # Replica esatta, pixel-per-pixel, dell'equazione di un blocco BatchNorm2d in PyTorch eval mode.
+        # Utilizziamo epsilon = 1e-5 per allineamento millimetrico alle specifiche di addestramento.
+        x_norm = ((x_log_mel - m) / torch.sqrt(v + 1e-5)) * w + b
+    else:
+        # Strato protettivo di fallback locale se per qualsiasi ragione l'I/O sulle costanti dovesse fallire
+        mean = x_log_mel.mean(dim=(2, 3), keepdim=True)
+        std = x_log_mel.std(dim=(2, 3), keepdim=True)
+        x_norm = (x_log_mel - mean) / (std + 1e-6)
+
+    # 5. Restituzione del tensore raddrizzato e allineato geometricamente
+    return x_norm
 
 def reshape_spectrogram(spectrogram_gpu, target_dim=64):
     """
