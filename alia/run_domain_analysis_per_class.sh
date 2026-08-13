@@ -19,6 +19,7 @@ CONF_MATRIX_3_OCTAVE="${DATASEC_DIR}/results_3_octave/wav/3_octave/7_secs/miscla
 
 # PARAMETRI COMPILATI SUI PESI DI FABBRICA
 CLAP_SCRATCH_WEIGHTS="${PROJECT_DIR}/.clap_weights/CLAP_weights_2023.pth"
+CLAP_BN0_CONSTANTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/clap_bn0_constants.npz"
 ROBERTA_PATH="${PROJECT_DIR}/.clap_weights/roberta-base"
 
 # --- 2. VINCOLI ATOMICI PER IL NODO DI LOGIN (Risorse Safe) ---
@@ -35,6 +36,7 @@ export NUMBA_CACHE_DIR="${PROJECT_DIR}/.numba_cache"
 mkdir -p "$NUMBA_CACHE_DIR"
 
 export LOCAL_CLAP_WEIGHTS_PATH="$CLAP_SCRATCH_WEIGHTS"
+export LOCAL_CLAP_BN0_CONSTANTS_PATH="$CLAP_BN0_CONSTANTS"
 export CLAP_TEXT_ENCODER_PATH="$ROBERTA_PATH"
 
 echo "⏳ Esecuzione Analisi di Dominio dataSEC Online (Modalità Interattiva Offline a Tranche)..."
