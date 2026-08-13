@@ -22,16 +22,47 @@ from src.filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
 from src.filterbank_diffusion.pipeline.spectral import OnlineSpectrogramPipeline
 
 def calculate_distribution_metrics(p_tensor, q_tensor):
-    frob = torch.norm(p_tensor - q_tensor, p='fro').item()
-    p_prob = F.softmax(p_tensor.flatten(), dim=0).cpu().numpy()
-    q_prob = F.softmax(q_tensor.flatten(), dim=0).cpu().numpy()
+    """
+    Calcola le metriche di discrepanza spettrale garantendo stabilita' numerica.
+    p_tensor, q_tensor: [1, 64, T] oppure [64, T]
+    """
+    # Prevenzione preventiva di valori spuri nei tensori di input
+    p_clean = torch.nan_to_num(p_tensor, nan=0.0, posinf=0.0, neginf=0.0)
+    q_clean = torch.nan_to_num(q_tensor, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # 1. DISTANZA DI FROBENIUS (Sui valori reali delle ampiezze/Log-Mel)
+    diff = p_clean - q_clean
+    frob = torch.norm(diff, p='fro').item()
+
+    # 2. DENSITÀ DI ENERGIA SPETTRALE (Trasformazione in Distribuzione di Probabilita')
+    # Convertiamo da Log-Mel ad energia ampiezza lineare usando exp
+    p_energy = torch.exp(p_clean).flatten().double().cpu().numpy()
+    q_energy = torch.exp(q_clean).flatten().double().cpu().numpy()
+
+    p_sum = np.sum(p_energy)
+    q_sum = np.sum(q_energy)
     
-    kl_div = scipy.stats.entropy(p_prob, q_prob)
+    if p_sum > 0: p_energy /= p_sum
+    else: p_energy = np.ones_like(p_energy) / len(p_energy)
+        
+    if q_sum > 0: q_energy /= q_sum
+    else: q_energy = np.ones_like(q_energy) / len(q_energy)
+
+    # Epsilon per prevenire log(0)
+    eps = 1e-12
+    p_energy = np.clip(p_energy, eps, 1.0)
+    q_energy = np.clip(q_energy, eps, 1.0)
+
+    # 3. KL DIVERGENCE & WASSERSTEIN DISTANCE
+    kl_div = scipy.stats.entropy(p_energy, q_energy)
     if np.isinf(kl_div) or np.isnan(kl_div): 
         kl_div = 0.0
-    
-    wasserstein = scipy.stats.wasserstein_distance(p_prob, q_prob)
-    return frob, kl_div, wasserstein
+
+    wasserstein = scipy.stats.wasserstein_distance(p_energy, q_energy)
+    if np.isinf(wasserstein) or np.isnan(wasserstein): 
+        wasserstein = 0.0
+
+    return float(frob), float(kl_div), float(wasserstein)
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -69,7 +100,7 @@ def main():
         "dataSEC", "RAW_DATASET", "raw_wav"
     )
     
-    # 🎯 CALCOLO IN BLOCCO: DataLoader globale sull'intero dataset di test scompaginato
+    # 🎯 DataLoader globale sull'intero dataset di test
     test_dataset = DistributedAudioRAWDataset(
         base_dir=raw_dataset_root, 
         split="test", 
@@ -96,7 +127,6 @@ def main():
                 raw_audio = raw_audio.to(device, non_blocking=True)
                 class_labels = class_labels.to(device, non_blocking=True)
                 
-                # Processing del batch direttamente in GPU
                 x_0, conditioning_C = spectral_pipeline(raw_audio, format_id=1, fraction_id=fraction, device=device)
                 
                 # 🚀 VETTORIALIZZAZIONE DDIM SU GPU SULL'INTERO BATCH
