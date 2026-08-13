@@ -308,7 +308,7 @@ def get_octave_to_mel_transition_matrix(n_octave, n_mels=64, sample_rate=52000, 
 
     return torch.from_numpy(W).float().to(device)
 
-def convert_octave_to_msclap_mel(spectrogram_gpu, W_matrix):
+def convert_octave_to_msclap_mel(spectrogram_gpu, target_mels=64)
     """
     Converts octave spectrogram to MS-CLAP Mel scale, stabilizing the dynamic 
     range by applying the official CLAP pre-trained BatchNorm parameters algebraically.
