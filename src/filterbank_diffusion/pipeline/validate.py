@@ -21,21 +21,16 @@ from src.filterbank_diffusion.models.diffusion import GaussianDiffusion
 from src.filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
 from src.filterbank_diffusion.pipeline.spectral import OnlineSpectrogramPipeline
 
+# --- METRICHE PUNTO A PUNTO E DISTRIBUZIONALI LOCALI ---
 def calculate_distribution_metrics(p_tensor, q_tensor):
-    """
-    Calcola le metriche di discrepanza spettrale garantendo stabilita' numerica.
-    p_tensor, q_tensor: [1, 64, T] oppure [64, T]
-    """
-    # Prevenzione preventiva di valori spuri nei tensori di input
     p_clean = torch.nan_to_num(p_tensor, nan=0.0, posinf=0.0, neginf=0.0)
     q_clean = torch.nan_to_num(q_tensor, nan=0.0, posinf=0.0, neginf=0.0)
 
-    # 1. DISTANZA DI FROBENIUS (Sui valori reali delle ampiezze/Log-Mel)
+    # 1. Distanza di Frobenius
     diff = p_clean - q_clean
     frob = torch.norm(diff, p='fro').item()
 
-    # 2. DENSITÀ DI ENERGIA SPETTRALE (Trasformazione in Distribuzione di Probabilita')
-    # Convertiamo da Log-Mel ad energia ampiezza lineare usando exp
+    # 2. Densità di energia spettrale
     p_energy = torch.exp(p_clean).flatten().double().cpu().numpy()
     q_energy = torch.exp(q_clean).flatten().double().cpu().numpy()
 
@@ -48,21 +43,78 @@ def calculate_distribution_metrics(p_tensor, q_tensor):
     if q_sum > 0: q_energy /= q_sum
     else: q_energy = np.ones_like(q_energy) / len(q_energy)
 
-    # Epsilon per prevenire log(0)
     eps = 1e-12
     p_energy = np.clip(p_energy, eps, 1.0)
     q_energy = np.clip(q_energy, eps, 1.0)
 
-    # 3. KL DIVERGENCE & WASSERSTEIN DISTANCE
+    # 3. KL Divergence & Wasserstein 1D
     kl_div = scipy.stats.entropy(p_energy, q_energy)
-    if np.isinf(kl_div) or np.isnan(kl_div): 
-        kl_div = 0.0
+    if np.isinf(kl_div) or np.isnan(kl_div): kl_div = 0.0
 
     wasserstein = scipy.stats.wasserstein_distance(p_energy, q_energy)
-    if np.isinf(wasserstein) or np.isnan(wasserstein): 
-        wasserstein = 0.0
+    if np.isinf(wasserstein) or np.isnan(wasserstein): wasserstein = 0.0
 
     return float(frob), float(kl_div), float(wasserstein)
+
+
+# --- METRICHE NON-LINEARI SUI CENTROIDI (MMD & WASSERSTEIN 2D SINKHORN) ---
+def compute_agnostic_mmd(x, y, alphas=[0.1, 1.0, 10.0]):
+    if not isinstance(x, torch.Tensor): x = torch.from_numpy(x).float()
+    if not isinstance(y, torch.Tensor): y = torch.from_numpy(y).float()
+        
+    if x.ndim > 2: x = x.squeeze()
+    if y.ndim > 2: y = y.squeeze()
+        
+    x_size = x.size(0)
+    y_size = y.size(0)
+    
+    xx = torch.pow(torch.norm(x, dim=1, keepdim=True), 2)
+    yy = torch.pow(torch.norm(y, dim=1, keepdim=True), 2)
+    
+    dist_xx = xx + xx.t() - 2 * torch.mm(x, x.t())
+    dist_yy = yy + yy.t() - 2 * torch.mm(y, y.t())
+    dist_xy = xx + yy.t() - 2 * torch.mm(x, y.t())
+    
+    kernel_xx, kernel_yy, kernel_xy = 0.0, 0.0, 0.0
+    for alpha in alphas:
+        kernel_xx += torch.exp(-dist_xx / (2 * alpha))
+        kernel_yy += torch.exp(-dist_yy / (2 * alpha))
+        kernel_xy += torch.exp(-dist_xy / (2 * alpha))
+        
+    mmd = (kernel_xx.sum() / (x_size * x_size) + 
+           kernel_yy.sum() / (y_size * y_size) - 
+           2 * kernel_xy.sum() / (x_size * y_size))
+           
+    return torch.clamp(mmd, min=0.0).item()
+
+def compute_agnostic_wasserstein(p_mat, q_mat, epsilon=0.01, max_iter=100):
+    if not isinstance(p_mat, torch.Tensor): p_mat = torch.from_numpy(p_mat).float()
+    if not isinstance(q_mat, torch.Tensor): q_mat = torch.from_numpy(q_mat).float()
+        
+    if p_mat.ndim > 2: p_mat = p_mat.squeeze()
+    if q_mat.ndim > 2: q_mat = q_mat.squeeze()
+
+    p_profile = torch.mean(p_mat, dim=1) if p_mat.shape[0] == 64 else torch.mean(p_mat, dim=0)
+    q_profile = torch.mean(q_mat, dim=1) if q_mat.shape[0] == 64 else torch.mean(q_mat, dim=0)
+
+    a = F.softmax(p_profile, dim=0).unsqueeze(1) 
+    b = F.softmax(q_profile, dim=0).unsqueeze(1) 
+    
+    dim = a.size(0)
+    grid = torch.arange(dim, dtype=torch.float32).unsqueeze(1)
+    C = torch.pow(grid - grid.t(), 2)
+    C = C / C.max() 
+    
+    K = torch.exp(-C / epsilon)
+    u = torch.ones((dim, 1), dtype=torch.float32) / dim
+    
+    for _ in range(max_iter):
+        v = b / (torch.mm(K.t(), u) + 1e-8)
+        u = a / (torch.mm(K, v) + 1e-8)
+        
+    transport_plan = u * K * v.t()
+    return torch.sum(transport_plan * C).item()
+
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -100,7 +152,6 @@ def main():
         "dataSEC", "RAW_DATASET", "raw_wav"
     )
     
-    # 🎯 DataLoader globale sull'intero dataset di test
     test_dataset = DistributedAudioRAWDataset(
         base_dir=raw_dataset_root, 
         split="test", 
@@ -118,9 +169,14 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
 
     master_records = []
+    global_nonlinear_records = []
 
     for fraction in target_fractions:
         print(f"\n⚡ ULTRA-FAST DDIM EVALUATION IN BLOCCO (25 STEPS | BATCH {eval_batch_size}) FOR FRACTION 1/{fraction}")
+        
+        # Accumulatori per i centroidi spettrali [64, T] della frazione corrente
+        native_specs_list = []
+        reconstructed_specs_list = []
         
         with torch.no_grad():
             for step, (raw_audio, class_labels) in enumerate(test_dataloader):
@@ -129,7 +185,7 @@ def main():
                 
                 x_0, conditioning_C = spectral_pipeline(raw_audio, format_id=1, fraction_id=fraction, device=device)
                 
-                # 🚀 VETTORIALIZZAZIONE DDIM SU GPU SULL'INTERO BATCH
+                # Generazione parallela DDIM
                 x_reconstructed = diffusion_scheduler.sample_ddim_cfg(
                     conditioning_C, class_labels, ddim_steps=ddim_steps, guidance_scale=guidance_scale
                 )
@@ -148,10 +204,41 @@ def main():
                         'wasserstein': wass
                     })
                     
+                    # Accumuliamo le matrici [64, T] per il centroide
+                    # x_0[b] ha forma [1, 64, T] -> Squeeze a [64, T]
+                    native_specs_list.append(x_0[b].squeeze(0).cpu().numpy())
+                    reconstructed_specs_list.append(x_reconstructed[b].squeeze(0).cpu().numpy())
+                    
                 del raw_audio, class_labels, x_0, conditioning_C, x_reconstructed
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
 
+        # --- CALCOLO CENTROIDI GLOBALI E METRICHE NON-LINEARI PER LA FRAZIONE ---
+        if native_specs_list and reconstructed_specs_list:
+            global_native_centroid = np.mean(native_specs_list, axis=0)        # [64, T]
+            global_reconstructed_centroid = np.mean(reconstructed_specs_list, axis=0) # [64, T]
+
+            # MMD si aspetta [Frame, Canali], quindi trasponiamo [T, 64]
+            fraction_mmd = compute_agnostic_mmd(global_native_centroid.T, global_reconstructed_centroid.T)
+            fraction_wasserstein_2d = compute_agnostic_wasserstein(global_native_centroid, global_reconstructed_centroid)
+
+            # Baseline H0 (splittando a metà l'asse temporale del centroide nativo)
+            time_steps = global_native_centroid.shape[1]
+            half_time = time_steps // 2
+            h0_baseline = compute_agnostic_wasserstein(global_native_centroid[:, :half_time], global_native_centroid[:, half_time:(half_time * 2)])
+
+            print(f"   • MMD (Native vs Reconstructed):            {fraction_mmd:.6f}")
+            print(f"   • 2D Wasserstein (Native vs Reconstructed): {fraction_wasserstein_2d:.6f}")
+            print(f"   • H0 Baseline Noise:                       {h0_baseline:.6f}")
+
+            global_nonlinear_records.append({
+                'octave_fraction': fraction,
+                'MMD_global_centroids': fraction_mmd,
+                'Wasserstein_2D_global_centroids': fraction_wasserstein_2d,
+                'H0_Wasserstein_baseline': h0_baseline
+            })
+
+    # --- SALVATAGGIO DEI REPORT FINALI ---
     if master_records:
         df_master = pd.DataFrame(master_records)
         master_csv = os.path.join(output_dir, "consolidated_diffusion_tracks.csv")
@@ -164,6 +251,16 @@ def main():
         print("\n" + "="*60)
         print("📊 REPORT FINALE VALIDAZIONE IN BLOCCO (DDIM)")
         print(summary.to_string())
+        print("="*60)
+
+    if global_nonlinear_records:
+        df_nonlinear = pd.DataFrame(global_nonlinear_records)
+        nonlinear_csv = os.path.join(output_dir, "global_non_linear_distances.csv")
+        df_nonlinear.to_csv(nonlinear_csv, index=False)
+
+        print("\n" + "="*60)
+        print("🌐 REPORT METRICHE NON-LINEARI GLOBALI (CENTROIDI)")
+        print(df_nonlinear.to_string())
         print("="*60)
         print(f"\n💾 Esportazione completata in: {output_dir}")
 
