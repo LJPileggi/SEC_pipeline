@@ -30,7 +30,7 @@ def calculate_distribution_metrics(p_tensor, q_tensor):
     diff = p_clean - q_clean
     frob = torch.norm(diff, p='fro').item()
 
-    # 2. Densità di energia spettrale
+    # 2. Densità di energia spettrale (Float64 per stabilità numerica)
     p_energy = torch.exp(p_clean).flatten().double().cpu().numpy()
     q_energy = torch.exp(q_clean).flatten().double().cpu().numpy()
 
@@ -115,6 +115,36 @@ def compute_agnostic_wasserstein(p_mat, q_mat, epsilon=0.01, max_iter=100):
     transport_plan = u * K * v.t()
     return torch.sum(transport_plan * C).item()
 
+def compute_exact_native_interclass_separability(class_native_specs_dict):
+    """
+    Riproduce fedelmente la logica di compute_interclass_distances.py ed aggregate_domain_results.py:
+    1. Calcola il centroide nativo X_0 per ogni classe.
+    2. Costruisce la matrice di distanza di Frobenius interclasse.
+    3. Estrae il minimo valore tra classi NATIVE distinte (Soglia di Separabilità)[cite: 12].
+    """
+    classes = list(class_native_specs_dict.keys())
+    if len(classes) < 2:
+        return 0.0
+        
+    # Calcolo dei centroidi nativi per classe [64, T]
+    centroids = {c: np.mean(specs, axis=0) for c, specs in class_native_specs_dict.items()}
+    
+    frob_distances = []
+    for i in range(len(classes)):
+        for j in range(i + 1, len(classes)):
+            c_i = torch.from_numpy(centroids[classes[i]]).float()
+            c_j = torch.from_numpy(centroids[classes[j]]).float()
+            
+            # Distanza di Frobenius tra i due centroidi nativi
+            frob_val = torch.norm(c_i - c_j, p='fro').item()
+            if frob_val > 1e-5:
+                frob_distances.append(frob_val)
+                
+    if frob_distances:
+        return float(min(frob_distances))
+    else:
+        return 0.0
+
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -174,9 +204,9 @@ def main():
     for fraction in target_fractions:
         print(f"\n⚡ ULTRA-FAST DDIM EVALUATION IN BLOCCO (25 STEPS | BATCH {eval_batch_size}) FOR FRACTION 1/{fraction}")
         
-        # Accumulatori per i centroidi spettrali [64, T] della frazione corrente
         native_specs_list = []
         reconstructed_specs_list = []
+        class_native_specs_dict = {} # Per calcolare Dist_inter con il metodo nativo originale
         
         with torch.no_grad():
             for step, (raw_audio, class_labels) in enumerate(test_dataloader):
@@ -185,13 +215,16 @@ def main():
                 
                 x_0, conditioning_C = spectral_pipeline(raw_audio, format_id=1, fraction_id=fraction, device=device)
                 
-                # Generazione parallela DDIM
+                # Sanificazione contro NaN
+                x_0_clean = torch.nan_to_num(x_0, nan=0.0, posinf=0.0, neginf=0.0)
+                
                 x_reconstructed = diffusion_scheduler.sample_ddim_cfg(
                     conditioning_C, class_labels, ddim_steps=ddim_steps, guidance_scale=guidance_scale
                 )
+                x_rec_clean = torch.nan_to_num(x_reconstructed, nan=0.0, posinf=0.0, neginf=0.0)
                 
                 for b in range(x_0.shape[0]):
-                    frob, kl, wass = calculate_distribution_metrics(x_0[b], x_reconstructed[b])
+                    frob, kl, wass = calculate_distribution_metrics(x_0_clean[b], x_rec_clean[b])
                     c_idx = class_labels[b].item()
                     c_name = classes_list[c_idx] if c_idx < len(classes_list) else "Unknown"
                     
@@ -204,41 +237,52 @@ def main():
                         'wasserstein': wass
                     })
                     
-                    # Accumuliamo le matrici [64, T] per il centroide
-                    # x_0[b] ha forma [1, 64, T] -> Squeeze a [64, T]
-                    native_specs_list.append(x_0[b].squeeze(0).cpu().numpy())
-                    reconstructed_specs_list.append(x_reconstructed[b].squeeze(0).cpu().numpy())
+                    spec_nat = x_0_clean[b].squeeze(0).cpu().numpy()
+                    spec_rec = x_rec_clean[b].squeeze(0).cpu().numpy()
                     
-                del raw_audio, class_labels, x_0, conditioning_C, x_reconstructed
+                    native_specs_list.append(spec_nat)
+                    reconstructed_specs_list.append(spec_rec)
+                    
+                    if c_name not in class_native_specs_dict:
+                        class_native_specs_dict[c_name] = []
+                    class_native_specs_dict[c_name].append(spec_nat)
+                    
+                del raw_audio, class_labels, x_0, conditioning_C, x_reconstructed, x_0_clean, x_rec_clean
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
 
-        # --- CALCOLO CENTROIDI GLOBALI E METRICHE NON-LINEARI PER LA FRAZIONE ---
+        # --- METRICHE GLOBALI E VERIFICA BEN-DAVID ---
         if native_specs_list and reconstructed_specs_list:
             global_native_centroid = np.mean(native_specs_list, axis=0)        # [64, T]
             global_reconstructed_centroid = np.mean(reconstructed_specs_list, axis=0) # [64, T]
 
-            # MMD si aspetta [Frame, Canali], quindi trasponiamo [T, 64]
+            # MMD e Wasserstein 2D (con sanificazione integrata)
             fraction_mmd = compute_agnostic_mmd(global_native_centroid.T, global_reconstructed_centroid.T)
             fraction_wasserstein_2d = compute_agnostic_wasserstein(global_native_centroid, global_reconstructed_centroid)
 
-            # Baseline H0 (splittando a metà l'asse temporale del centroide nativo)
+            # Baseline H0
             time_steps = global_native_centroid.shape[1]
             half_time = time_steps // 2
             h0_baseline = compute_agnostic_wasserstein(global_native_centroid[:, :half_time], global_native_centroid[:, half_time:(half_time * 2)])
 
+            # Dist_inter nativa originale calcolata esattamente come prima
+            threshold_separability = compute_exact_native_interclass_separability(class_native_specs_dict)
+
+            print(f"\n🌐 METRICHE GLOBALI NON-LINEARI (FRAZIONE 1/{fraction}):")
             print(f"   • MMD (Native vs Reconstructed):            {fraction_mmd:.6f}")
             print(f"   • 2D Wasserstein (Native vs Reconstructed): {fraction_wasserstein_2d:.6f}")
             print(f"   • H0 Baseline Noise:                       {h0_baseline:.6f}")
+            print(f"   • Interclass Separability Threshold (Dist_inter): {threshold_separability:.6f}")
 
             global_nonlinear_records.append({
                 'octave_fraction': fraction,
                 'MMD_global_centroids': fraction_mmd,
                 'Wasserstein_2D_global_centroids': fraction_wasserstein_2d,
-                'H0_Wasserstein_baseline': h0_baseline
+                'H0_Wasserstein_baseline': h0_baseline,
+                'Interclass_Separability_Threshold': threshold_separability
             })
 
-    # --- SALVATAGGIO DEI REPORT FINALI ---
+    # --- ESPOZIONE REPORT FINALI ---
     if master_records:
         df_master = pd.DataFrame(master_records)
         master_csv = os.path.join(output_dir, "consolidated_diffusion_tracks.csv")
