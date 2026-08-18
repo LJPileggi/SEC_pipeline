@@ -16,9 +16,12 @@ import json
 
 from .models import CLAP_initializer, spectrogram_n_octaveband_generator, \
     spectrogram_n_octaveband_generator_gpu, convert_octave_to_msclap_mel, \
-    get_octave_to_mel_transition_matrix, spectrogram_to_audio_batch
+    get_octave_to_mel_transition_matrix, spectrogram_to_audio_batch, \
+    reshape_spectrogram
 from .utils import *
 from .dirs_config import *
+from .filterbank_diffusion.models.unet import ConditionalUNet
+from .filterbank_diffusion.models.diffusion import GaussianDiffusion
 
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
@@ -129,6 +132,22 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
 
     batch_audio = []; batch_meta = []
 
+    # U-Net instantiation and checkpoint loading
+    diff_unet = ConditionalUNet(num_classes=len(config['data']['classes_list']), base_channels=64, emb_dim=256).to(device)
+    epochs = config.get('epochs', 20)
+    target_model_dir = os.environ.get("DIFF_MODELS", "/tmp_data/work_dir/diff_model")
+    checkpoint_path = os.path.join(target_model_dir, f"unet_epoch_{epochs - 1}.pt")
+
+    if not os.path.exists(checkpoint_path):
+        pts = [f for f in os.listdir(target_model_dir) if f.endswith(".pt")]
+        if pts: checkpoint_path = os.path.join(target_model_dir, sorted(pts)[-1])
+
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    diff_unet.load_state_dict(checkpoint['model_state_dict'])
+    diff_unet.eval()
+
+    diffusion_scheduler = GaussianDiffusion(unet_model=diff_unet, timesteps=1000).to(device)
+
     def flush_batch():
         """Moves the current batch to GPU, adds noise, performs inference, and saves results."""
         nonlocal split_emb_dataset_manager, n_embeddings_per_run
@@ -171,31 +190,38 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
             with torch.no_grad():
                 if use_specs:
                     if INJECT_OCTAVE:
-                        # 1. Convert octave spectrogram to Log-Mel [B, 1, T, F]
-                        # convert_octave_to_msclap_mel uses specs_gpu
-                        # mel_input = convert_octave_to_msclap_mel(specs_gpu, W_matrix)
-                        mel_input = convert_octave_to_msclap_mel(specs_gpu)
+                        # 1. GENERAZIONE ANCORA SPETTRALE CONDENSATA C (332 CANALI)
+                        # specs_gpu shape: [B, F_oct, T]
+                        octave_spec = specs_gpu.permute(0, 2, 1) # [B, T, F_oct]
+                        conditioning_C = reshape_spectrogram(octave_spec, target_dim=332)
+                        conditioning_C = conditioning_C.permute(0, 1, 3, 2) # [B, 1, 332, T]
+                        
+                        # 2. RICETTARE IL CLASSIFIER LABEL PER CFG
+                        class_idx = config['data']['classes_list'].index(class_to_process)
+                        label_tensor = torch.full((batch_tensor.shape[0],), fill_value=class_idx, device=device, dtype=torch.long)
+                        
+                        # 3. FAST GENERATIVE RESTORATION VIA DDIM (25 STEPS)
+                        # Ricostruisce lo spettrogramma Log-Mel target pristine [B, 1, 64, T]
+                        mel_reconstructed = diffusion_scheduler.sample_ddim_cfg(
+                            conditioning_C, label_tensor, ddim_steps=25, guidance_scale=3.0
+                        )
+                        
+                        # Transponiamo per allinearlo al formato di ingresso di HTS-AT [B, 1, T, 64]
+                        mel_input = mel_reconstructed.permute(0, 1, 3, 2)
                 
                         # 🎯 ENSURE DEVICE COHERENCE
-                        # We must ensure the tensor is on the same device as the model weights
-                        # 'device' is the variable passed to the worker (e.g., 'cuda:3')
                         mel_input = mel_input.to(device)
                 
-                        # 2. INTERNAL CLAP PREPROCESSING
-                        # reshape_wav2img performs interpolation and permutation
-                        # We call it from the htsat instance
+                        # 4. INTERNAL CLAP PREPROCESSING
                         x_ready = clap_model.clap.audio_encoder.base.htsat.reshape_wav2img(mel_input)
                     
                         # 🎯 DOUBLE CHECK MODEL DEVICE
-                        # Force the encoder to the correct device just before inference
-                        # to prevent the 'cuda:0' vs 'cuda:X' conflict
                         clap_model.clap.audio_encoder.to(device)
                     
-                        # 3. Direct inference through the patched audio_encoder
-                        # This returns (projected_vec, classification_output)
+                        # 5. Direct inference through the patched audio_encoder
                         projected_vec, _ = clap_model.clap.audio_encoder(x_ready)
                     
-                        # 4. Final L2 Normalization
+                        # 6. Final L2 Normalization
                         embeddings = F.normalize(projected_vec, p=2, dim=-1)
 
 

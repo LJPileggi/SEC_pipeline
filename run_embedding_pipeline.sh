@@ -23,6 +23,7 @@ SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/cl
 CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
 ROBERTA_PATH="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/roberta-base"
 DATASEC_GLOBAL="/leonardo_scratch/large/userexternal/$USER/dataSEC"
+DIFFUSION_MODELS_PATH="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.models/diff_model"
 
 # 🎯 SHARED POST-PROCESSING LOGIC
 # This helper creates the Python wrapper used for log merging
@@ -76,6 +77,7 @@ TARGET_GLOBAL="$FINAL_DEST"
 mkdir -p "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT"
 mkdir -p "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/$target_folder"
 mkdir -p "\$TEMP_DIR/work_dir/weights"
+mkdir -p "\$TEMP_DIR/work_dir/diff_model"
 mkdir -p "\$TEMP_DIR/roberta-base"
 mkdir -p "\$TEMP_DIR/numba_cache"
 
@@ -104,6 +106,7 @@ cp "$CLAP_SCRATCH_WEIGHTS" "\$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth"
 cp -r "$ROBERTA_PATH/." "\$TEMP_DIR/roberta-base/"
 [ -d "\$TARGET_GLOBAL" ] && cp -r "\$TARGET_GLOBAL/." "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/$target_folder/"
 cp "$DATASEC_GLOBAL/RAW_DATASET/raw_$AUDIO_FORMAT"/*.h5 "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT/" 2>/dev/null
+[ -d "$DIFFUSION_MODELS_PATH" ] && cp -r "$DIFFUSION_MODELS_PATH/." "\$TEMP_DIR/work_dir/diff_model/"
 
 # Create wrapper inside the heredoc
 cat << 'INNER_EOF' > "\$TEMP_DIR/work_dir/join_logs_wrapper.py"
@@ -126,6 +129,7 @@ export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
 export HF_HUB_OFFLINE=1
 export CLAP_TEXT_ENCODER_PATH="/tmp_data/roberta-base"
 export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/weights/CLAP_weights_2023.pth"
+export DIFF_MODELS="/tmp_data/work_dir/diff_model"
 export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
 export PYTHONUNBUFFERED=1
 export PYTORCH_ALLOC_CONF=expandable_segments:True

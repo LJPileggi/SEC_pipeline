@@ -26,6 +26,9 @@ CLAP_SCRATCH_WEIGHTS=$(parse_path "CLAP_WEIGHTS")
 ROBERTA_PATH=$(parse_path "ROBERTA_PATH")
 DATASEC_GLOBAL=$(parse_path "DATASEC_GLOBAL")
 
+# 🎯 PARSING NUOVA VARIABILE DIFF_MODELS
+DIFF_MODELS_PATH=$(parse_path "DIFF_MODELS")
+
 SLURM_ACCOUNT=$(grep "SLURM_ACCOUNT" "$DIRECTIVES_FILE" | cut -d'|' -f2 | xargs)
 SLURM_PARTITION=$(grep "SLURM_PARTITION" "$DIRECTIVES_FILE" | cut -d'|' -f2 | xargs)
 SLURM_TIME=$(grep "SLURM_TIME" "$DIRECTIVES_FILE" | cut -d'|' -f2 | xargs)
@@ -63,6 +66,7 @@ TARGET_GLOBAL="$FINAL_DEST"
 mkdir -p "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$fmt"
 mkdir -p "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$fmt/$target_folder"
 mkdir -p "\$TEMP_DIR/work_dir/weights"
+mkdir -p "\$TEMP_DIR/work_dir/diff_model"  # 🎯 CREAZIONE CARTELLA MODELLI DIFFUSIONE
 mkdir -p "\$TEMP_DIR/roberta-base"
 mkdir -p "\$TEMP_DIR/numba_cache"
 
@@ -90,6 +94,14 @@ trap 'finalize_and_cleanup' SIGTERM SIGINT
 echo "📦 Staging data..."
 cp "$CLAP_SCRATCH_WEIGHTS" "\$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth" || exit 1
 cp -r "$ROBERTA_PATH/." "\$TEMP_DIR/roberta-base/" || exit 1
+
+# 🎯 STAGE-IN PESI MODELLO DI DIFFUSIONE
+if [ -d "$DIFF_MODELS_PATH" ]; then
+    echo "📦 Staging diffusion model weights from $DIFF_MODELS_PATH..."
+    cp -r "$DIFF_MODELS_PATH/." "\$TEMP_DIR/work_dir/diff_model/" || exit 1
+else
+    echo "⚠️ Warning: Diffusion models path '$DIFF_MODELS_PATH' not found!"
+fi
 
 # Sync existing progress from global to local NVMe 
 if [ -d "\$TARGET_GLOBAL" ]; then
@@ -128,6 +140,7 @@ export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
 export HF_HUB_OFFLINE=1
 export CLAP_TEXT_ENCODER_PATH="/tmp_data/roberta-base"
 export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/weights/CLAP_weights_2023.pth"
+export DIFF_MODELS="/tmp_data/work_dir/diff_model"  # 🎯 ESPORTAZIONE VARIABILE DIFF_MODELS
 export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
 export PYTHONUNBUFFERED=1
 export PYTORCH_ALLOC_CONF=expandable_segments:True
@@ -162,7 +175,7 @@ sed -n '/^[^#]/p' "$DIRECTIVES_FILE" | grep "|" | while IFS='|' read -r raw_cfg 
         inj="False"
     fi
 
-    [[ "$cfg" == *"SIF_FILE"* || "$cfg" == *"CLAP_WEIGHTS"* || "$cfg" == *"ROBERTA_PATH"* || "$cfg" == *"SLURM_"* || "$cfg" == *"SCHEDULING_MODE"* || "$cfg" == *"DATASEC_GLOBAL"* ]] && continue
+    [[ "$cfg" == *"SIF_FILE"* || "$cfg" == *"CLAP_WEIGHTS"* || "$cfg" == *"ROBERTA_PATH"* || "$cfg" == *"SLURM_"* || "$cfg" == *"SCHEDULING_MODE"* || "$cfg" == *"DATASEC_GLOBAL"* || "$cfg" == *"DIFF_MODELS"* ]] && continue
     [ -z "$cfg" ] || [ -z "$fmt" ] || [ -z "$oct" ] && continue
 
     echo "➡️ Processing: $cfg | Format: $fmt | Octave: $oct | Inject Octave: $inj"
