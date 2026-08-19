@@ -133,7 +133,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     batch_audio = []; batch_meta = []
 
     # U-Net instantiation and checkpoint loading
-    diff_unet = ConditionalUNet(num_classes=len(config['data']['classes_list']), base_channels=64, emb_dim=256).to(device)
+    diff_unet = ConditionalUNet(num_classes=len(config['audio']['num_classes']), base_channels=64, emb_dim=256).to(device)
     epochs = config.get('epochs', 20)
     target_model_dir = os.environ.get("DIFF_MODELS", "/tmp_data/work_dir/diff_model")
     checkpoint_path = os.path.join(target_model_dir, f"unet_epoch_{epochs - 1}.pt")
@@ -196,32 +196,31 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
                         conditioning_C = reshape_spectrogram(octave_spec, target_dim=332)
                         conditioning_C = conditioning_C.permute(0, 1, 3, 2) # [B, 1, 332, T]
                         
-                        # 2. RICETTARE IL CLASSIFIER LABEL PER CFG
-                        class_idx = config['data']['classes_list'].index(class_to_process)
-                        label_tensor = torch.full((batch_tensor.shape[0],), fill_value=class_idx, device=device, dtype=torch.long)
+                        # 2. LABEL UNCONDITIONED (Null label per esecuzione cieca/agnostica)
+                        # Utilizziamo la classe 'num_classes' che corrisponde al token incondizionato della U-Net
+                        null_class_idx = diff_unet.num_classes
+                        label_tensor = torch.full((batch_tensor.shape[0],), fill_value=null_class_idx, device=device, dtype=torch.long)
                         
-                        # 3. FAST GENERATIVE RESTORATION VIA DDIM (25 STEPS)
-                        # Ricostruisce lo spettrogramma Log-Mel target pristine [B, 1, 64, T]
+                        # 3. RESTAURO GENERATIVO AGNOSTICO VIA DDIM (guidance_scale = 0.0)
+                        # La ricostruzione si affida ESCLUSIVAMENTE all'ancora spettrale C senza alcun bias di classe
                         mel_reconstructed = diffusion_scheduler.sample_ddim_cfg(
-                            conditioning_C, label_tensor, ddim_steps=25, guidance_scale=3.0
+                            conditioning_C, label_tensor, ddim_steps=25, guidance_scale=0.0
                         )
                         
-                        # Transponiamo per allinearlo al formato di ingresso di HTS-AT [B, 1, T, 64]
+                        # Transposizione per l'encoder HTS-AT di CLAP [B, 1, T, 64]
                         mel_input = mel_reconstructed.permute(0, 1, 3, 2)
                 
                         # 🎯 ENSURE DEVICE COHERENCE
                         mel_input = mel_input.to(device)
                 
-                        # 4. INTERNAL CLAP PREPROCESSING
+                        # 4. PREPROCESSING INTERNO CLAP E INFERENZA
                         x_ready = clap_model.clap.audio_encoder.base.htsat.reshape_wav2img(mel_input)
-                    
-                        # 🎯 DOUBLE CHECK MODEL DEVICE
                         clap_model.clap.audio_encoder.to(device)
                     
-                        # 5. Direct inference through the patched audio_encoder
+                        # 5. Estrazione degli embedding proiettati
                         projected_vec, _ = clap_model.clap.audio_encoder(x_ready)
                     
-                        # 6. Final L2 Normalization
+                        # 6. Normalizzazione L2 finale
                         embeddings = F.normalize(projected_vec, p=2, dim=-1)
 
 
@@ -766,7 +765,7 @@ def run_distributed_slurm(config_file, audio_format, n_octave):
         }, 'device': str(device), 'rank': rank
     }
     config['spectrogram'].update({'sr': sampling_rate, 'ref': ref, 'center_freqs': center_freqs})
-    config['audio'].update({'noise_perc': noise_perc, 'seed': seed})
+    config['audio'].update({'noise_perc': noise_perc, 'seed': seed, 'num_classes': len(classes_list)})
 
     # 3. SINGLE-PASS TASK DISCOVERY (I/O Optimization)
     # 🎯 FIX: We open each duration-specific log only ONCE to bypass metadata bottleneck on Lustre.
@@ -862,7 +861,7 @@ def run_local_multiprocess(config_file, audio_format, n_octave, world_size):
         }
     }
     config['spectrogram'].update({'sr': sampling_rate, 'ref': ref, 'center_freqs': center_freqs})
-    config['audio'].update({'noise_perc': noise_perc, 'seed': seed})
+    config['audio'].update({'noise_perc': noise_perc, 'seed': seed, 'num_classes': len(classes_list)})
 
     # 3. SINGLE-PASS LOG CACHING (Optimization)
     # Corrected log search path for local resumability within duration subfolders
