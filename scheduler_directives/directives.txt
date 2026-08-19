@@ -29,10 +29,3 @@ config0.yaml | mp3  | 12 | True
 config0.yaml | mp3  | 16 | True
 config0.yaml | mp3  | 24 | True
 config0.yaml | mp3  | 32 | True
-config0.yaml | flac  | 1 | True
-config0.yaml | flac  | 3 | True
-config0.yaml | flac  | 6 | True
-config0.yaml | flac  | 12 | True
-config0.yaml | flac  | 16 | True
-config0.yaml | flac  | 24 | True
-config0.yaml | flac  | 32 | True
