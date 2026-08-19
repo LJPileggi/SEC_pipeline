@@ -208,6 +208,15 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
                             print(f"💥 [RANK {rank}] ERRORE EMBEDDING INDEX! null_class_idx={null_class_idx} supera num_embeddings={diff_unet.class_embedding.num_embeddings}", flush=True)
 
                         # 3. DDIM SAMPLING
+                        # Check dell'indice della classe nulla
+                        print(f"DEBUG EMBEDDING: diff_unet.num_classes={diff_unet.num_classes}, "
+                              f"Embedding Weight Shape={diff_unet.class_embedding.weight.shape}, "
+                              f"null_class_idx={null_class_idx}", flush=True)
+
+                        # Check del condizionamento C
+                        print(f"DEBUG C: conditioning_C min={conditioning_C.min()}, max={conditioning_C.max()}, "
+                              f"has_nan={torch.isnan(conditioning_C).any()}", flush=True)
+
                         mel_reconstructed = diffusion_scheduler.sample_ddim_cfg(
                             conditioning_C, label_tensor, ddim_steps=25, guidance_scale=0.0
                         )
