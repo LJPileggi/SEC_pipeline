@@ -151,7 +151,7 @@ def main():
     classes_list, _, epochs, _, sampling_rate, _, _, seed, _, _, _ = get_config_from_yaml("config0.yaml")
     
     samples_per_class = 50
-    guidance_scale = 3.0
+    guidance_scale = 0.0
     ddim_steps = 25
     eval_batch_size = 16
     target_fractions = [1, 3, 6, 12, 16, 24, 32]
@@ -218,8 +218,12 @@ def main():
                 # Sanificazione contro NaN
                 x_0_clean = torch.nan_to_num(x_0, nan=0.0, posinf=0.0, neginf=0.0)
                 
+                # Creiamo il tensore con il token incondizionato (null label = len(classes_list))
+                null_labels = torch.full_like(class_labels, fill_value=unet.num_classes, device=device)
+
+                # Eseguiamo il sampling DDIM agnostico senza alcuna prior di classe
                 x_reconstructed = diffusion_scheduler.sample_ddim_cfg(
-                    conditioning_C, class_labels, ddim_steps=ddim_steps, guidance_scale=guidance_scale
+                    conditioning_C, null_labels, ddim_steps=ddim_steps, guidance_scale=0.0
                 )
                 x_rec_clean = torch.nan_to_num(x_reconstructed, nan=0.0, posinf=0.0, neginf=0.0)
                 
