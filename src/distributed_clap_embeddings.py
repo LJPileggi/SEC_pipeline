@@ -133,7 +133,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     batch_audio = []; batch_meta = []
 
     # U-Net instantiation and checkpoint loading
-    diff_unet = ConditionalUNet(num_classes=len(config['audio']['num_classes']), base_channels=64, emb_dim=256).to(device)
+    diff_unet = ConditionalUNet(num_classes=config['audio']['num_classes'], base_channels=64, emb_dim=256).to(device)
     epochs = config.get('epochs', 20)
     target_model_dir = os.environ.get("DIFF_MODELS", "/tmp_data/work_dir/diff_model")
     checkpoint_path = os.path.join(target_model_dir, f"unet_epoch_{epochs - 1}.pt")
