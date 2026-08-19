@@ -194,67 +194,28 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
                         octave_spec = specs_gpu.permute(0, 2, 1) # [B, T, F_oct]
                         conditioning_C = reshape_spectrogram(octave_spec, target_dim=332)
                         conditioning_C = conditioning_C.permute(0, 1, 3, 2) # [B, 1, 332, T]
-                        
-                        # 🎯 CHECK 1: Verifichiamo se l'ancora C ha NaN/Inf
-                        if torch.isnan(conditioning_C).any() or torch.isinf(conditioning_C).any():
-                            print(f"💥 [RANK {rank}] NaN/Inf rilevato nell'ancora conditioning_C! min: {conditioning_C.min()}, max: {conditioning_C.max()}", flush=True)
 
                         # 2. LABEL UNCONDITIONED
                         null_class_idx = diff_unet.num_classes
                         label_tensor = torch.full((batch_tensor.shape[0],), fill_value=null_class_idx, device=device, dtype=torch.long)
-                        
-                        # 🎯 CHECK 2: Verifichiamo se l'indice della classe nulla e fuori dai limiti dell'embedding
-                        if null_class_idx >= diff_unet.class_embedding.num_embeddings:
-                            print(f"💥 [RANK {rank}] ERRORE EMBEDDING INDEX! null_class_idx={null_class_idx} supera num_embeddings={diff_unet.class_embedding.num_embeddings}", flush=True)
 
                         # 3. DDIM SAMPLING
-                        # Check dell'indice della classe nulla
-                        print(f"DEBUG EMBEDDING: diff_unet.num_classes={diff_unet.num_classes}, "
-                              f"Embedding Weight Shape={diff_unet.class_embedding.weight.shape}, "
-                              f"null_class_idx={null_class_idx}", flush=True)
-
-                        # Check del condizionamento C
-                        print(f"DEBUG C: conditioning_C min={conditioning_C.min()}, max={conditioning_C.max()}, "
-                              f"has_nan={torch.isnan(conditioning_C).any()}", flush=True)
-
                         mel_reconstructed = diffusion_scheduler.sample_ddim_cfg(
                             conditioning_C, label_tensor, ddim_steps=25, guidance_scale=0.0
                         )
-                        
-                        # 🎯 CHECK 3: Verifichiamo lo spettrogramma ricostruito dalla U-Net/DDIM
-                        if torch.isnan(mel_reconstructed).any() or torch.isinf(mel_reconstructed).any():
-                            print(f"💥 [RANK {rank}] NaN/Inf rilevato DOPO il campionamento DDIM! min: {mel_reconstructed.min()}, max: {mel_reconstructed.max()}", flush=True)
 
                         mel_input = mel_reconstructed.permute(0, 1, 3, 2).to(device)
 
                         # 4. PREPROCESSING CLAP
                         x_ready = clap_model.clap.audio_encoder.base.htsat.reshape_wav2img(mel_input)
-                        
-                        # 🎯 CHECK 4: Verifichiamo l'ingresso trasformato da reshape_wav2img
-                        if torch.isnan(x_ready).any() or torch.isinf(x_ready).any():
-                            print(f"💥 [RANK {rank}] NaN/Inf rilevato DOPO reshape_wav2img!", flush=True)
 
                         clap_model.clap.audio_encoder.to(device)
 
                         # 5. INFERENZA CLAP
                         projected_vec, _ = clap_model.clap.audio_encoder(x_ready)
-                        
-                        # 🎯 CHECK 5: Verifichiamo il vettore proiettato prima della normalizzazione
-                        if torch.isnan(projected_vec).any() or torch.isinf(projected_vec).any():
-                            print(f"💥 [RANK {rank}] NaN/Inf rilevato in projected_vec (PRIMA di F.normalize)! min: {projected_vec.min()}, max: {projected_vec.max()}", flush=True)
-
-                        # 🎯 CHECK 6: Verifichiamo la norma del vettore proiettato
-                        norm_vec = torch.norm(projected_vec, p=2, dim=-1)
-                        if (norm_vec == 0).any():
-                            print(f"💥 [RANK {rank}] Rilevato vettore proiettato con NORMA ZERO! (Causerebbe div per 0 in F.normalize)", flush=True)
 
                         # 6. NORMALIZZAZIONE L2
                         embeddings = F.normalize(projected_vec, p=2, dim=-1)
-                        
-                        # 🎯 CHECK 7: Verifichiamo l'embedding finale
-                        if torch.isnan(embeddings).any():
-                            print(f"💥 [RANK {rank}] NaN rilevato DOPO F.normalize!", flush=True)
-
 
                     else:
                         # add infinitesimal noise to prevent inner divisions by zero
