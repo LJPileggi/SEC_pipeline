@@ -5,7 +5,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=01:00:00
-#SBATCH --partition=boost_usr_prod
+#SBATCH -p boost_usr_prod
+#SBATCH -A IscrC_BrISkite_0
 
 # --- 1. CONFIGURATION ---
 MY_USER=$(whoami)
