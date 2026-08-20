@@ -116,17 +116,10 @@ def compute_agnostic_wasserstein(p_mat, q_mat, epsilon=0.01, max_iter=100):
     return torch.sum(transport_plan * C).item()
 
 def compute_exact_native_interclass_separability(class_native_specs_dict):
-    """
-    Riproduce fedelmente la logica di compute_interclass_distances.py ed aggregate_domain_results.py:
-    1. Calcola il centroide nativo X_0 per ogni classe.
-    2. Costruisce la matrice di distanza di Frobenius interclasse.
-    3. Estrae il minimo valore tra classi NATIVE distinte (Soglia di Separabilità)[cite: 12].
-    """
     classes = list(class_native_specs_dict.keys())
     if len(classes) < 2:
         return 0.0
         
-    # Calcolo dei centroidi nativi per classe [64, T]
     centroids = {c: np.mean(specs, axis=0) for c, specs in class_native_specs_dict.items()}
     
     frob_distances = []
@@ -135,7 +128,6 @@ def compute_exact_native_interclass_separability(class_native_specs_dict):
             c_i = torch.from_numpy(centroids[classes[i]]).float()
             c_j = torch.from_numpy(centroids[classes[j]]).float()
             
-            # Distanza di Frobenius tra i due centroidi nativi
             frob_val = torch.norm(c_i - c_j, p='fro').item()
             if frob_val > 1e-5:
                 frob_distances.append(frob_val)
@@ -150,8 +142,11 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     classes_list, _, epochs, _, sampling_rate, _, _, seed, _, _, _ = get_config_from_yaml("config0.yaml")
     
+    # ==========================================================
+    # 🎯 PARAMETRI VALIDAZIONE HARDCODED
+    # ==========================================================
+    guidance_scale = 0.0        # 0.0 = Ricostruzione Incondizionata / Agnostica
     samples_per_class = 50
-    guidance_scale = 0.0
     ddim_steps = 25
     eval_batch_size = 16
     target_fractions = [1, 3, 6, 12, 16, 24, 32]
@@ -206,7 +201,7 @@ def main():
         
         native_specs_list = []
         reconstructed_specs_list = []
-        class_native_specs_dict = {} # Per calcolare Dist_inter con il metodo nativo originale
+        class_native_specs_dict = {}
         
         with torch.no_grad():
             for step, (raw_audio, class_labels) in enumerate(test_dataloader):
@@ -215,15 +210,13 @@ def main():
                 
                 x_0, conditioning_C = spectral_pipeline(raw_audio, format_id=1, fraction_id=fraction, device=device)
                 
-                # Sanificazione contro NaN
                 x_0_clean = torch.nan_to_num(x_0, nan=0.0, posinf=0.0, neginf=0.0)
                 
-                # Creiamo il tensore con il token incondizionato (null label = len(classes_list))
+                # Token incondizionato (null label = unet.num_classes)
                 null_labels = torch.full_like(class_labels, fill_value=unet.num_classes, device=device)
 
-                # Eseguiamo il sampling DDIM agnostico senza alcuna prior di classe
                 x_reconstructed = diffusion_scheduler.sample_ddim_cfg(
-                    conditioning_C, null_labels, ddim_steps=ddim_steps, guidance_scale=0.0
+                    conditioning_C, null_labels, ddim_steps=ddim_steps, guidance_scale=guidance_scale
                 )
                 x_rec_clean = torch.nan_to_num(x_reconstructed, nan=0.0, posinf=0.0, neginf=0.0)
                 
@@ -255,21 +248,17 @@ def main():
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
 
-        # --- METRICHE GLOBALI E VERIFICA BEN-DAVID ---
         if native_specs_list and reconstructed_specs_list:
-            global_native_centroid = np.mean(native_specs_list, axis=0)        # [64, T]
-            global_reconstructed_centroid = np.mean(reconstructed_specs_list, axis=0) # [64, T]
+            global_native_centroid = np.mean(native_specs_list, axis=0)
+            global_reconstructed_centroid = np.mean(reconstructed_specs_list, axis=0)
 
-            # MMD e Wasserstein 2D (con sanificazione integrata)
             fraction_mmd = compute_agnostic_mmd(global_native_centroid.T, global_reconstructed_centroid.T)
             fraction_wasserstein_2d = compute_agnostic_wasserstein(global_native_centroid, global_reconstructed_centroid)
 
-            # Baseline H0
             time_steps = global_native_centroid.shape[1]
             half_time = time_steps // 2
             h0_baseline = compute_agnostic_wasserstein(global_native_centroid[:, :half_time], global_native_centroid[:, half_time:(half_time * 2)])
 
-            # Dist_inter nativa originale calcolata esattamente come prima
             threshold_separability = compute_exact_native_interclass_separability(class_native_specs_dict)
 
             print(f"\n🌐 METRICHE GLOBALI NON-LINEARI (FRAZIONE 1/{fraction}):")
@@ -286,7 +275,6 @@ def main():
                 'Interclass_Separability_Threshold': threshold_separability
             })
 
-    # --- ESPOZIONE REPORT FINALI ---
     if master_records:
         df_master = pd.DataFrame(master_records)
         master_csv = os.path.join(output_dir, "consolidated_diffusion_tracks.csv")

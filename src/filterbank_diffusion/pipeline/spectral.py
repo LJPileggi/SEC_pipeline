@@ -59,6 +59,20 @@ if INJECT_OCTAVE:
 
 from src.models import spectrogram_n_octaveband_generator_gpu, reshape_spectrogram, CLAP_initializer
 
+class SpectralConvergenceLoss(nn.Module):
+    """
+    Spectral Convergence Loss: misura l'errore relativo della norma di Frobenius
+    tra lo spettrogramma Log-Mel target pristine (x0) e quello stimato dal modello.
+    Evita l'appiattimento spettrale tipico della sola MSE.
+    """
+    def __init__(self):
+        super().__init__()
+        
+    def forward(self, x_pred, x_target):
+        diff_norm = torch.norm(x_target - x_pred, p='fro')
+        target_norm = torch.norm(x_target, p='fro') + 1e-8
+        return diff_norm / target_norm
+
 class OnlineSpectrogramPipeline(nn.Module):
     def __init__(self, weights_path, sample_rate=52100, device='cuda'):
         super().__init__()

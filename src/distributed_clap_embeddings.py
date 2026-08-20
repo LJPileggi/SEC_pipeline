@@ -132,15 +132,20 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
 
     batch_audio = []; batch_meta = []
 
+    # 🎯 CONFIGURAZIONE EPOCHE CHECKPOINT (HARDCODED)
+    TARGET_EPOCH = 250  # Numero dell'epoca del checkpoint da caricare per l'inferenza
+    
     # U-Net instantiation and checkpoint loading
     diff_unet = ConditionalUNet(num_classes=config['audio']['num_classes'], base_channels=64, emb_dim=256).to(device)
-    epochs = config.get('epochs', 20)
+    
     target_model_dir = os.environ.get("DIFF_MODELS", "/tmp_data/work_dir/diff_model")
-    checkpoint_path = os.path.join(target_model_dir, f"unet_epoch_{epochs - 1}.pt")
+    checkpoint_path = os.path.join(target_model_dir, f"unet_epoch_{TARGET_EPOCH - 1}.pt")
 
+    # Fallback di sicurezza: se il file esatto unet_epoch_249.pt non c'è, prende l'ultimo .pt disponibile
     if not os.path.exists(checkpoint_path):
-        pts = [f for f in os.listdir(target_model_dir) if f.endswith(".pt")]
-        if pts: checkpoint_path = os.path.join(target_model_dir, sorted(pts)[-1])
+        pts = [f for f in os.listdir(target_model_dir) if f.endswith(".pt")] if os.path.exists(target_model_dir) else []
+        if pts: 
+            checkpoint_path = os.path.join(target_model_dir, sorted(pts)[-1])
 
     checkpoint = torch.load(checkpoint_path, map_location=device)
     diff_unet.load_state_dict(checkpoint['model_state_dict'])
@@ -195,13 +200,19 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
                         conditioning_C = reshape_spectrogram(octave_spec, target_dim=332)
                         conditioning_C = conditioning_C.permute(0, 1, 3, 2) # [B, 1, 332, T]
 
-                        # 2. LABEL UNCONDITIONED
-                        null_class_idx = diff_unet.num_classes
-                        label_tensor = torch.full((batch_tensor.shape[0],), fill_value=null_class_idx, device=device, dtype=torch.long)
+                        # 🎯 PARAMETRO MODULARE CFG / GUIDANCE (Hardcoded)
+                        USE_CFG = False
+                        guidance_scale = 3.0 if USE_CFG else 0.0
+
+                        if USE_CFG:
+                            label_tensor = torch.full((batch_tensor.shape[0],), fill_value=class_idx_attr, device=device, dtype=torch.long)
+                        else:
+                            null_class_idx = diff_unet.num_classes
+                            label_tensor = torch.full((batch_tensor.shape[0],), fill_value=null_class_idx, device=device, dtype=torch.long)
 
                         # 3. DDIM SAMPLING
                         mel_reconstructed = diffusion_scheduler.sample_ddim_cfg(
-                            conditioning_C, label_tensor, ddim_steps=25, guidance_scale=0.0
+                            conditioning_C, label_tensor, ddim_steps=25, guidance_scale=guidance_scale
                         )
 
                         mel_input = mel_reconstructed.permute(0, 1, 3, 2).to(device)

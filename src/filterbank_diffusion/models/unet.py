@@ -105,44 +105,46 @@ class ConditionalUNet(nn.Module):
         # 🎯 Output layer a 1 canale
         self.outc = nn.Conv2d(base_channels, 1, kernel_size=1)
 
-    def forward(self, x_t, t, conditioning_C, class_labels):
+    def forward(self, x_t, t, conditioning_C, class_labels=None):
         """
         x_t: [B, 1, 64, 700] (Target CLAP Log-Mel)
         conditioning_C: [B, 1, 332, 700] (Ancora spettrale 32esime d'ottava)
+        class_labels: [B] (Indici delle classi; se None usa num_classes)
         """
-        # 🎯 CONCATENAZIONE SULL'ASSE DELLE FREQUENZE (dim=2)
-        # Produce un unico tensore ad un canale: [B, 1, 396, 700]
         x_in = torch.cat([x_t, conditioning_C], dim=2)
 
-        t_emb = self.time_embedding(t)                 
+        t_emb = self.time_embedding(t)
+        
+        # 🎯 FALLBACK AUTOMATICO ALLA NULL LABEL SE class_labels NON E PASSATO
+        if class_labels is None:
+            batch_size = x_t.shape[0]
+            class_labels = torch.full((batch_size,), fill_value=self.num_classes, dtype=torch.long, device=x_t.device)
+            
         c_emb = self.class_embedding(class_labels)       
         fused_emb = self.comb_emb_projector(torch.cat([t_emb, c_emb], dim=-1)) 
 
         # Downward path
-        h0 = self.inc(x_in, fused_emb)                 # [B, base, 396, 700]
-        
-        h1_down = self.down_conv1(h0)                  # [B, base, 198, 350]
-        h1 = self.down1_block(h1_down, fused_emb)      # [B, base*2, 198, 350]
-        
-        h2_down = self.down_conv2(h1)                  # [B, base*2, 99, 175]
-        h2 = self.down2_block(h2_down, fused_emb)      # [B, base*4, 99, 175]
+        h0 = self.inc(x_in, fused_emb)
+        h1_down = self.down_conv1(h0)
+        h1 = self.down1_block(h1_down, fused_emb)
+        h2_down = self.down_conv2(h1)
+        h2 = self.down2_block(h2_down, fused_emb)
 
         # Bottleneck
         h_mid = self.mid(h2, fused_emb)
 
         # Upward path
-        u1 = self.up1(h_mid)                           # [B, base*2, 198, 350]
+        u1 = self.up1(h_mid)
         if u1.shape[-1] != h1.shape[-1] or u1.shape[-2] != h1.shape[-2]:
             u1 = F.interpolate(u1, size=(h1.shape[-2], h1.shape[-1]), mode='bilinear', align_corners=False)
         h_up1 = self.up_block1(torch.cat([u1, h1], dim=1), fused_emb)
 
-        u2 = self.up2(h_up1)                           # [B, base, 396, 700]
+        u2 = self.up2(h_up1)
         if u2.shape[-1] != h0.shape[-1] or u2.shape[-2] != h0.shape[-2]:
             u2 = F.interpolate(u2, size=(h0.shape[-2], h0.shape[-1]), mode='bilinear', align_corners=False)
         h_up2 = self.up_block2(torch.cat([u2, h0], dim=1), fused_emb)
 
-        # 🎯 ISOLAMENTO TARGET: Estraiamo i primi 64 canali (corrispondenti a x_t) 
-        # prima della convoluzione finale 1x1
-        h_target = h_up2[:, :, :x_t.shape[2], :]       # [B, base, 64, 700]
+        # Isolamento canali target (primi 64)
+        h_target = h_up2[:, :, :x_t.shape[2], :]
 
-        return self.outc(h_target)                    # Output finale: [B, 1, 64, 700]
+        return self.outc(h_target)

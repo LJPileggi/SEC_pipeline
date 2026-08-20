@@ -38,16 +38,18 @@ class GaussianDiffusion(nn.Module):
         return torch.nan_to_num(x_t, nan=0.0, posinf=20.0, neginf=-20.0)
 
     @torch.no_grad()
-    def p_sample_cfg(self, x_t, t, conditioning_C, class_labels, guidance_scale=0.0):
+    def p_sample_cfg(self, x_t, t, conditioning_C, class_labels=None, guidance_scale=0.0):
         batch_size = x_t.shape[0]
         null_labels = torch.full((batch_size,), fill_value=self.model.num_classes, dtype=torch.long, device=x_t.device)
 
-        if guidance_scale > 0.0:
+        # 🎯 MODULARITA: Se guidance_scale <= 0.0 o class_labels non e fornito, esegue 1 passata incondizionata
+        if guidance_scale > 0.0 and class_labels is not None:
             eps_conditional = self.model(x_t, t, conditioning_C, class_labels)
             eps_unconditional = self.model(x_t, t, conditioning_C, null_labels)
             eps_hat = eps_unconditional + guidance_scale * (eps_conditional - eps_unconditional)
         else:
-            eps_hat = self.model(x_t, t, conditioning_C, null_labels)
+            target_labels = class_labels if class_labels is not None else null_labels
+            eps_hat = self.model(x_t, t, conditioning_C, target_labels)
 
         eps_hat = torch.nan_to_num(eps_hat, nan=0.0, posinf=10.0, neginf=-10.0)
 
@@ -66,7 +68,7 @@ class GaussianDiffusion(nn.Module):
         return torch.nan_to_num(x_next, nan=0.0, posinf=20.0, neginf=-20.0)
 
     @torch.no_grad()
-    def sample_loop_cfg(self, conditioning_C, class_labels, guidance_scale=0.0):
+    def sample_loop_cfg(self, conditioning_C, class_labels=None, guidance_scale=0.0):
         """Standard 1000-step DDPM loop with numerical safety bounds"""
         self.model.eval()
         device = conditioning_C.device
@@ -81,19 +83,18 @@ class GaussianDiffusion(nn.Module):
         return x
 
     @torch.no_grad()
-    def sample_ddim_cfg(self, conditioning_C, class_labels, ddim_steps=25, guidance_scale=0.0, eta=0.0):
+    def sample_ddim_cfg(self, conditioning_C, class_labels=None, ddim_steps=25, guidance_scale=0.0, eta=0.0):
         """
         Fast DDIM Sampling Protocol (sub-sampling 1000 -> ddim_steps)
-        Accelerates reconstruction by ~40x with deterministic trajectory and division-by-zero protection.
+        Supports both Conditional (CFG) and Fully Unconditional restoration.
         """
         self.model.eval()
         device = conditioning_C.device
         batch_size, _, _, time_steps = conditioning_C.shape
         shape = (batch_size, 1, 64, time_steps)
         
-        # Select sub-sampled timesteps linearly across the 1000 schedule
         times = torch.linspace(0, self.timesteps - 1, ddim_steps + 1, device=device).long()
-        time_pairs = list(zip(times[:-1], times[1:]))[::-1] # [(t_curr, t_prev), ...]
+        time_pairs = list(zip(times[:-1], times[1:]))[::-1]
         
         x = torch.randn(shape, device=device)
         null_labels = torch.full((batch_size,), fill_value=self.model.num_classes, dtype=torch.long, device=device)
@@ -101,28 +102,26 @@ class GaussianDiffusion(nn.Module):
         for t_curr, t_prev in time_pairs:
             t_tensor = torch.full((batch_size,), fill_value=t_curr.item(), dtype=torch.long, device=device)
             
-            # Predict noise with CFG or Unconditional
-            if guidance_scale > 0.0:
+            # 🎯 MODULARITA GUIDANCE
+            if guidance_scale > 0.0 and class_labels is not None:
                 eps_conditional = self.model(x, t_tensor, conditioning_C, class_labels)
                 eps_unconditional = self.model(x, t_tensor, conditioning_C, null_labels)
                 eps_hat = eps_unconditional + guidance_scale * (eps_conditional - eps_unconditional)
             else:
-                eps_hat = self.model(x, t_tensor, conditioning_C, null_labels)
+                target_labels = class_labels if class_labels is not None else null_labels
+                eps_hat = self.model(x, t_tensor, conditioning_C, target_labels)
             
             eps_hat = torch.nan_to_num(eps_hat, nan=0.0, posinf=10.0, neginf=-10.0)
             
             alpha_bar_curr = self.alphas_bar[t_curr]
             alpha_bar_prev = self.alphas_bar[t_prev] if t_prev >= 0 else torch.tensor(1.0, device=device)
             
-            # Safeguarded square roots for pristine x_0 prediction
             sqrt_alpha_curr = torch.sqrt(torch.clamp(alpha_bar_curr, min=1e-8))
             sqrt_one_minus_alpha = torch.sqrt(torch.clamp(1.0 - alpha_bar_curr, min=0.0))
             
-            # Predict pristine x_0
             pred_x0 = (x - sqrt_one_minus_alpha * eps_hat) / sqrt_alpha_curr
             pred_x0 = torch.clamp(pred_x0, min=-20.0, max=20.0)
             
-            # Compute DDIM direction
             denom = torch.clamp(1.0 - alpha_bar_curr, min=1e-8)
             sigma = eta * torch.sqrt(
                 torch.clamp((1.0 - alpha_bar_prev) / denom * (1.0 - alpha_bar_curr / torch.clamp(alpha_bar_prev, min=1e-8)), min=0.0)
@@ -132,7 +131,6 @@ class GaussianDiffusion(nn.Module):
             noise = torch.randn_like(x) if sigma > 0 else 0.0
             x = torch.sqrt(torch.clamp(alpha_bar_prev, min=0.0)) * pred_x0 + dir_xt + sigma * noise
             
-            # Final inter-step clean up
             x = torch.nan_to_num(x, nan=0.0, posinf=20.0, neginf=-20.0)
 
         return x
