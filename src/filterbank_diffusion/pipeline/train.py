@@ -24,7 +24,7 @@ from filterbank_diffusion.pipeline.spectral import OnlineSpectrogramPipeline, Sp
 # ==========================================================
 USE_CFG = False             # False = 100% Agnostico/Incondizionato | True = CFG con dropout (15%)
 LOSS_TYPE = "hybrid"        # "hybrid" = MSE + Spectral Convergence | "mse" = MSE Pura
-TRAIN_EPOCHS = 250          # Numero totale di epoche di addestramento
+TRAIN_EPOCHS = 235          # Numero totale di epoche di addestramento
 LOCAL_BATCH_SIZE = 12       # Batch size locale per GPU
 
 def main():
