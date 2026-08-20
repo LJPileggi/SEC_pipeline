@@ -133,7 +133,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     batch_audio = []; batch_meta = []
 
     # 🎯 CONFIGURAZIONE EPOCHE CHECKPOINT (HARDCODED)
-    TARGET_EPOCH = 235  # Numero dell'epoca del checkpoint da caricare per l'inferenza
+    TARGET_EPOCH = 225  # Numero dell'epoca del checkpoint da caricare per l'inferenza
     
     # U-Net instantiation and checkpoint loading
     diff_unet = ConditionalUNet(num_classes=config['audio']['num_classes'], base_channels=64, emb_dim=256).to(device)
