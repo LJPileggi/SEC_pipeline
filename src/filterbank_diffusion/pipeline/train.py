@@ -147,12 +147,13 @@ def main():
             os.makedirs(target_model_dir, exist_ok=True)
             
             checkpoint_path = os.path.join(target_model_dir, f"unet_epoch_{epoch}.pt")
-            
+
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': unet.module.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'loss': avg_loss,
+                'epoch_time_secs': total_epoch_time,
             }, checkpoint_path)
             
             print(f"💾 Checkpoint saved cleanly to: {checkpoint_path}")
