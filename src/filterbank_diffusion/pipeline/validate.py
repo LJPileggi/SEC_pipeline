@@ -21,6 +21,8 @@ from src.filterbank_diffusion.models.diffusion import GaussianDiffusion
 from src.filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
 from src.filterbank_diffusion.pipeline.spectral import OnlineSpectrogramPipeline
 
+TRAIN_EPOCHS = 225
+
 # --- METRICHE PUNTO A PUNTO E DISTRIBUZIONALI LOCALI ---
 def calculate_distribution_metrics(p_tensor, q_tensor):
     p_clean = torch.nan_to_num(p_tensor, nan=0.0, posinf=0.0, neginf=0.0)
@@ -140,7 +142,7 @@ def compute_exact_native_interclass_separability(class_native_specs_dict):
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    classes_list, _, epochs, _, sampling_rate, _, _, seed, _, _, _ = get_config_from_yaml("config0.yaml")
+    classes_list, _, _, _, sampling_rate, _, _, seed, _, _, _ = get_config_from_yaml("config0.yaml")
     
     # ==========================================================
     # 🎯 PARAMETRI VALIDAZIONE HARDCODED
@@ -157,7 +159,7 @@ def main():
     unet = ConditionalUNet(num_classes=len(classes_list), base_channels=64, emb_dim=256).to(device)
     
     target_model_dir = os.environ.get("MODELS_GLOBAL", os.path.join(src_root, ".models", "diff_model"))
-    checkpoint_path = os.path.join(target_model_dir, f"unet_epoch_{epochs - 1}.pt")
+    checkpoint_path = os.path.join(target_model_dir, f"unet_epoch_{TRAIN_EPOCHS - 1}.pt")
     
     if not os.path.exists(checkpoint_path):
         pts = [f for f in os.listdir(target_model_dir) if f.endswith(".pt")]
