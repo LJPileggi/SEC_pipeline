@@ -14,7 +14,7 @@ if src_root not in sys.path:
     sys.path.insert(0, src_root)
 
 from utils import setup_environ_vars, setup_distributed_environment, cleanup_distributed_environment, get_config_from_yaml
-from filterbank_diffusion.models.unet import ResidualUNet3Level
+from filterbank_diffusion.models.unet import SpectrogramUNet
 from filterbank_diffusion.models.diffusion import GaussianDiffusionResidual
 from filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
 from filterbank_diffusion.pipeline.spectral import OnlineSpectrogramPipeline, SpectralConvergenceLoss
@@ -49,7 +49,7 @@ def main():
     dataloader = DataLoader(dataset, batch_size=LOCAL_BATCH_SIZE, sampler=sampler, num_workers=8, pin_memory=True, drop_last=True)
 
     # 3-level Residual U-Net with Bottleneck Self-Attention (No class embeddings)
-    unet = ResidualUNet3Level(base_channels=64, emb_dim=256).to(device)
+    unet = SpectrogramUNet(base_channels=64, emb_dim=256).to(device)
     diffusion_scheduler = GaussianDiffusionResidual(unet_model=unet, timesteps=1000).to(device)
     spectral_loss_fn = SpectralConvergenceLoss().to(device)
     

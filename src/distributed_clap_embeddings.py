@@ -20,7 +20,7 @@ from .models import CLAP_initializer, spectrogram_n_octaveband_generator, \
     reshape_spectrogram
 from .utils import *
 from .dirs_config import *
-from .filterbank_diffusion.models.unet import ResidualUNet3Level
+from .filterbank_diffusion.models.unet import SpectrogramUNet
 from .filterbank_diffusion.models.diffusion import GaussianDiffusionResidual
 
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -93,7 +93,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     TARGET_EPOCH = 225
     
     # Residual U-Net instantiation and checkpoint loading (Agnostic / No class embeddings)
-    diff_unet = ResidualUNet3Level(base_channels=64, emb_dim=256).to(device)
+    diff_unet = SpectrogramUNet(base_channels=64, emb_dim=256).to(device)
     
     target_model_dir = os.environ.get("DIFF_MODELS", os.path.join(src_root, ".models", "diff_model_residual"))
     checkpoint_path = os.path.join(target_model_dir, f"unet_epoch_{TARGET_EPOCH - 1}.pt")

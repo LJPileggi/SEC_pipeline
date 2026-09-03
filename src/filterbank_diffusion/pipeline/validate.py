@@ -14,7 +14,7 @@ if src_root not in sys.path:
     sys.path.insert(0, src_root)
 
 from src.utils import get_config_from_yaml
-from src.filterbank_diffusion.models.unet import ResidualUNet3Level
+from src.filterbank_diffusion.models.unet import SpectrogramUNet
 from src.filterbank_diffusion.models.diffusion import GaussianDiffusionResidual
 from src.filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
 from src.filterbank_diffusion.pipeline.spectral import OnlineSpectrogramPipeline
@@ -127,7 +127,7 @@ def main():
     weights_path = os.environ.get("LOCAL_CLAP_WEIGHTS_PATH", ".clap_weights/CLAP_weights_2023.pth")
     spectral_pipeline = OnlineSpectrogramPipeline(weights_path=weights_path, sample_rate=sampling_rate, device=device).to(device)
     
-    unet = ResidualUNet3Level(base_channels=64, emb_dim=256).to(device)
+    unet = SpectrogramUNet(base_channels=64, emb_dim=256).to(device)
     
     target_model_dir = os.environ.get("MODELS_GLOBAL", os.path.join(src_root, ".models", "diff_model_residual"))
     checkpoint_path = os.path.join(target_model_dir, f"unet_epoch_{TRAIN_EPOCHS - 1}.pt")
