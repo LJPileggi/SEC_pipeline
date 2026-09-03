@@ -7,10 +7,9 @@ import huggingface_hub
 import transformers
 import msclap
 
-# Dynamic root injection to safely import core production modules from src/
 current_dir = os.path.dirname(os.path.abspath(__file__))
 src_root = os.path.abspath(os.path.join(current_dir, "..", "..", ".."))
-if src_root not in sys.path: 
+if src_root not in sys.path:
     sys.path.insert(0, src_root)
 
 from src.utils import VERBOSE
@@ -29,7 +28,7 @@ def universal_path_redirect(*args, **kwargs):
     if filename and text_path:
         forced_target = os.path.join(text_path, str(filename))
         if VERBOSE:
-            print(f"🎯 [Rank {rank}] FIREWALL REDIRECT: {filename} -> {forced_target}", flush=True)
+            print(f"🔥 [Rank {rank}] FIREWALL REDIRECT: {filename} -> {forced_target}", flush=True)
         return forced_target
 
     return text_path
@@ -50,20 +49,15 @@ if INJECT_OCTAVE:
         if not hasattr(HTSAT_N_Level, 'original_forward'):
             HTSAT_N_Level.original_forward = HTSAT_N_Level.forward
             HTSAT_N_Level.forward = patched_forward
-            
-        if VERBOSE:
-            print("💉 MSCLAP PATCH: HTSAT_N_Level 'forward' successfully bypassed.")
     except ImportError:
-        if VERBOSE:
-            print("⚠️ WARNING: Could not find HTSAT_N_Level in msclap.models.htsat.")
+        pass
 
 from src.models import spectrogram_n_octaveband_generator_gpu, reshape_spectrogram, CLAP_initializer
 
 class SpectralConvergenceLoss(nn.Module):
     """
-    Spectral Convergence Loss: misura l'errore relativo della norma di Frobenius
-    tra lo spettrogramma Log-Mel target pristine (x0) e quello stimato dal modello.
-    Evita l'appiattimento spettrale tipico della sola MSE.
+    Measures relative Frobenius norm error between reconstructed mel-spectrogram
+    and clean ground truth mel-spectrogram to prevent spectral blurring.
     """
     def __init__(self):
         super().__init__()
@@ -100,19 +94,18 @@ class OnlineSpectrogramPipeline(nn.Module):
             audio_signal = torch.fft.irfft(fft_data, dim=-1)
             audio_signal += torch.randn_like(audio_signal) * 1e-4
 
-        # 🎯 PULIZIA RIGIDA DIVERGENZE NUMERICHE PER EVITARE CUDA LAUNCH FAILURE
         audio_signal = torch.nan_to_num(audio_signal, nan=0.0, posinf=0.0, neginf=0.0)
         audio_signal = torch.clamp(audio_signal, min=-10.0, max=10.0)
 
-        # 2. Replicate CLAP Native Preprocessing (64 mels target x_0)
+        # 2. Extract clean target Log-Mel (x_0 pristine, 64 channels, 700 frames)
         with torch.no_grad():
             x_stft = self.htsat.spectrogram_extractor(audio_signal)
             x_native_logmel = self.htsat.logmel_extractor(x_stft)
             x_native_norm = self.htsat.bn0(x_native_logmel.transpose(1, 3)).transpose(1, 3)
         
-        x_native_norm = x_native_norm.permute(0, 1, 3, 2) 
+        x_0_pristine = x_native_norm.permute(0, 1, 3, 2) # Shape: [B, 1, 64, 700]
 
-        # 3. Generate 32-nd octave condition C (332 channels) in Float32
+        # 3. Generate octave-band spectrogram on GPU
         with torch.cuda.amp.autocast(enabled=False):
             audio_signal_fp32 = audio_signal.float() 
             octave_spec = spectrogram_n_octaveband_generator_gpu(
@@ -124,17 +117,20 @@ class OnlineSpectrogramPipeline(nn.Module):
                 device=device
             )
         
-        octave_spec = octave_spec.permute(0, 2, 1)
-        # 🎯 Reshaping a 332 canali per le 32esime d'ottava
-        conditioning_C = reshape_spectrogram(octave_spec, target_dim=332)
-        conditioning_C = conditioning_C.permute(0, 1, 3, 2) # Shape: [B, 1, 332, T_blocks]
+        octave_spec = octave_spec.permute(0, 2, 1) # Shape: [B, T_blocks, F_octave]
         
-        if conditioning_C.shape[-1] != x_native_norm.shape[-1]:
-            conditioning_C = F.interpolate(
-                conditioning_C,
-                size=(332, x_native_norm.shape[-1]),
+        # 4. Spatial resampling: interpolate frequency axis down to 64 mel bins
+        x_interp = reshape_spectrogram(octave_spec, target_dim=64) # Returns [B, 1, T_blocks, 64]
+        x_interp = x_interp.permute(0, 1, 3, 2)                    # Reorient to [B, 1, 64, T_blocks]
+        
+        # 5. Temporal resampling: expand time axis from slow blocks (~70 frames) to native grid (700 frames)
+        target_frames = x_0_pristine.shape[-1]
+        if x_interp.shape[-1] != target_frames:
+            x_interp = F.interpolate(
+                x_interp,
+                size=(64, target_frames),
                 mode='bilinear',
                 align_corners=False
             )
 
-        return x_native_norm, conditioning_C
+        return x_0_pristine, x_interp

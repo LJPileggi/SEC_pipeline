@@ -20,8 +20,8 @@ from .models import CLAP_initializer, spectrogram_n_octaveband_generator, \
     reshape_spectrogram
 from .utils import *
 from .dirs_config import *
-from .filterbank_diffusion.models.unet import ConditionalUNet
-from .filterbank_diffusion.models.diffusion import GaussianDiffusion
+from .filterbank_diffusion.models.unet import ResidualUNet3Level
+from .filterbank_diffusion.models.diffusion import GaussianDiffusionResidual
 
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
@@ -29,47 +29,21 @@ os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
-# 🎯 PRODUCTION GLOBAL VARIABLE
-# Reads from environment to toggle detailed diagnostic prints
+# Production global variables
 VERBOSE = os.environ.get("VERBOSE", "False").lower() == "true"
-# Injects the filter bank directly into the model without converting it back into audio
 INJECT_OCTAVE = os.environ.get("INJECT_OCTAVE", "False").lower() == "true"
 
 def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class_to_process, cut_secs, n_octave, config, audio_dataset_manager=None):
     """
-    Processes a specific audio class by extracting segments of a fixed length and generating 
-    CLAP embeddings and n-octave band spectrograms in a batched, GPU-accelerated manner.
-    This function is optimized for high-performance clusters (SLURM), utilizing deterministic 
-    noise generation for reproducibility and mixed-precision inference to maximize throughput. 
-    It manages dataset splits (train/es/valid/test) and uses a buffered HDF5 writing system 
-    to minimize I/O overhead.
-
-    🎯 FIXED: Implements intermediate VRAM cleanup and dynamic batching to prevent OOM 
-    on long segments (up to 30s) and high spectral resolution (up to 1/32 octave).
-
-    args:
-     - clap_model (msclap.CLAP): The initialized CLAP model wrapper;
-     - audio_embedding (torch.nn.Module): The specific sub-model for audio encoding;
-     - class_to_process (str): Name of the audio class to process;
-     - cut_secs (int/float): Duration of the audio segments in seconds;
-     - n_octave (int): Number of bands per octave for spectrogram generation; if 0, embeddings are
-       evaluated directly from audio, and spectrograms are evaluated for 3_octave;
-     - config (dict): Global configuration dictionary;
-     - audio_dataset_manager (HDF5DatasetManager, default: None): Manager for the source audio HDF5.
-
-    returns:
-     - n_embeddings_per_run (int): Total number of embeddings successfully generated;
-     - success (bool): True if the class was processed entirely, False if an exception occurred.
+    Processes a specific audio class by extracting fixed-length audio segments, generating 
+    CLAP embeddings and octave spectrograms in a batched, GPU-accelerated pipeline.
+    Uses the 3-level Residual Diffusion Model with Bottleneck Attention to restore Log-Mel 
+    spectrograms without class guidance.
     """
-    # --- INITIAL SETUP ---
-    # Retrieve directory paths and audio parameters from configuration
     root_source, root_target = config['dirs']['root_source'], config['dirs']['root_target']
-    
-    # 🎯 OUTPUT STRUCTURE: Maintained as nested for combine_hdf5_files compatibility
     target_class_dir = os.path.join(root_target, f'{cut_secs}_secs', class_to_process)
     os.makedirs(target_class_dir, exist_ok=True)
     
-    # n_octave == 0 means we want embeddings from raw audios; we set a flag and substitute n_octave with 3
     use_specs = True
     if n_octave == 0:
         use_specs = False
@@ -79,38 +53,27 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     center_freqs, noise_perc, seed = config['spectrogram']['center_freqs'], config['audio']['noise_perc'], config['audio']['seed']
     device, rank = config['device'], config.get('rank', 0)
 
-    # 📊 PERFORMANCE & MONITORING SETUP
     stats = {"load": 0, "gpu_total": 0, "save": 0, "count": 0}
     
-    # 🎯 DYNAMIC BATCH SIZE: Adjusted for both duration AND spectral granularity
-    # Memory footprint scales linearly with n_octave. We reduce the batch size to
-    # maintain a stable VRAM peak during spectrogram generation.
     base_batch = 128 if cut_secs <= 15 else 64 
-    # Scaling factor based on standard 1/3 octave baseline
     BATCH_SIZE = max(8, int(base_batch * (3 / n_octave)))
     
     if VERBOSE and rank == 0:
         print(f"[RANK {rank}] Dynamic Batch set to {BATCH_SIZE} (n_octave={n_octave}, cut={cut_secs}s)", flush=True)
     
     def write_perf_log():
-        """Writes performance statistics to a rank-specific text file to keep stdout clean."""
         if stats["count"] > 0:
             c = stats["count"]
             perf_log_path = os.path.join(root_target, f"perf_stats_rank_{rank}.txt")
             with open(perf_log_path, "a") as f:
                 f.write(f"[{time.strftime('%H:%M:%S')}] {class_to_process} {cut_secs}s | Total: {c} | Avg: {sum(v for k,v in stats.items() if k!='count')/c:.6f}s/audio\n")
 
-    # REPRODUCIBILITY SETUP
-    # Use a unique seed per class based on global seed and class name hash
     class_seed = int(seed + hash(class_to_process) % 10000000)
     offset_rng = np.random.default_rng(class_seed)
     
-    # Define dataset split boundaries based on proportions provided in config
     division_names = [d[0] for d in config['data']['divisions_xc_sizes_names']]
     target_counts_list = np.cumsum([d[1] for d in config['data']['divisions_xc_sizes_names']])
 
-    # 🎯 SOURCE MANAGER INITIALIZATION (Flat Path Logic)
-    # Following the stage-in logic: files are directly in root_source/
     own_manager = False
     if audio_dataset_manager is None:
         h5_raw_path = os.path.join(root_source, f'{class_to_process}_{audio_format}_dataset.h5')
@@ -119,29 +82,22 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
 
     split_emb_dataset_manager = None
     di = 0; results = 0; round_ = 0; n_embeddings_per_run = 0
-    
-    # Retrieve class index attribute once for the entire processing run
     class_idx_attr = audio_dataset_manager.hf.attrs.get('class_idx', 0)
     
-    # BUFFER SIZE ADAPTATION: Smaller buffer for longer segments to conserve VRAM
     adaptive_buffer_size = max(BATCH_SIZE, int(256 / cut_secs))
     torch.set_num_threads(1)
 
-    # Evaluate filterbank-to-mel conversion matrix
-    # W_matrix = get_octave_to_mel_transition_matrix(n_octave, sample_rate=sr, device=device)# .to(device)
-
     batch_audio = []; batch_meta = []
 
-    # 🎯 CONFIGURAZIONE EPOCHE CHECKPOINT (HARDCODED)
-    TARGET_EPOCH = 225  # Numero dell'epoca del checkpoint da caricare per l'inferenza
+    # Checkpoint configuration
+    TARGET_EPOCH = 225
     
-    # U-Net instantiation and checkpoint loading
-    diff_unet = ConditionalUNet(num_classes=config['audio']['num_classes'], base_channels=64, emb_dim=256).to(device)
+    # Residual U-Net instantiation and checkpoint loading (Agnostic / No class embeddings)
+    diff_unet = ResidualUNet3Level(base_channels=64, emb_dim=256).to(device)
     
-    target_model_dir = os.environ.get("DIFF_MODELS", "/tmp_data/work_dir/diff_model")
+    target_model_dir = os.environ.get("DIFF_MODELS", os.path.join(src_root, ".models", "diff_model_residual"))
     checkpoint_path = os.path.join(target_model_dir, f"unet_epoch_{TARGET_EPOCH - 1}.pt")
 
-    # Fallback di sicurezza: se il file esatto unet_epoch_249.pt non c'è, prende l'ultimo .pt disponibile
     if not os.path.exists(checkpoint_path):
         pts = [f for f in os.listdir(target_model_dir) if f.endswith(".pt")] if os.path.exists(target_model_dir) else []
         if pts: 
@@ -151,133 +107,116 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     diff_unet.load_state_dict(checkpoint['model_state_dict'])
     diff_unet.eval()
 
-    diffusion_scheduler = GaussianDiffusion(unet_model=diff_unet, timesteps=1000).to(device)
+    diffusion_scheduler = GaussianDiffusionResidual(unet_model=diff_unet, timesteps=1000).to(device)
 
     def flush_batch():
-        """Moves the current batch to GPU, adds noise, performs inference, and saves results."""
         nonlocal split_emb_dataset_manager, n_embeddings_per_run
         if not batch_audio: return
         
         t_gpu_start = time.perf_counter()
         
-        # 🎯 ANTI-OOM: Pre-inference cleanup
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        # Transfer batch to GPU as Float32 and pin memory for faster transfer
         raw_batch = torch.stack(batch_audio).pin_memory().to(device, non_blocking=True).float()
-        # NaN check and correction
         raw_batch = torch.nan_to_num(raw_batch, nan=0.0, posinf=0.0, neginf=0.0)
         
-        # 🎯 DETERMINISTIC NOISE GENERATION
-        # Seed the GPU generator based on the global position within the class
         current_batch_start_idx = results - len(batch_audio)
         g = torch.Generator(device=device).manual_seed(class_seed + current_batch_start_idx)
         
         with torch.inference_mode():
-            # Apply uniform noise scaled by the mean absolute amplitude of the batch
             means = torch.mean(torch.abs(raw_batch), dim=1, keepdim=True)
             noise = (torch.rand(raw_batch.shape, generator=g, device=device) * 2 - 1) * means
             batch_tensor = (1 - noise_perc) * raw_batch + noise_perc * noise
             
-            # Step 1: Generate Spectrograms (Memory-safe GPU generator)
-            specs_gpu = spectrogram_n_octaveband_generator_gpu(batch_tensor, sr, n_octave, 
-                                                               center_freqs=center_freqs, ref=ref, device=device)
+            # Step 1: Generate octave-band spectrograms on GPU
+            specs_gpu = spectrogram_n_octaveband_generator_gpu(
+                batch_tensor, sr, n_octave, center_freqs=center_freqs, ref=ref, device=device
+            )
             
-            # 🎯 ANTI-OOM MILESTONE: Intermediate VRAM Cleanup
-            # Explicitly delete temporary noise tensors and clear cache before CLAP inference
             del raw_batch, noise, means
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             
-            # Step 2: Perform CLAP Inference in Mixed Precision (FP16)
-            # with torch.cuda.amp.autocast():
+            # Step 2: CLAP Inference
             with torch.no_grad():
                 if use_specs:
                     if INJECT_OCTAVE:
-                        # 1. GENERAZIONE ANCORA SPETTRALE C
-                        octave_spec = specs_gpu.permute(0, 2, 1) # [B, T, F_oct]
-                        conditioning_C = reshape_spectrogram(octave_spec, target_dim=332)
-                        conditioning_C = conditioning_C.permute(0, 1, 3, 2) # [B, 1, 332, T]
+                        # 1. Spatial frequency interpolation: Octaves -> 64 Log-Mel bins
+                        octave_spec = specs_gpu.permute(0, 2, 1) # [B, T_blocks, F_octave]
+                        x_interp = reshape_spectrogram(octave_spec, target_dim=64) # [B, 1, T_blocks, 64]
+                        x_interp = x_interp.permute(0, 1, 3, 2)                    # [B, 1, 64, T_blocks]
 
-                        # 🎯 PARAMETRO MODULARE CFG / GUIDANCE (Hardcoded)
-                        USE_CFG = False
-                        guidance_scale = 3.0 if USE_CFG else 0.0
+                        # 2. Temporal alignment: match native CLAP temporal grid (700 frames for 7 seconds)
+                        target_frames = 700
+                        if x_interp.shape[-1] != target_frames:
+                            x_interp = F.interpolate(
+                                x_interp,
+                                size=(64, target_frames),
+                                mode='bilinear',
+                                align_corners=False
+                            )
 
-                        if USE_CFG:
-                            label_tensor = torch.full((batch_tensor.shape[0],), fill_value=class_idx_attr, device=device, dtype=torch.long)
-                        else:
-                            null_class_idx = diff_unet.num_classes
-                            label_tensor = torch.full((batch_tensor.shape[0],), fill_value=null_class_idx, device=device, dtype=torch.long)
+                        # 3. Deterministic Residual DDIM Sampling: X_final = X_interp + Delta X_pred
+                        mel_reconstructed = diffusion_scheduler.sample_ddim(x_interp, ddim_steps=25)
 
-                        # 3. DDIM SAMPLING
-                        mel_reconstructed = diffusion_scheduler.sample_ddim_cfg(
-                            conditioning_C, label_tensor, ddim_steps=25, guidance_scale=guidance_scale
-                        )
-
-                        mel_input = mel_reconstructed.permute(0, 1, 3, 2).to(device)
-
-                        # 4. PREPROCESSING CLAP
+                        # 4. Prepare spectrogram for CLAP Swin-Transformer (B, C, T, F)
+                        mel_input = mel_reconstructed.permute(0, 1, 3, 2).to(device) # [B, 1, 700, 64]
                         x_ready = clap_model.clap.audio_encoder.base.htsat.reshape_wav2img(mel_input)
 
                         clap_model.clap.audio_encoder.to(device)
 
-                        # 5. INFERENZA CLAP
+                        # 5. Extract projected vector and apply L2 normalization
                         projected_vec, _ = clap_model.clap.audio_encoder(x_ready)
-
-                        # 6. NORMALIZZAZIONE L2
                         embeddings = F.normalize(projected_vec, p=2, dim=-1)
 
                     else:
-                        # add infinitesimal noise to prevent inner divisions by zero
                         clap_model.clap.audio_encoder.to(device)
                         resampled_batch = spectrogram_to_audio_batch(specs_gpu, sr)
                         output = clap_model.clap.audio_encoder(resampled_batch)
                         embeddings = output[0] if isinstance(output, (tuple, list)) else output
                         if embeddings.dim() > 2: embeddings = embeddings.squeeze(1)
                 else:
-                    # add infinitesimal noise to prevent inner divisions by zero
                     batch_tensor = batch_tensor.to(torch.float32)
                     batch_tensor = batch_tensor + torch.randn_like(batch_tensor) * 1e-6
                     batch_tensor = torch.nan_to_num(batch_tensor, nan=0.0)
-                    # output = audio_embedding(batch_tensor)
                     clap_model.clap.audio_encoder.to(device)
                     output = clap_model.clap.audio_encoder(batch_tensor)
                     embeddings = output[0] if isinstance(output, (tuple, list)) else output
                     if embeddings.dim() > 2: embeddings = embeddings.squeeze(1)
 
-        # Transfer results back to CPU for HDF5 storage
         embeddings_cpu = embeddings.float().cpu().numpy()
-        if torch.isnan(batch_tensor).any(): print("💥 NaN TROVATI NELL'AUDIO INGRESSO!")
-        if torch.isnan(specs_gpu).any():    print("💥 NaN TROVATI NEGLI SPETTROGRAMMI!")
+        if torch.isnan(batch_tensor).any(): print("💥 NaN FOUND IN INPUT AUDIO!")
+        if torch.isnan(specs_gpu).any():    print("💥 NaN FOUND IN GENERATED SPECTROGRAMS!")
         if np.isnan(embeddings_cpu).any():
-            print(f"🚨 ALERT: NaN rilevati DOPO il modello CLAP. Li sto piallando a mano.")
+            print(f"🚨 ALERT: NaNs detected AFTER CLAP forward pass. Suppressing NaNs.")
             embeddings_cpu = np.nan_to_num(embeddings_cpu, nan=0.0)
+            
         specs_cpu = specs_gpu.float().cpu().numpy()
         stats["gpu_total"] += (time.perf_counter() - t_gpu_start)
 
-        # 🎯 ANTI-OOM: Immediate deletion of GPU tensors
         del batch_tensor, specs_gpu, embeddings
         
         t_save_start = time.perf_counter()
         for i in range(len(embeddings_cpu)):
-            # Initialize or update the split-specific HDF5 manager
             if split_emb_dataset_manager is None:
                 h5_path = os.path.join(target_class_dir, f'{class_to_process}_{division_names[di]}_{audio_format}_emb.h5')
                 split_emb_dataset_manager = HDF5EmbeddingDatasetsManager(h5_path, 'a', buffer_size=adaptive_buffer_size)
-                split_emb_dataset_manager.initialize_hdf5(1024, specs_cpu[i].shape, audio_format, cut_secs, n_octave, 
-                                                          sr, seed, noise_perc, division_names[di], class_to_process)
+                split_emb_dataset_manager.initialize_hdf5(
+                    1024, specs_cpu[i].shape, audio_format, cut_secs, n_octave, 
+                    sr, seed, noise_perc, division_names[di], class_to_process
+                )
 
-            # Add data to the manager's buffer with Resumability support
-            split_emb_dataset_manager.add_to_data_buffer(embeddings_cpu[i], specs_cpu[i], batch_meta[i]['pkey'], 
-                                                        batch_meta[i]['name'], class_to_process, batch_meta[i]['sub'])
+            split_emb_dataset_manager.add_to_data_buffer(
+                embeddings_cpu[i], specs_cpu[i], batch_meta[i]['pkey'], 
+                batch_meta[i]['name'], class_to_process, batch_meta[i]['sub']
+            )
         
         stats["save"] += (time.perf_counter() - t_save_start)
         cur_batch_len = len(batch_audio)
         stats["count"] += cur_batch_len
         n_embeddings_per_run += cur_batch_len
         
-        # 🎯 EXECUTION HEARTBEAT
         print(f"[RANK {rank}] {class_to_process} | {cut_secs}s: {results}/{target_counts_list[di]} ({division_names[di]})", flush=True)
 
         if stats["count"] % (BATCH_SIZE * 4) == 0: 
@@ -285,13 +224,10 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
             
         batch_audio.clear(); batch_meta.clear()
         
-        # 🎯 ANTI-OOM: Post-batch cleanup
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    # --- MAIN PROCESSING LOOP ---
     try:
-        # Generate a reproducible permutation of indices to ensure consistent data access across runs
         permuted_indices = audio_dataset_manager.get_reproducible_permutation(class_seed)
         while True:
             round_ += 1
@@ -317,7 +253,6 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
 
                     emb_pkey = f"{class_idx_attr}_{track_idx}_{b}_{round_}_{results}"
                     
-                    # 🎯 RESUMABILITY CHECK: Skip if already exists
                     if split_emb_dataset_manager and emb_pkey in split_emb_dataset_manager:
                         results += 1; continue
 

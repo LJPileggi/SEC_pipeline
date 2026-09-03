@@ -14,18 +14,17 @@ if src_root not in sys.path:
     sys.path.insert(0, src_root)
 
 from utils import setup_environ_vars, setup_distributed_environment, cleanup_distributed_environment, get_config_from_yaml
-from filterbank_diffusion.models.unet import ConditionalUNet
-from filterbank_diffusion.models.diffusion import GaussianDiffusion
+from filterbank_diffusion.models.unet import ResidualUNet3Level
+from filterbank_diffusion.models.diffusion import GaussianDiffusionResidual
 from filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
 from filterbank_diffusion.pipeline.spectral import OnlineSpectrogramPipeline, SpectralConvergenceLoss
 
 # ==========================================================
-# 🎯 PARAMETRI DI ADDESTRAMENTO HARDCODED (HARD CONFIG)
+# 🎯 RESIDUAL TRAINING CONFIGURATION (FULLY UNCONDITIONAL)
 # ==========================================================
-USE_CFG = False             # False = 100% Agnostico/Incondizionato | True = CFG con dropout (15%)
-LOSS_TYPE = "hybrid"        # "hybrid" = MSE + Spectral Convergence | "mse" = MSE Pura
-TRAIN_EPOCHS = 225          # Numero totale di epoche di addestramento
-LOCAL_BATCH_SIZE = 12       # Batch size locale per GPU
+LOSS_TYPE = "hybrid"        # "hybrid" = MSE on noise + Spectral Convergence on reconstructed x0
+TRAIN_EPOCHS = 125          
+LOCAL_BATCH_SIZE = 12       
 
 def main():
     rank, world_size = setup_environ_vars(slurm=True)
@@ -49,8 +48,9 @@ def main():
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=seed)
     dataloader = DataLoader(dataset, batch_size=LOCAL_BATCH_SIZE, sampler=sampler, num_workers=8, pin_memory=True, drop_last=True)
 
-    unet = ConditionalUNet(num_classes=len(classes_list), base_channels=64, emb_dim=256).to(device)
-    diffusion_scheduler = GaussianDiffusion(unet_model=unet, timesteps=1000).to(device)
+    # 3-level Residual U-Net with Bottleneck Self-Attention (No class embeddings)
+    unet = ResidualUNet3Level(base_channels=64, emb_dim=256).to(device)
+    diffusion_scheduler = GaussianDiffusionResidual(unet_model=unet, timesteps=1000).to(device)
     spectral_loss_fn = SpectralConvergenceLoss().to(device)
     
     if torch.cuda.is_available():
@@ -64,7 +64,7 @@ def main():
     print_freq = max(1, total_steps // 10)
 
     if rank == 0:
-        print(f"🏁 DDP Init Complete | GPUs: {world_size} | USE_CFG={USE_CFG} | LOSS={LOSS_TYPE} | Epoche={epochs}")
+        print(f"🏁 DDP Init Complete | GPUs: {world_size} | Mode: Residual Diffusion (Agnostic) | Loss={LOSS_TYPE} | Epochs={epochs}")
         print(f"📊 Steps per Epoch: {total_steps} | Print every {print_freq} steps (10%)")
 
     for epoch in range(epochs):
@@ -75,9 +75,8 @@ def main():
         epoch_start_time = time.time()
         step_start_time = time.time()
         
-        for step, (raw_audio, class_labels) in enumerate(dataloader):
+        for step, (raw_audio, _) in enumerate(dataloader):
             raw_audio = raw_audio.to(device, non_blocking=True)
-            class_labels = class_labels.to(device, non_blocking=True)
             
             format_id = np.random.choice([0, 1])          
             fraction_id = np.random.choice([1, 3, 6, 12, 16, 24, 32]) 
@@ -85,30 +84,33 @@ def main():
             optimizer.zero_grad(set_to_none=True)
             
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                x_0, conditioning_C = spectral_pipeline(raw_audio, format_id, fraction_id, device=device)
+                # Both outputs are [B, 1, 64, 700]
+                x_0_pristine, x_interp = spectral_pipeline(raw_audio, format_id, fraction_id, device=device)
                 
-                t = torch.randint(0, 1000, (x_0.shape[0],), device=device).long()
-                noise = torch.randn_like(x_0)
-                x_t = diffusion_scheduler.q_sample(x_0, t, noise)
+                # Residual definition: Delta X = target - base_interpolated
+                delta_x_0 = x_0_pristine - x_interp
                 
-                # 🎯 MODALITÀ SELEZIONE CLASSE
-                if USE_CFG:
-                    mask_cfg = torch.rand(class_labels.shape, device=device) < 0.15
-                    cfg_labels = torch.where(mask_cfg, torch.tensor(len(classes_list), device=device), class_labels)
-                else:
-                    cfg_labels = torch.full_like(class_labels, fill_value=len(classes_list), device=device)
+                t = torch.randint(0, 1000, (delta_x_0.shape[0],), device=device).long()
+                noise = torch.randn_like(delta_x_0)
                 
-                noise_pred = unet(x_t, t, conditioning_C, cfg_labels)
+                # Forward diffusion on the high-frequency residual
+                delta_x_t = diffusion_scheduler.q_sample(delta_x_0, t, noise)
                 
-                # 🎯 MODALITÀ SELEZIONE LOSS
+                # Predict residual noise conditioned directly on x_interp
+                noise_pred = unet(delta_x_t, t, x_interp)
+                
                 loss_mse = nn.functional.mse_loss(noise_pred, noise)
                 
                 if LOSS_TYPE == "hybrid":
+                    # Analytical reconstruction of Delta X and pristine x_0
                     sqrt_alpha = torch.sqrt(torch.clamp(diffusion_scheduler.alphas_bar[t].view(-1, 1, 1, 1), min=1e-8))
                     sqrt_one_minus_alpha = torch.sqrt(torch.clamp(1.0 - diffusion_scheduler.alphas_bar[t].view(-1, 1, 1, 1), min=0.0))
-                    pred_x0 = (x_t - sqrt_one_minus_alpha * noise_pred) / sqrt_alpha
+                    pred_delta_x0 = (delta_x_t - sqrt_one_minus_alpha * noise_pred) / sqrt_alpha
                     
-                    loss_spec = spectral_loss_fn(pred_x0, x_0)
+                    # Final reconstructed mel = base + predicted residual
+                    pred_x0 = x_interp + pred_delta_x0
+                    
+                    loss_spec = spectral_loss_fn(pred_x0, x_0_pristine)
                     loss = loss_mse + 0.1 * loss_spec
                 else:
                     loss = loss_mse
@@ -142,7 +144,7 @@ def main():
             total_epoch_time = time.time() - epoch_start_time
             print(f"📢 Epoch {epoch:03d} Complete in {total_epoch_time/60:.2f} min. Master Average Loss: {avg_loss:.6f}\n")
             
-            base_model_dir = os.environ.get("MODEL_CHECKPOINT_DIR", os.path.join(src_root, ".models", "diff_model"))
+            base_model_dir = os.environ.get("MODEL_CHECKPOINT_DIR", os.path.join(src_root, ".models", "diff_model_residual"))
             target_model_dir = base_model_dir if base_model_dir.startswith("/") else os.path.join(src_root, base_model_dir)
             os.makedirs(target_model_dir, exist_ok=True)
             
