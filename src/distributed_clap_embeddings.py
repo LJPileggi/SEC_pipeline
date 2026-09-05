@@ -95,7 +95,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     # Residual U-Net instantiation and checkpoint loading (Agnostic / No class embeddings)
     diff_unet = SpectrogramUNet(base_channels=64, emb_dim=256).to(device)
     
-    target_model_dir = os.environ.get("DIFF_MODELS", os.path.join(src_root, ".models", "diff_model_residual"))
+    target_model_dir = os.environ.get("DIFFUSION_MODELS_PATH", os.path.join(".models", "diff_model_residual"))
     checkpoint_path = os.path.join(target_model_dir, f"unet_epoch_{TARGET_EPOCH - 1}.pt")
 
     if not os.path.exists(checkpoint_path):
