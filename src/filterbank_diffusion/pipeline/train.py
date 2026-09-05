@@ -15,14 +15,11 @@ if src_root not in sys.path:
 
 from utils import setup_environ_vars, setup_distributed_environment, cleanup_distributed_environment, get_config_from_yaml
 from filterbank_diffusion.models.unet import SpectrogramUNet
-from filterbank_diffusion.models.diffusion import GaussianDiffusionResidual
+from filterbank_diffusion.models.diffusion import ConditionalGaussianDiffusion
 from filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
 from filterbank_diffusion.pipeline.spectral import OnlineSpectrogramPipeline, SpectralConvergenceLoss
 
-# ==========================================================
-# 🎯 RESIDUAL TRAINING CONFIGURATION (FULLY UNCONDITIONAL)
-# ==========================================================
-LOSS_TYPE = "hybrid"        # "hybrid" = MSE on noise + Spectral Convergence on reconstructed x0
+LOSS_TYPE = "mse"
 TRAIN_EPOCHS = 125          
 LOCAL_BATCH_SIZE = 12       
 
@@ -48,9 +45,8 @@ def main():
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=seed)
     dataloader = DataLoader(dataset, batch_size=LOCAL_BATCH_SIZE, sampler=sampler, num_workers=8, pin_memory=True, drop_last=True)
 
-    # 3-level Residual U-Net with Bottleneck Self-Attention (No class embeddings)
     unet = SpectrogramUNet(base_channels=64, emb_dim=256).to(device)
-    diffusion_scheduler = GaussianDiffusionResidual(unet_model=unet, timesteps=1000).to(device)
+    diffusion_scheduler = ConditionalGaussianDiffusion(unet_model=unet, timesteps=1000).to(device)
     spectral_loss_fn = SpectralConvergenceLoss().to(device)
     
     if torch.cuda.is_available():
@@ -64,7 +60,7 @@ def main():
     print_freq = max(1, total_steps // 10)
 
     if rank == 0:
-        print(f"🏁 DDP Init Complete | GPUs: {world_size} | Mode: Residual Diffusion (Agnostic) | Loss={LOSS_TYPE} | Epochs={epochs}")
+        print(f"🏁 DDP Init Complete | GPUs: {world_size} | Mode: Conditional Image DDPM | Loss={LOSS_TYPE} | Epochs={epochs}")
         print(f"📊 Steps per Epoch: {total_steps} | Print every {print_freq} steps (10%)")
 
     for epoch in range(epochs):
@@ -80,36 +76,29 @@ def main():
             
             format_id = np.random.choice([0, 1])          
             fraction_id = np.random.choice([1, 3, 6, 12, 16, 24, 32]) 
+            frac_tensor = torch.full((raw_audio.shape[0],), fill_value=float(fraction_id), device=device)
             
             optimizer.zero_grad(set_to_none=True)
             
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                # Both outputs are [B, 1, 64, 700]
-                x_0_pristine, x_interp = spectral_pipeline(raw_audio, format_id, fraction_id, device=device)
+                # x_0_pristine and x_cond are both [B, 1, 64, 700] in identical CLAP bn0 space
+                x_0_pristine, x_cond = spectral_pipeline(raw_audio, format_id, fraction_id, device=device)
                 
-                # Residual definition: Delta X = target - base_interpolated
-                delta_x_0 = x_0_pristine - x_interp
+                t = torch.randint(0, 1000, (x_0_pristine.shape[0],), device=device).long()
+                noise = torch.randn_like(x_0_pristine)
                 
-                t = torch.randint(0, 1000, (delta_x_0.shape[0],), device=device).long()
-                noise = torch.randn_like(delta_x_0)
+                # Standard DDPM forward on pristine spectrogram x_0
+                x_t = diffusion_scheduler.q_sample(x_0_pristine, t, noise)
                 
-                # Forward diffusion on the high-frequency residual
-                delta_x_t = diffusion_scheduler.q_sample(delta_x_0, t, noise)
-                
-                # Predict residual noise conditioned directly on x_interp
-                noise_pred = unet(delta_x_t, t, x_interp)
+                # Predict noise conditioned on low-res input and octave fraction embedding
+                noise_pred = unet(x_t, t, x_cond, fraction_id=frac_tensor)
                 
                 loss_mse = nn.functional.mse_loss(noise_pred, noise)
                 
                 if LOSS_TYPE == "hybrid":
-                    # Analytical reconstruction of Delta X and pristine x_0
                     sqrt_alpha = torch.sqrt(torch.clamp(diffusion_scheduler.alphas_bar[t].view(-1, 1, 1, 1), min=1e-8))
                     sqrt_one_minus_alpha = torch.sqrt(torch.clamp(1.0 - diffusion_scheduler.alphas_bar[t].view(-1, 1, 1, 1), min=0.0))
-                    pred_delta_x0 = (delta_x_t - sqrt_one_minus_alpha * noise_pred) / sqrt_alpha
-                    
-                    # Final reconstructed mel = base + predicted residual
-                    pred_x0 = x_interp + pred_delta_x0
-                    
+                    pred_x0 = (x_t - sqrt_one_minus_alpha * noise_pred) / sqrt_alpha
                     loss_spec = spectral_loss_fn(pred_x0, x_0_pristine)
                     loss = loss_mse + 0.1 * loss_spec
                 else:
@@ -120,7 +109,6 @@ def main():
             optimizer.step()
             
             current_loss = loss.item()
-            
             if math.isnan(current_loss) or math.isinf(current_loss):
                 if rank == 0:
                     print(f"\n❌ [CRITICAL] Loss turned to NaN/Inf at Epoch {epoch}, Step {step}/{total_steps}!")
@@ -144,12 +132,11 @@ def main():
             total_epoch_time = time.time() - epoch_start_time
             print(f"📢 Epoch {epoch:03d} Complete in {total_epoch_time/60:.2f} min. Master Average Loss: {avg_loss:.6f}\n")
             
-            base_model_dir = os.environ.get("MODEL_CHECKPOINT_DIR", os.path.join(src_root, ".models", "diff_model_residual"))
+            base_model_dir = os.environ.get("MODEL_CHECKPOINT_DIR", os.path.join(src_root, ".models", "diff_model"))
             target_model_dir = base_model_dir if base_model_dir.startswith("/") else os.path.join(src_root, base_model_dir)
             os.makedirs(target_model_dir, exist_ok=True)
             
             checkpoint_path = os.path.join(target_model_dir, f"unet_epoch_{epoch}.pt")
-
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': unet.module.state_dict(),
@@ -157,7 +144,6 @@ def main():
                 'loss': avg_loss,
                 'epoch_time_secs': total_epoch_time,
             }, checkpoint_path)
-            
             print(f"💾 Checkpoint saved cleanly to: {checkpoint_path}")
 
     dataset.close()

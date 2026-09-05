@@ -1,4 +1,4 @@
 from .unet import SpectrogramUNet
-from .diffusion import GaussianDiffusionResidual
+from .diffusion import ConditionalGaussianDiffusion
 
-__all__ = ["SpectrogramUNet", "GaussianDiffusionResidual"]
+__all__ = ["SpectrogramUNet", "ConditionalGaussianDiffusion"]

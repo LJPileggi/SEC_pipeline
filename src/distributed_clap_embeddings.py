@@ -16,12 +16,11 @@ import json
 
 from .models import CLAP_initializer, spectrogram_n_octaveband_generator, \
     spectrogram_n_octaveband_generator_gpu, convert_octave_to_msclap_mel, \
-    get_octave_to_mel_transition_matrix, spectrogram_to_audio_batch, \
-    reshape_spectrogram
+    spectrogram_to_audio_batch
 from .utils import *
 from .dirs_config import *
 from .filterbank_diffusion.models.unet import SpectrogramUNet
-from .filterbank_diffusion.models.diffusion import GaussianDiffusionResidual
+from .filterbank_diffusion.models.diffusion import ConditionalGaussianDiffusion
 
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
@@ -108,7 +107,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     diff_unet.load_state_dict(checkpoint['model_state_dict'])
     diff_unet.eval()
 
-    diffusion_scheduler = GaussianDiffusionResidual(unet_model=diff_unet, timesteps=1000).to(device)
+    diffusion_scheduler = ConditionalGaussianDiffusion(unet_model=diff_unet, timesteps=1000).to(device)
 
     def flush_batch():
         nonlocal split_emb_dataset_manager, n_embeddings_per_run
@@ -143,31 +142,22 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
             with torch.no_grad():
                 if use_specs:
                     if INJECT_OCTAVE:
-                        # 1. Spatial frequency interpolation: Octaves -> 64 Log-Mel bins
                         octave_spec = specs_gpu.permute(0, 2, 1) # [B, T_blocks, F_octave]
-                        x_interp = reshape_spectrogram(octave_spec, target_dim=64) # [B, 1, T_blocks, 64]
-                        x_interp = x_interp.permute(0, 1, 3, 2)                    # [B, 1, 64, T_blocks]
 
-                        # 2. Temporal alignment: match native CLAP temporal grid (700 frames for 7 seconds)
-                        target_frames = 700
-                        if x_interp.shape[-1] != target_frames:
-                            x_interp = F.interpolate(
-                                x_interp,
-                                size=(64, target_frames),
-                                mode='bilinear',
-                                align_corners=False
-                            )
+                        # 1. Resampling congiunto 2D (F: 64, T: 700) e normalizzazione ufficiale CLAP bn0
+                        x_cond = convert_octave_to_msclap_mel(octave_spec, target_mels=64, target_time=700) # [B, 1, 64, 700]
 
-                        # 3. Deterministic Residual DDIM Sampling: X_final = X_interp + Delta X_pred
-                        mel_reconstructed = diffusion_scheduler.sample_ddim(x_interp, ddim_steps=25)
+                        # 2. Condizionamento della risoluzione d'ottava (es. 1, 3, 12, 32)
+                        frac_tensor = torch.full((batch_tensor.shape[0],), fill_value=float(n_octave), device=device)
 
-                        # 4. Prepare spectrogram for CLAP Swin-Transformer (B, C, T, F)
-                        mel_input = mel_reconstructed.permute(0, 1, 3, 2).to(device) # [B, 1, 700, 64]
+                        # 3. DDIM Sampling condizionato: ricostruisce direttamente x_0 (senza somme spurie di residui)
+                        mel_reconstructed = diffusion_scheduler.sample_ddim(x_cond, fraction_id=frac_tensor, ddim_steps=25)
+
+                        # 4. Orientamento e preparazione per CLAP Swin-Transformer [B, 1, 700, 64]
+                        mel_input = mel_reconstructed.permute(0, 1, 3, 2).to(device)
                         x_ready = clap_model.clap.audio_encoder.base.htsat.reshape_wav2img(mel_input)
 
                         clap_model.clap.audio_encoder.to(device)
-
-                        # 5. Extract projected vector and apply L2 normalization
                         projected_vec, _ = clap_model.clap.audio_encoder(x_ready)
                         embeddings = F.normalize(projected_vec, p=2, dim=-1)
 

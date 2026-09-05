@@ -15,7 +15,7 @@ if src_root not in sys.path:
 
 from src.utils import get_config_from_yaml
 from src.filterbank_diffusion.models.unet import SpectrogramUNet
-from src.filterbank_diffusion.models.diffusion import GaussianDiffusionResidual
+from src.filterbank_diffusion.models.diffusion import ConditionalGaussianDiffusion
 from src.filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
 from src.filterbank_diffusion.pipeline.spectral import OnlineSpectrogramPipeline
 
@@ -128,8 +128,7 @@ def main():
     spectral_pipeline = OnlineSpectrogramPipeline(weights_path=weights_path, sample_rate=sampling_rate, device=device).to(device)
     
     unet = SpectrogramUNet(base_channels=64, emb_dim=256).to(device)
-    
-    target_model_dir = os.environ.get("MODELS_GLOBAL", os.path.join(src_root, ".models", "diff_model_residual"))
+    target_model_dir = os.environ.get("MODELS_GLOBAL", os.path.join(src_root, ".models", "diff_model"))
     checkpoint_path = os.path.join(target_model_dir, f"unet_epoch_{TRAIN_EPOCHS - 1}.pt")
     
     if not os.path.exists(checkpoint_path):
@@ -141,22 +140,22 @@ def main():
         
     checkpoint = torch.load(checkpoint_path, map_location=device)
     unet.load_state_dict(checkpoint['model_state_dict'])
-    print(f"✅ Loaded residual checkpoint: {checkpoint_path}")
+    print(f"✅ Loaded generative checkpoint: {checkpoint_path}")
     
-    diffusion_scheduler = GaussianDiffusionResidual(unet_model=unet, timesteps=1000).to(device)
+    diffusion_scheduler = ConditionalGaussianDiffusion(unet_model=unet, timesteps=1000).to(device)
     
     raw_dataset_root = os.path.join(os.environ.get("BASEDIR", "/tmp"), "dataSEC", "RAW_DATASET", "raw_wav")
     test_dataset = DistributedAudioRAWDataset(base_dir=raw_dataset_root, split="test", target_samples_per_class=samples_per_class)
     test_dataloader = DataLoader(test_dataset, batch_size=eval_batch_size, shuffle=False, num_workers=4, pin_memory=True)
     
-    output_dir = os.path.join(src_root, "results", "residual_diffusion_validation")
+    output_dir = os.path.join(src_root, "results", "diffusion_validation_final")
     os.makedirs(output_dir, exist_ok=True)
 
     master_records = []
     global_nonlinear_records = []
 
     for fraction in target_fractions:
-        print(f"\n⚡ RESIDUAL DDIM EVALUATION (25 STEPS | BATCH {eval_batch_size}) FOR FRACTION 1/{fraction}")
+        print(f"\n⚡ CONDITIONAL DDIM EVALUATION (25 STEPS | BATCH {eval_batch_size}) FOR FRACTION 1/{fraction}")
         native_specs_list = []
         reconstructed_specs_list = []
         class_native_specs_dict = {}
@@ -164,11 +163,12 @@ def main():
         with torch.no_grad():
             for step, (raw_audio, class_labels) in enumerate(test_dataloader):
                 raw_audio = raw_audio.to(device, non_blocking=True)
+                frac_tensor = torch.full((raw_audio.shape[0],), fill_value=float(fraction), device=device)
                 
-                x_0_pristine, x_interp = spectral_pipeline(raw_audio, format_id=1, fraction_id=fraction, device=device)
+                x_0_pristine, x_cond = spectral_pipeline(raw_audio, format_id=1, fraction_id=fraction, device=device)
                 
-                # Deterministic residual DDIM reconstruction: X_final = X_interp + Delta X_pred
-                x_reconstructed = diffusion_scheduler.sample_ddim(x_interp, ddim_steps=ddim_steps)
+                # Direct DDIM sampling of x_0 conditioned on x_cond
+                x_reconstructed = diffusion_scheduler.sample_ddim(x_cond, fraction_id=frac_tensor, ddim_steps=ddim_steps)
                 
                 x_0_clean = torch.nan_to_num(x_0_pristine, nan=0.0, posinf=0.0, neginf=0.0)
                 x_rec_clean = torch.nan_to_num(x_reconstructed, nan=0.0, posinf=0.0, neginf=0.0)
@@ -223,11 +223,11 @@ def main():
 
     if master_records:
         df_master = pd.DataFrame(master_records)
-        df_master.to_csv(os.path.join(output_dir, "consolidated_residual_diffusion_tracks.csv"), index=False)
+        df_master.to_csv(os.path.join(output_dir, "consolidated_diffusion_tracks.csv"), index=False)
         summary = df_master.groupby('octave_fraction')[['frobenius', 'kl_divergence', 'wasserstein']].agg(['mean', 'std']).reset_index()
         summary.to_csv(os.path.join(output_dir, "summary_metrics_per_fraction.csv"), index=False)
         print("\n" + "="*60)
-        print("📊 FINAL RESIDUAL VALIDATION REPORT (DDIM)")
+        print("📊 FINAL CONDITIONAL VALIDATION REPORT (DDIM)")
         print(summary.to_string())
         print("="*60)
 
