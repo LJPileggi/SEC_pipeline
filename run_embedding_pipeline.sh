@@ -71,7 +71,8 @@ run_slurm() {
 #SBATCH -A IscrC_BrISkite_0
 #SBATCH --output=%x_%j.out
 
-TEMP_DIR="/leonardo_scratch/large/userexternal/\$USER/tmp_job_\$SLURM_JOB_ID"
+export TEMP_DIR="/leonardo_scratch/large/userexternal/\$USER/tmp_job_\$SLURM_JOB_ID"
+export TARGET_EPOCH=125
 TARGET_GLOBAL="$FINAL_DEST"
 
 mkdir -p "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT"
@@ -106,7 +107,7 @@ cp "$CLAP_SCRATCH_WEIGHTS" "\$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth"
 cp -r "$ROBERTA_PATH/." "\$TEMP_DIR/roberta-base/"
 [ -d "\$TARGET_GLOBAL" ] && cp -r "\$TARGET_GLOBAL/." "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/$target_folder/"
 cp "$DATASEC_GLOBAL/RAW_DATASET/raw_$AUDIO_FORMAT"/*.h5 "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT/" 2>/dev/null
-[ -d "$DIFFUSION_MODELS_PATH" ] && cp -r "$DIFFUSION_MODELS_PATH/." "\$TEMP_DIR/work_dir/diff_model/"
+[ -d "$DIFFUSION_MODELS_PATH" ] && cp "$DIFFUSION_MODELS_PATH/unet_epoch_${TARGET_EPOCH-1}.pt" "\$TEMP_DIR/work_dir/diff_model/"
 
 # Create wrapper inside the heredoc
 cat << 'INNER_EOF' > "\$TEMP_DIR/work_dir/join_logs_wrapper.py"

@@ -90,7 +90,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     batch_audio = []; batch_meta = []
 
     # Checkpoint configuration
-    TARGET_EPOCH = 125
+    TARGET_EPOCH = os.environ.get("TARGET_EPOCH", 125)
     
     # Residual U-Net instantiation and checkpoint loading (Agnostic / No class embeddings)
     diff_unet = SpectrogramUNet(base_channels=64, emb_dim=256).to(device)
