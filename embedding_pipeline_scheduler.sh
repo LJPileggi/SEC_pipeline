@@ -59,7 +59,8 @@ submit_and_wait_task() {
 #SBATCH --output=${j_name}_%j.out
 
 # 🎯 PATH DEFINITION (Absolute resolution) 
-TEMP_DIR="/leonardo_scratch/large/userexternal/$CURRENT_USER/tmp_job_\$SLURM_JOB_ID"
+export TEMP_DIR="/leonardo_scratch/large/userexternal/$CURRENT_USER/tmp_job_\$SLURM_JOB_ID"
+export TARGET_EPOCH=125
 TARGET_GLOBAL="$FINAL_DEST"
 
 # 🛠️ DIRECTORY SETUP (Mirroring run_embedding_pipeline.sh) 
@@ -98,7 +99,7 @@ cp -r "$ROBERTA_PATH/." "\$TEMP_DIR/roberta-base/" || exit 1
 # 🎯 STAGE-IN PESI MODELLO DI DIFFUSIONE
 if [ -d "$DIFF_MODELS_PATH" ]; then
     echo "📦 Staging diffusion model weights from $DIFF_MODELS_PATH..."
-    cp -r "$DIFF_MODELS_PATH/." "\$TEMP_DIR/work_dir/diff_model/" || exit 1
+    cp "$DIFF_MODELS_PATH/unet_epoch_${TARGET_EPOCH-1}.pt" "\$TEMP_DIR/work_dir/diff_model/" || exit 1
 else
     echo "⚠️ Warning: Diffusion models path '$DIFF_MODELS_PATH' not found!"
 fi
