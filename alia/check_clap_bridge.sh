@@ -71,11 +71,22 @@ from src.filterbank_diffusion.models.diffusion import ConditionalGaussianDiffusi
 from src.filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"🔧 Device selezionato: {device}")
+print(f"🔧 Device: {device}")
 
 clap_model, _, _ = CLAP_initializer(device=device, use_cuda=True)
 htsat = clap_model.clap.audio_encoder.base.htsat
 htsat.eval()
+
+# Stampa attributi e configurazione di HTS-AT
+print("\n" + "="*65)
+print("⚙️ ISPEZIONE CONFIGURAZIONE HTS-AT")
+print("="*65)
+for attr in ['mel_bins', 'spec_size', 'max_len', 'freq_ratio', 'time_downsample_ratio']:
+    print(f"• htsat.{attr}: {getattr(htsat, attr, 'N/A')}")
+if hasattr(htsat, 'config'):
+    cfg = htsat.config
+    for field in ['mel_bins', 'window_size', 'hop_size', 'spec_size', 'max_length']:
+        print(f"• htsat.config.{field}: {getattr(cfg, field, 'N/A')}")
 
 # Caricamento audio di test
 raw_wav_dir = "/tmp_data/dataSEC/RAW_DATASET/raw_wav"
@@ -91,7 +102,7 @@ except Exception as e:
 
 audio_tensor = torch.as_tensor(raw_audio, dtype=torch.float32).flatten()
 
-# Normalizzazione all'esatta finestra di CLAP (1024 frame * 320 hop = 327.680 campioni)
+# Finestra nativa standard (327680 campioni)
 target_len = 1024 * 320
 if audio_tensor.numel() < target_len:
     audio_tensor = F.pad(audio_tensor, (0, target_len - audio_tensor.numel()))
@@ -105,7 +116,6 @@ print("🔍 TEST 1: ESTRAZIONE NATIVA UFFICIALE")
 print("="*65)
 
 with torch.no_grad():
-    # 1. Forward nativo su forma d'onda grezza
     out_native = clap_model.clap.audio_encoder(audio_tensor)
     vec_official = out_native[0] if isinstance(out_native, (tuple, list)) else out_native
     if isinstance(vec_official, dict):
@@ -114,31 +124,60 @@ with torch.no_grad():
         vec_official = vec_official.squeeze(1)
     emb_official = F.normalize(vec_official, p=2, dim=-1)
 
-    # 2. Estrazione esatta dei blocchi interni HTS-AT
     x_stft = htsat.spectrogram_extractor(audio_tensor)
     x_logmel = htsat.logmel_extractor(x_stft)
-    x_norm = htsat.bn0(x_logmel.transpose(1, 3)).transpose(1, 3)  # [1, 1, 1024, 64]
+    x_norm = htsat.bn0(x_logmel.transpose(1, 3)).transpose(1, 3)
     
-    print(f"✅ Embedding nativo estratto. Shape: {emb_official.shape}")
-    print(f"📐 Dimensione x_norm interno: {x_norm.shape} (T={x_norm.shape[2]}, F={x_norm.shape[3]})")
+    print(f"✅ Embedding nativo calcolato. Shape: {emb_official.shape}")
+    print(f"📐 x_norm shape reale post-bn0: {x_norm.shape}")
 
 print("\n" + "="*65)
-print("🔍 TEST 2: ALLINEAMENTO IDENTITÀ (Mel Nativo Iniettato)")
+print("🔍 TEST 2: DIAGNOSTICA ORIENTAMENTO ASSI PER RESHAPE_WAV2IMG")
 print("="*65)
 
-with torch.no_grad():
-    # x_norm è [1, 1, 1024, 64]. reshape_wav2img riceve [B, 1, T, F]
-    x_ready_native = htsat.reshape_wav2img(x_norm)
-    out_injected = clap_model.clap.audio_encoder(x_ready_native)
-    vec_injected = out_injected[0] if isinstance(out_injected, (tuple, list)) else out_injected
-    if isinstance(vec_injected, dict):
-        vec_injected = vec_injected.get('embedding', vec_injected.get('clipwise_output'))
-    if vec_injected.ndim > 2:
-        vec_injected = vec_injected.squeeze(1)
-    emb_injected = F.normalize(vec_injected, p=2, dim=-1)
+# Test esplorativo di diverse combinazioni dimensionali per trovare quella valida
+candidate_inputs = [
+    ("As-is", x_norm),
+    ("Transpose(2, 3)", x_norm.transpose(2, 3)),
+    ("Crop T to 1024 as-is", x_norm[:, :, :1024, :] if x_norm.shape[2] >= 1024 else x_norm),
+    ("Crop T to 1024 transposed", x_norm.transpose(2, 3)[:, :, :1024, :] if x_norm.shape[3] >= 1024 else x_norm.transpose(2, 3)),
+    ("Crop T to 700 as-is", x_norm[:, :, :700, :] if x_norm.shape[2] >= 700 else x_norm),
+    ("Crop T to 700 transposed", x_norm.transpose(2, 3)[:, :, :700, :] if x_norm.shape[3] >= 700 else x_norm.transpose(2, 3)),
+    ("Crop T to 512 as-is", x_norm[:, :, :512, :] if x_norm.shape[2] >= 512 else x_norm),
+    ("Crop T to 512 transposed", x_norm.transpose(2, 3)[:, :, :512, :] if x_norm.shape[3] >= 512 else x_norm.transpose(2, 3)),
+]
 
-    identity_sim = F.cosine_similarity(emb_official, emb_injected, dim=-1).item()
-    print(f"🎯 Similarità Coseno (Nativo Ufficiale vs Log-Mel Nativo Iniettato): {identity_sim:.6f}")
+working_candidate = None
+working_name = None
+
+for name, tensor_candidate in candidate_inputs:
+    try:
+        x_ready_test = htsat.reshape_wav2img(tensor_candidate)
+        print(f"✅ SUCCESSO con [{name}]! Shape in: {tensor_candidate.shape} -> Shape out: {x_ready_test.shape}")
+        if working_candidate is None:
+            working_candidate = tensor_candidate
+            working_name = name
+    except AssertionError as e:
+        print(f"❌ Fallito [{name}] con shape {tensor_candidate.shape}: {e}")
+    except Exception as e:
+        print(f"❌ Errore generico [{name}] con shape {tensor_candidate.shape}: {e}")
+
+if working_candidate is not None:
+    print(f"\n🎯 Configurazione valida adottata: {working_name}")
+    with torch.no_grad():
+        x_ready = htsat.reshape_wav2img(working_candidate)
+        out_injected = clap_model.clap.audio_encoder(x_ready)
+        vec_injected = out_injected[0] if isinstance(out_injected, (tuple, list)) else out_injected
+        if isinstance(vec_injected, dict):
+            vec_injected = vec_injected.get('embedding', vec_injected.get('clipwise_output'))
+        if vec_injected.ndim > 2:
+            vec_injected = vec_injected.squeeze(1)
+        emb_injected = F.normalize(vec_injected, p=2, dim=-1)
+
+        sim = F.cosine_similarity(emb_official, emb_injected, dim=-1).item()
+        print(f"🎯 Similarità Coseno (Nativo vs Iniettato con {working_name}): {sim:.6f}")
+else:
+    print("❌ Nessuna variante di shape è riuscita a superare l'asserzione di reshape_wav2img.")
 
 print("\n" + "="*65)
 print("🔍 TEST 3: VERIFICA SPETTROGRAMMA RICOSTRUITO (DDIM EPOCA 89)")
@@ -146,17 +185,20 @@ print("="*65)
 
 ckpt_dir = "/tmp_data/models/diff_model"
 pts = [f for f in os.listdir(ckpt_dir) if f.endswith(".pt")]
+if not pts:
+    print("❌ Nessun file checkpoint trovato.")
+    sys.exit(0)
+
 pts_sorted = sorted(pts, key=lambda x: int(x.replace("unet_epoch_", "").replace(".pt", "")))
 target_ckpt = os.path.join(ckpt_dir, pts_sorted[-1])
-print(f"📦 Checkpoint caricato: {target_ckpt}")
+print(f"📦 Checkpoint: {target_ckpt}")
 
 unet = SpectrogramUNet(base_channels=64, emb_dim=256).to(device)
 ckpt = torch.load(target_ckpt, map_location=device)
 unet.load_state_dict(ckpt['model_state_dict'])
 diffusion = ConditionalGaussianDiffusion(unet_model=unet, timesteps=1000).to(device)
 
-# Creazione target pulito a 700 frame (spazio U-Net)
-x_0_pristine = x_norm[:, :, :700, :].permute(0, 1, 3, 2)  # [1, 1, 64, 700]
+x_0_pristine = x_norm[:, :, :700, :].permute(0, 1, 3, 2) if x_norm.shape[2] >= 700 else x_norm.permute(0, 1, 3, 2)
 
 with torch.no_grad():
     for frac in [3, 32]:
@@ -168,26 +210,32 @@ with torch.no_grad():
         x_cond = convert_octave_to_msclap_mel(spec_octave, target_mels=64, target_time=700)
         frac_t = torch.tensor([float(frac)], device=device)
 
-        # mel_rec esce dalla U-Net come [1, 1, 64, 700] (F=64, T=700)
         mel_rec = diffusion.sample_ddim(x_cond, fraction_id=frac_t, ddim_steps=25)
-        frob = torch.norm(x_0_pristine - mel_rec, p='fro').item()
+        T_eval = min(x_0_pristine.shape[3], mel_rec.shape[3])
+        frob = torch.norm(x_0_pristine[:, :, :, :T_eval] - mel_rec[:, :, :, :T_eval], p='fro').item()
 
-        # TRASPOSIZIONE RIGOROSA PER HTS-AT: da [1, 1, 64, 700] a [1, 1, 700, 64]
-        mel_rec_htsat = mel_rec.permute(0, 1, 3, 2)
+        # Testiamo se reshape_wav2img accetta mel_rec direttamente o con permute
+        mel_ready = None
+        for test_mel in [mel_rec.permute(0, 1, 3, 2), mel_rec]:
+            try:
+                mel_ready = htsat.reshape_wav2img(test_mel)
+                break
+            except AssertionError:
+                continue
 
-        # reshape_wav2img riceve [1, 1, 700, 64], rispetta T=700 <= 1024 e fa zero-pad a 1024 internamente
-        x_rec_ready = htsat.reshape_wav2img(mel_rec_htsat)
+        if mel_ready is not None:
+            out_rec = clap_model.clap.audio_encoder(mel_ready)
+            vec_rec = out_rec[0] if isinstance(out_rec, (tuple, list)) else out_rec
+            if isinstance(vec_rec, dict):
+                vec_rec = vec_rec.get('embedding', vec_rec.get('clipwise_output'))
+            if vec_rec.ndim > 2:
+                vec_rec = vec_rec.squeeze(1)
+            emb_rec = F.normalize(vec_rec, p=2, dim=-1)
 
-        out_rec = clap_model.clap.audio_encoder(x_rec_ready)
-        vec_rec = out_rec[0] if isinstance(out_rec, (tuple, list)) else out_rec
-        if isinstance(vec_rec, dict):
-            vec_rec = vec_rec.get('embedding', vec_rec.get('clipwise_output'))
-        if vec_rec.ndim > 2:
-            vec_rec = vec_rec.squeeze(1)
-        emb_rec = F.normalize(vec_rec, p=2, dim=-1)
-
-        sim_rec = F.cosine_similarity(emb_official, emb_rec, dim=-1).item()
-        print(f"🎯 Frazione 1/{frac:02d} | Frobenius: {frob:6.2f} | Coseno vs Nativo: {sim_rec:.6f}")
+            sim_rec = F.cosine_similarity(emb_official, emb_rec, dim=-1).item()
+            print(f"🎯 Frazione 1/{frac:02d} | Frobenius: {frob:6.2f} | Coseno vs Nativo: {sim_rec:.6f}")
+        else:
+            print(f"⚠️ Impossibile eseguire reshape_wav2img per la frazione 1/{frac:02d}")
 
 print("\n" + "="*65)
 print("🏁 DIAGNOSTICA COMPLETATA")
