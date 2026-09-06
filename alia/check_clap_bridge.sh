@@ -119,22 +119,24 @@ print("🔍 TEST 1: ESTRAZIONE NATIVA UFFICIALE")
 print("="*65)
 
 with torch.no_grad():
-    emb_official = audio_embedding_fn(audio_tensor.cpu())
-    if isinstance(emb_official, (tuple, list)):
-        emb_official = emb_official[0]
-    if isinstance(emb_official, np.ndarray):
-        emb_official = torch.from_numpy(emb_official)
-    emb_official = emb_official.to(device).float()
-    if emb_official.ndim > 2:
-        emb_official = emb_official.squeeze(1)
-    emb_official = F.normalize(emb_official, p=2, dim=-1)
+  # audio_tensor ha shape [1, 336000]
+  # Il forward nativo dell'encoder riceve il segnale audio grezzo
+  out_native = clap_model.clap.audio_encoder(audio_tensor)
+  vec_official = (
+      out_native[0] if isinstance(out_native, (tuple, list)) else out_native
+  )
+  if isinstance(vec_official, dict):
+    vec_official = vec_official.get(
+        'embedding', vec_official.get('clipwise_output')
+    )
+  if vec_official.ndim > 2:
+    vec_official = vec_official.squeeze(1)
+  emb_official = F.normalize(vec_official, p=2, dim=-1)
 
-    print(f"✅ Embedding nativo estratto. Shape: {emb_official.shape} | L2-norm: {torch.norm(emb_official).item():.4f}")
-
-    x_stft = htsat.spectrogram_extractor(audio_tensor)
-    x_logmel = htsat.logmel_extractor(x_stft)
-    x_norm = htsat.bn0(x_logmel.transpose(1, 3)).transpose(1, 3) # Shape: [1, 1, 700, 64]
-    x_0_pristine = x_norm.permute(0, 1, 3, 2)                    # Shape: [1, 1, 64, 700]
+  print(
+      f'✅ Embedding nativo estratto. Shape: {emb_official.shape} | L2-norm:'
+      f' {torch.norm(emb_official).item():.4f}'
+  )
 
 print("\n" + "="*65)
 print("🔍 TEST 2: FORWARD PATCH DI CLAP SUL MEL NATIVO")
