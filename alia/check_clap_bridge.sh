@@ -38,7 +38,6 @@ elif [ -d "$MODELS_GLOBAL" ]; then
     cp "$MODELS_GLOBAL"/*.pt "$TEMP_DIR/models/diff_model/" 2>/dev/null
 fi
 
-# Scrittura dello script Python temporaneo
 cat << 'EOF' > "$TEMP_DIR/diagnose_clap_bridge.py"
 import os
 import sys
@@ -80,7 +79,7 @@ from src.filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"🔧 Device selezionato: {device}")
 
-clap_model, audio_embedding_fn, _ = CLAP_initializer(device=device, use_cuda=True)
+clap_model, _, _ = CLAP_initializer(device=device, use_cuda=True)
 htsat = clap_model.clap.audio_encoder.base.htsat
 htsat.eval()
 
@@ -101,10 +100,10 @@ except Exception as e:
         raw_audio = hf[first_key][:]
     print(f"📖 Audio di test caricato da: {sample_h5_path}")
 
-# Conversione sicura su tensore PyTorch
+# Conversione sicura su tensore
 audio_tensor = torch.as_tensor(raw_audio, dtype=torch.float32).flatten()
 
-# Normalizzazione a 7 secondi (frequenza campionamento 48 kHz)
+# Normalizzazione a 7 secondi (48 kHz)
 sr = 48000
 target_len = sr * 7
 if audio_tensor.numel() < target_len:
@@ -119,31 +118,29 @@ print("🔍 TEST 1: ESTRAZIONE NATIVA UFFICIALE")
 print("="*65)
 
 with torch.no_grad():
-  # audio_tensor ha shape [1, 336000]
-  # Il forward nativo dell'encoder riceve il segnale audio grezzo
-  out_native = clap_model.clap.audio_encoder(audio_tensor)
-  vec_official = (
-      out_native[0] if isinstance(out_native, (tuple, list)) else out_native
-  )
-  if isinstance(vec_official, dict):
-    vec_official = vec_official.get(
-        'embedding', vec_official.get('clipwise_output')
-    )
-  if vec_official.ndim > 2:
-    vec_official = vec_official.squeeze(1)
-  emb_official = F.normalize(vec_official, p=2, dim=-1)
+    # Chiamata nativa diretta senza passare per torchaudio.load
+    out_native = clap_model.clap.audio_encoder(audio_tensor)
+    vec_official = out_native[0] if isinstance(out_native, (tuple, list)) else out_native
+    if isinstance(vec_official, dict):
+        vec_official = vec_official.get('embedding', vec_official.get('clipwise_output'))
+    if vec_official.ndim > 2:
+        vec_official = vec_official.squeeze(1)
+    emb_official = F.normalize(vec_official, p=2, dim=-1)
 
-  print(
-      f'✅ Embedding nativo estratto. Shape: {emb_official.shape} | L2-norm:'
-      f' {torch.norm(emb_official).item():.4f}'
-  )
+    print(f"✅ Embedding nativo estratto. Shape: {emb_official.shape} | L2-norm: {torch.norm(emb_official).item():.4f}")
+
+    # Estrazione Log-Mel nativo per il confronto
+    x_stft = htsat.spectrogram_extractor(audio_tensor)
+    x_logmel = htsat.logmel_extractor(x_stft)
+    x_norm = htsat.bn0(x_logmel.transpose(1, 3)).transpose(1, 3) # Shape: [1, 1, 700, 64]
+    x_0_pristine = x_norm.permute(0, 1, 3, 2)                    # Shape: [1, 1, 64, 700]
 
 print("\n" + "="*65)
 print("🔍 TEST 2: FORWARD PATCH DI CLAP SUL MEL NATIVO")
 print("="*65)
 
 with torch.no_grad():
-    mel_input = x_0_pristine.permute(0, 1, 3, 2).to(device) # [1, 1, 700, 64]
+    mel_input = x_0_pristine.permute(0, 1, 3, 2).to(device) # Shape: [1, 1, 700, 64]
     
     # Variante A: Con reshape_wav2img manuale
     x_ready_manual = htsat.reshape_wav2img(mel_input)
