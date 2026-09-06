@@ -72,7 +72,7 @@ run_slurm() {
 #SBATCH --output=%x_%j.out
 
 export TEMP_DIR="/leonardo_scratch/large/userexternal/\$USER/tmp_job_\$SLURM_JOB_ID"
-export TARGET_EPOCH=125
+export TARGET_EPOCH=90
 TARGET_GLOBAL="$FINAL_DEST"
 
 mkdir -p "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT"

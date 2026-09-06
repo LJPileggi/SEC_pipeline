@@ -19,7 +19,7 @@ from src.filterbank_diffusion.models.diffusion import ConditionalGaussianDiffusi
 from src.filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
 from src.filterbank_diffusion.pipeline.spectral import OnlineSpectrogramPipeline
 
-TRAIN_EPOCHS = 125
+TRAIN_EPOCHS = 90
 
 def calculate_distribution_metrics(p_tensor, q_tensor):
     p_clean = torch.nan_to_num(p_tensor, nan=0.0, posinf=0.0, neginf=0.0)
