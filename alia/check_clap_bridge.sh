@@ -28,6 +28,9 @@ echo "📦 Stage-in: Configurazione ambiente di diagnostica..."
 cp "$CLAP_SCRATCH_WEIGHTS" "$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth" 2>/dev/null
 [ -f "$CLAP_BN0_CONSTANTS" ] && cp "$CLAP_BN0_CONSTANTS" "$TEMP_DIR/work_dir/weights/clap_bn0_constants.npz" 2>/dev/null
 
+# Copia dei file audio HDF5 (copia tutti i file per soddisfare DistributedAudioRAWDataset)
+cp "$DATASEC_GLOBAL/RAW_DATASET/raw_wav"/*.h5 "$TEMP_DIR/dataSEC/RAW_DATASET/raw_wav/" 2>/dev/null
+
 # Copia del checkpoint epoca 89
 if [ -f "$MODELS_GLOBAL/unet_epoch_89.pt" ]; then
     cp "$MODELS_GLOBAL/unet_epoch_89.pt" "$TEMP_DIR/models/diff_model/unet_epoch_89.pt"
@@ -35,21 +38,15 @@ elif [ -d "$MODELS_GLOBAL" ]; then
     cp "$MODELS_GLOBAL"/*.pt "$TEMP_DIR/models/diff_model/" 2>/dev/null
 fi
 
-# Copia di un file HDF5 audio campione per il test
-FIRST_H5=$(ls "$DATASEC_GLOBAL/RAW_DATASET/raw_wav"/*.h5 2>/dev/null | head -n 1)
-if [ -n "$FIRST_H5" ]; then
-    cp "$FIRST_H5" "$TEMP_DIR/dataSEC/RAW_DATASET/raw_wav/"
-fi
-
 # Scrittura dello script Python temporaneo
 cat << 'EOF' > "$TEMP_DIR/diagnose_clap_bridge.py"
 import os
 import sys
 
-# 1. Priorità assoluta /app
+# 1. Priorità assoluta moduli /app
 sys.path.insert(0, "/app")
 
-# 2. 🔥 FIREWALL MONKEY-PATCH IMMEDIATO (Prima di qualsiasi import msclap/transformers)
+# 2. 🔥 FIREWALL MONKEY-PATCH IMMEDIATO
 import huggingface_hub
 import transformers
 import msclap
@@ -75,6 +72,7 @@ msclap.CLAPWrapper.hf_hub_download = universal_path_redirect
 import torch
 import torch.nn.functional as F
 import numpy as np
+import h5py
 
 from src.models import CLAP_initializer, convert_octave_to_msclap_mel, spectrogram_n_octaveband_generator_gpu
 from src.filterbank_diffusion.models.unet import SpectrogramUNet
@@ -84,18 +82,30 @@ from src.filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"🔧 Device selezionato: {device}")
 
-# Inizializzazione CLAP (utilizza i pesi locali rediretti)
+# Inizializzazione CLAP
 clap_model, audio_embedding_fn, _ = CLAP_initializer(device=device, use_cuda=True)
 htsat = clap_model.clap.audio_encoder.base.htsat
 htsat.eval()
 
-# Caricamento traccia di test
+# Caricamento robusto della traccia audio di test
 raw_wav_dir = "/tmp_data/dataSEC/RAW_DATASET/raw_wav"
-dataset = DistributedAudioRAWDataset(base_dir=raw_wav_dir, split="test", target_samples_per_class=5)
-raw_audio, _ = dataset[0]
-dataset.close()
+try:
+    dataset = DistributedAudioRAWDataset(base_dir=raw_wav_dir, split="test", target_samples_per_class=5)
+    raw_audio, _ = dataset[0]
+    dataset.close()
+    print("📖 Audio di test caricato tramite DistributedAudioRAWDataset.")
+except Exception as e:
+    print(f"⚠️ DistributedAudioRAWDataset non utilizzabile ({e}), lettura diretta via h5py...")
+    available_h5 = [f for f in os.listdir(raw_wav_dir) if f.endswith(".h5")]
+    if not available_h5:
+        raise FileNotFoundError(f"Nessun file HDF5 trovato in {raw_wav_dir}")
+    sample_h5_path = os.path.join(raw_wav_dir, available_h5[0])
+    with h5py.File(sample_h5_path, "r") as hf:
+        first_key = list(hf.keys())[0]
+        raw_audio = hf[first_key][:]
+    print(f"📖 Audio di test caricato da: {sample_h5_path}")
 
-# Normalizzazione a 7 secondi
+# Normalizzazione a 7 secondi (frequenza campionamento 48 kHz)
 sr = 48000
 target_len = sr * 7
 if len(raw_audio) < target_len:
@@ -110,7 +120,6 @@ print("🔍 TEST 1: ESTRAZIONE NATIVA UFFICIALE")
 print("="*65)
 
 with torch.no_grad():
-    # Esecuzione nativa tramite clap_model.get_audio_embeddings
     emb_official = audio_embedding_fn(audio_tensor.cpu())
     if isinstance(emb_official, (tuple, list)):
         emb_official = emb_official[0]
@@ -123,7 +132,7 @@ with torch.no_grad():
 
     print(f"✅ Embedding nativo estratto. Shape: {emb_official.shape} | L2-norm: {torch.norm(emb_official).item():.4f}")
 
-    # Estrazione Log-Mel nativo tramite i moduli STFT + LogMel + bn0
+    # Estrazione Log-Mel nativo dai blocchi HTS-AT
     x_stft = htsat.spectrogram_extractor(audio_tensor)
     x_logmel = htsat.logmel_extractor(x_stft)
     x_norm = htsat.bn0(x_logmel.transpose(1, 3)).transpose(1, 3) # Shape: [1, 1, 700, 64]
@@ -134,10 +143,9 @@ print("🔍 TEST 2: FORWARD PATCH DI CLAP SUL MEL NATIVO")
 print("="*65)
 
 with torch.no_grad():
-    # mel_input riallineato: [1, 1, 700, 64]
-    mel_input = x_0_pristine.permute(0, 1, 3, 2).to(device)
+    mel_input = x_0_pristine.permute(0, 1, 3, 2).to(device) # [1, 1, 700, 64]
     
-    # Variante A: Con reshape_wav2img manuale (come in distributed_clap_embeddings)
+    # Variante A: Con reshape_wav2img manuale (pipeline di distributed_clap_embeddings)
     x_ready_manual = htsat.reshape_wav2img(mel_input)
     out_manual = clap_model.clap.audio_encoder(x_ready_manual)
     vec_manual = out_manual[0] if isinstance(out_manual, (tuple, list)) else out_manual
@@ -150,7 +158,7 @@ with torch.no_grad():
     sim_manual = F.cosine_similarity(emb_official, emb_manual, dim=-1).item()
     print(f"• Similarità Coseno (Ufficiale vs Mel Nativo con reshape manuale): {sim_manual:.6f}")
 
-    # Variante B: Passando direttamente mel_input senza reshape preliminare
+    # Variante B: Passando direttamente mel_input senza reshape manuale preliminare
     try:
         out_direct = clap_model.clap.audio_encoder(mel_input)
         vec_direct = out_direct[0] if isinstance(out_direct, (tuple, list)) else out_direct
@@ -171,7 +179,7 @@ print("="*65)
 ckpt_dir = "/tmp_data/models/diff_model"
 pts = [f for f in os.listdir(ckpt_dir) if f.endswith(".pt")]
 if not pts:
-    print("❌ Nessun file checkpoint (.pt) trovato.")
+    print("❌ Nessun file checkpoint (.pt) trovato in /tmp_data/models/diff_model.")
     sys.exit(0)
 
 pts_sorted = sorted(pts, key=lambda x: int(x.replace("unet_epoch_", "").replace(".pt", "")))
@@ -185,23 +193,17 @@ diffusion = ConditionalGaussianDiffusion(unet_model=unet, timesteps=1000).to(dev
 
 with torch.no_grad():
     for frac in [3, 32]:
-        # Generazione ancora d'ottava su GPU
         spec_octave = spectrogram_n_octaveband_generator_gpu(
             audio_tensor, sampling_rate=sr, n_octave=frac, center_freqs=None, ref=2e-5, device=device
         )
         spec_octave = spec_octave.permute(0, 2, 1)
 
-        # Resampling 2D normalizzato bn0
         x_cond = convert_octave_to_msclap_mel(spec_octave, target_mels=64, target_time=700)
         frac_t = torch.tensor([float(frac)], device=device)
 
-        # Ricostruzione DDIM (25 step)
         mel_rec = diffusion.sample_ddim(x_cond, fraction_id=frac_t, ddim_steps=25)
-
-        # Distanza di Frobenius rispetto al Mel nativo
         frob = torch.norm(x_0_pristine - mel_rec, p='fro').item()
 
-        # Estrazione embedding dal mel ricostruito
         mel_rec_in = mel_rec.permute(0, 1, 3, 2)
         x_rec_ready = htsat.reshape_wav2img(mel_rec_in)
         out_rec = clap_model.clap.audio_encoder(x_rec_ready)
@@ -220,10 +222,10 @@ print("🏁 DIAGNOSTICA COMPLETATA")
 print("="*65)
 EOF
 
-export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
 export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/weights/CLAP_weights_2023.pth"
 export LOCAL_CLAP_BN0_CONSTANTS_PATH="/tmp_data/work_dir/weights/clap_bn0_constants.npz"
 export CLAP_TEXT_ENCODER_PATH="$CLAP_TEXT_PATH"
+export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
 export INJECT_OCTAVE="True"
 export VERBOSE="False"
 
