@@ -28,7 +28,7 @@ echo "📦 Stage-in: Configurazione ambiente di diagnostica..."
 cp "$CLAP_SCRATCH_WEIGHTS" "$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth" 2>/dev/null
 [ -f "$CLAP_BN0_CONSTANTS" ] && cp "$CLAP_BN0_CONSTANTS" "$TEMP_DIR/work_dir/weights/clap_bn0_constants.npz" 2>/dev/null
 
-# Copia dei file audio HDF5 (copia tutti i file per soddisfare DistributedAudioRAWDataset)
+# Copia dei dataset HDF5
 cp "$DATASEC_GLOBAL/RAW_DATASET/raw_wav"/*.h5 "$TEMP_DIR/dataSEC/RAW_DATASET/raw_wav/" 2>/dev/null
 
 # Copia del checkpoint epoca 89
@@ -43,10 +43,8 @@ cat << 'EOF' > "$TEMP_DIR/diagnose_clap_bridge.py"
 import os
 import sys
 
-# 1. Priorità assoluta moduli /app
 sys.path.insert(0, "/app")
 
-# 2. 🔥 FIREWALL MONKEY-PATCH IMMEDIATO
 import huggingface_hub
 import transformers
 import msclap
@@ -82,12 +80,10 @@ from src.filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"🔧 Device selezionato: {device}")
 
-# Inizializzazione CLAP
 clap_model, audio_embedding_fn, _ = CLAP_initializer(device=device, use_cuda=True)
 htsat = clap_model.clap.audio_encoder.base.htsat
 htsat.eval()
 
-# Caricamento robusto della traccia audio di test
 raw_wav_dir = "/tmp_data/dataSEC/RAW_DATASET/raw_wav"
 try:
     dataset = DistributedAudioRAWDataset(base_dir=raw_wav_dir, split="test", target_samples_per_class=5)
@@ -105,15 +101,18 @@ except Exception as e:
         raw_audio = hf[first_key][:]
     print(f"📖 Audio di test caricato da: {sample_h5_path}")
 
+# Conversione sicura su tensore PyTorch
+audio_tensor = torch.as_tensor(raw_audio, dtype=torch.float32).flatten()
+
 # Normalizzazione a 7 secondi (frequenza campionamento 48 kHz)
 sr = 48000
 target_len = sr * 7
-if len(raw_audio) < target_len:
-    raw_audio = np.pad(raw_audio, (0, target_len - len(raw_audio)))
+if audio_tensor.numel() < target_len:
+    audio_tensor = F.pad(audio_tensor, (0, target_len - audio_tensor.numel()))
 else:
-    raw_audio = raw_audio[:target_len]
+    audio_tensor = audio_tensor[:target_len]
 
-audio_tensor = torch.from_numpy(raw_audio).float().unsqueeze(0).to(device)
+audio_tensor = audio_tensor.unsqueeze(0).to(device)
 
 print("\n" + "="*65)
 print("🔍 TEST 1: ESTRAZIONE NATIVA UFFICIALE")
@@ -132,7 +131,6 @@ with torch.no_grad():
 
     print(f"✅ Embedding nativo estratto. Shape: {emb_official.shape} | L2-norm: {torch.norm(emb_official).item():.4f}")
 
-    # Estrazione Log-Mel nativo dai blocchi HTS-AT
     x_stft = htsat.spectrogram_extractor(audio_tensor)
     x_logmel = htsat.logmel_extractor(x_stft)
     x_norm = htsat.bn0(x_logmel.transpose(1, 3)).transpose(1, 3) # Shape: [1, 1, 700, 64]
@@ -145,7 +143,7 @@ print("="*65)
 with torch.no_grad():
     mel_input = x_0_pristine.permute(0, 1, 3, 2).to(device) # [1, 1, 700, 64]
     
-    # Variante A: Con reshape_wav2img manuale (pipeline di distributed_clap_embeddings)
+    # Variante A: Con reshape_wav2img manuale
     x_ready_manual = htsat.reshape_wav2img(mel_input)
     out_manual = clap_model.clap.audio_encoder(x_ready_manual)
     vec_manual = out_manual[0] if isinstance(out_manual, (tuple, list)) else out_manual
@@ -158,7 +156,7 @@ with torch.no_grad():
     sim_manual = F.cosine_similarity(emb_official, emb_manual, dim=-1).item()
     print(f"• Similarità Coseno (Ufficiale vs Mel Nativo con reshape manuale): {sim_manual:.6f}")
 
-    # Variante B: Passando direttamente mel_input senza reshape manuale preliminare
+    # Variante B: Passando direttamente mel_input senza reshape preliminare
     try:
         out_direct = clap_model.clap.audio_encoder(mel_input)
         vec_direct = out_direct[0] if isinstance(out_direct, (tuple, list)) else out_direct
