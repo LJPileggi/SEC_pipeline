@@ -45,8 +45,9 @@ class ConditionalGaussianDiffusion(nn.Module):
         batch_size, _, freq_bins, time_steps = x_cond.shape
         shape = (batch_size, 1, freq_bins, time_steps)
 
-        times = torch.linspace(0, self.timesteps - 1, ddim_steps + 1, device=device).long()
-        time_pairs = list(zip(times[:-1], times[1:]))[::-1]
+        # 🎯 Discesa rigorosa da T-1 (999) fino a 0 esatto
+        times = torch.linspace(self.timesteps - 1, 0, ddim_steps + 1, device=device).long()
+        time_pairs = list(zip(times[:-1], times[1:]))
 
         # Start from standard normal noise in data space
         x_t = torch.randn(shape, device=device)
@@ -57,7 +58,7 @@ class ConditionalGaussianDiffusion(nn.Module):
             eps_hat = torch.nan_to_num(eps_hat, nan=0.0, posinf=10.0, neginf=-10.0)
 
             alpha_bar_curr = self.alphas_bar[t_curr]
-            alpha_bar_prev = self.alphas_bar[t_prev] if t_prev >= 0 else torch.tensor(1.0, device=device)
+            alpha_bar_prev = self.alphas_bar[t_prev] if t_prev > 0 else torch.tensor(1.0, device=device)
 
             sqrt_alpha_curr = torch.sqrt(torch.clamp(alpha_bar_curr, min=1e-8))
             sqrt_one_minus_alpha = torch.sqrt(torch.clamp(1.0 - alpha_bar_curr, min=0.0))
@@ -72,7 +73,10 @@ class ConditionalGaussianDiffusion(nn.Module):
             dir_xt = torch.sqrt(torch.clamp(1.0 - alpha_bar_prev - sigma**2, min=0.0)) * eps_hat
 
             noise = torch.randn_like(x_t) if sigma > 0 else 0.0
-            x_t = torch.sqrt(torch.clamp(alpha_bar_prev, min=0.0)) * pred_x0 + dir_xt + sigma * noise
+            x_t = torch.sqrt(torch.clamp(alpha_bar_prev, min=0.0)) * pred_x0 + dir_xt
+            if sigma > 0:
+                x_t = x_t + sigma * noise
+
             x_t = torch.nan_to_num(x_t, nan=0.0, posinf=20.0, neginf=-20.0)
 
         return torch.clamp(x_t, min=-20.0, max=20.0)
