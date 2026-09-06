@@ -28,7 +28,7 @@ echo "📦 Stage-in: Configurazione ambiente di diagnostica..."
 cp "$CLAP_SCRATCH_WEIGHTS" "$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth" 2>/dev/null
 [ -f "$CLAP_BN0_CONSTANTS" ] && cp "$CLAP_BN0_CONSTANTS" "$TEMP_DIR/work_dir/weights/clap_bn0_constants.npz" 2>/dev/null
 
-# Copia dei dataset HDF5
+# Copia dei file audio HDF5
 cp "$DATASEC_GLOBAL/RAW_DATASET/raw_wav"/*.h5 "$TEMP_DIR/dataSEC/RAW_DATASET/raw_wav/" 2>/dev/null
 
 # Copia del checkpoint epoca 89
@@ -38,6 +38,7 @@ elif [ -d "$MODELS_GLOBAL" ]; then
     cp "$MODELS_GLOBAL"/*.pt "$TEMP_DIR/models/diff_model/" 2>/dev/null
 fi
 
+# Scrittura dello script Python temporaneo
 cat << 'EOF' > "$TEMP_DIR/diagnose_clap_bridge.py"
 import os
 import sys
@@ -100,7 +101,7 @@ except Exception as e:
         raw_audio = hf[first_key][:]
     print(f"📖 Audio di test caricato da: {sample_h5_path}")
 
-# Conversione sicura su tensore
+# Conversione a tensore
 audio_tensor = torch.as_tensor(raw_audio, dtype=torch.float32).flatten()
 
 # Normalizzazione a 7 secondi (48 kHz)
@@ -118,7 +119,6 @@ print("🔍 TEST 1: ESTRAZIONE NATIVA UFFICIALE")
 print("="*65)
 
 with torch.no_grad():
-    # Chiamata nativa diretta senza passare per torchaudio.load
     out_native = clap_model.clap.audio_encoder(audio_tensor)
     vec_official = out_native[0] if isinstance(out_native, (tuple, list)) else out_native
     if isinstance(vec_official, dict):
@@ -129,7 +129,6 @@ with torch.no_grad():
 
     print(f"✅ Embedding nativo estratto. Shape: {emb_official.shape} | L2-norm: {torch.norm(emb_official).item():.4f}")
 
-    # Estrazione Log-Mel nativo per il confronto
     x_stft = htsat.spectrogram_extractor(audio_tensor)
     x_logmel = htsat.logmel_extractor(x_stft)
     x_norm = htsat.bn0(x_logmel.transpose(1, 3)).transpose(1, 3) # Shape: [1, 1, 700, 64]
@@ -140,9 +139,10 @@ print("🔍 TEST 2: FORWARD PATCH DI CLAP SUL MEL NATIVO")
 print("="*65)
 
 with torch.no_grad():
-    mel_input = x_0_pristine.permute(0, 1, 3, 2).to(device) # Shape: [1, 1, 700, 64]
-    
-    # Variante A: Con reshape_wav2img manuale
+    # x_0_pristine ha shape [1, 1, 64, 700] (F=64, T=700)
+    mel_input = x_0_pristine.to(device)
+
+    # Variante A: Con reshape_wav2img su [1, 1, 64, 700]
     x_ready_manual = htsat.reshape_wav2img(mel_input)
     out_manual = clap_model.clap.audio_encoder(x_ready_manual)
     vec_manual = out_manual[0] if isinstance(out_manual, (tuple, list)) else out_manual
@@ -198,11 +198,12 @@ with torch.no_grad():
         x_cond = convert_octave_to_msclap_mel(spec_octave, target_mels=64, target_time=700)
         frac_t = torch.tensor([float(frac)], device=device)
 
+        # mel_rec ha shape [1, 1, 64, 700]
         mel_rec = diffusion.sample_ddim(x_cond, fraction_id=frac_t, ddim_steps=25)
         frob = torch.norm(x_0_pristine - mel_rec, p='fro').item()
 
-        mel_rec_in = mel_rec.permute(0, 1, 3, 2)
-        x_rec_ready = htsat.reshape_wav2img(mel_rec_in)
+        # Iniezione diretta senza permute invertito
+        x_rec_ready = htsat.reshape_wav2img(mel_rec)
         out_rec = clap_model.clap.audio_encoder(x_rec_ready)
         vec_rec = out_rec[0] if isinstance(out_rec, (tuple, list)) else out_rec
         if isinstance(vec_rec, dict):
