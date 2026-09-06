@@ -22,6 +22,7 @@ MODELS_GLOBAL="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.models/d
 mkdir -p "$TEMP_DIR/work_dir/weights"
 mkdir -p "$TEMP_DIR/dataSEC/RAW_DATASET/raw_wav"
 mkdir -p "$TEMP_DIR/models/diff_model"
+mkdir -p "$TEMP_DIR/numba_cache"
 
 echo "📦 Stage-in: Configurazione ambiente di diagnostica..."
 cp "$CLAP_SCRATCH_WEIGHTS" "$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth" 2>/dev/null
@@ -219,6 +220,7 @@ print("🏁 DIAGNOSTICA COMPLETATA")
 print("="*65)
 EOF
 
+export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
 export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/weights/CLAP_weights_2023.pth"
 export LOCAL_CLAP_BN0_CONSTANTS_PATH="/tmp_data/work_dir/weights/clap_bn0_constants.npz"
 export CLAP_TEXT_ENCODER_PATH="$CLAP_TEXT_PATH"
