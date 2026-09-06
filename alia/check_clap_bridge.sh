@@ -71,15 +71,15 @@ import torch.nn.functional as F
 import numpy as np
 import h5py
 
-from src.models import CLAP_initializer, convert_octave_to_msclap_mel, spectrogram_n_octaveband_generator_gpu[cite: 4]
-from src.filterbank_diffusion.models.unet import SpectrogramUNet[cite: 1]
-from src.filterbank_diffusion.models.diffusion import ConditionalGaussianDiffusion[cite: 1]
-from src.filterbank_diffusion.data.dataset import DistributedAudioRAWDataset[cite: 1]
+from src.models import CLAP_initializer, convert_octave_to_msclap_mel, spectrogram_n_octaveband_generator_gpu
+from src.filterbank_diffusion.models.unet import SpectrogramUNet
+from src.filterbank_diffusion.models.diffusion import ConditionalGaussianDiffusion
+from src.filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"🔧 Device selezionato: {device}")
 
-clap_model, _, _ = CLAP_initializer(device=device, use_cuda=True)[cite: 4]
+clap_model, _, _ = CLAP_initializer(device=device, use_cuda=True)
 htsat = clap_model.clap.audio_encoder.base.htsat
 htsat.eval()
 
@@ -176,22 +176,22 @@ pts_sorted = sorted(pts, key=lambda x: int(x.replace("unet_epoch_", "").replace(
 target_ckpt = os.path.join(ckpt_dir, pts_sorted[-1])
 print(f"📦 Checkpoint caricato: {target_ckpt}")
 
-unet = SpectrogramUNet(base_channels=64, emb_dim=256).to(device)[cite: 1]
+unet = SpectrogramUNet(base_channels=64, emb_dim=256).to(device)
 ckpt = torch.load(target_ckpt, map_location=device)
 unet.load_state_dict(ckpt['model_state_dict'])
-diffusion = ConditionalGaussianDiffusion(unet_model=unet, timesteps=1000).to(device)[cite: 1, 3]
+diffusion = ConditionalGaussianDiffusion(unet_model=unet, timesteps=1000).to(device)
 
 with torch.no_grad():
     for frac in [3, 32]:
         spec_octave = spectrogram_n_octaveband_generator_gpu(
             audio_tensor, sampling_rate=sr, n_octave=frac, center_freqs=None, ref=2e-5, device=device
-        )[cite: 4]
+        )
         spec_octave = spec_octave.permute(0, 2, 1)
 
-        x_cond = convert_octave_to_msclap_mel(spec_octave, target_mels=64, target_time=700)[cite: 4]
+        x_cond = convert_octave_to_msclap_mel(spec_octave, target_mels=64, target_time=700)
         frac_t = torch.tensor([float(frac)], device=device)
 
-        mel_rec = diffusion.sample_ddim(x_cond, fraction_id=frac_t, ddim_steps=25)[cite: 3]
+        mel_rec = diffusion.sample_ddim(x_cond, fraction_id=frac_t, ddim_steps=25)
         frob = torch.norm(x_0_pristine - mel_rec, p='fro').item()
 
         mel_rec_htsat = format_for_htsat(mel_rec)
