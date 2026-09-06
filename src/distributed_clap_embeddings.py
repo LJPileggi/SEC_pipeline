@@ -109,6 +109,9 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
 
     diffusion_scheduler = ConditionalGaussianDiffusion(unet_model=diff_unet, timesteps=1000).to(device)
 
+    # 🎯 FIX MULTI-GPU: Garantisce che tutti i moduli interni di CLAP siano su questo device
+    clap_model.clap.to(device)
+
     def flush_batch():
         nonlocal split_emb_dataset_manager, n_embeddings_per_run
         if not batch_audio: return
@@ -139,14 +142,12 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
                 torch.cuda.empty_cache()
             
             # Step 2: CLAP Inference
-            with torch.no_grad():
-                if use_specs:
-                    if INJECT_OCTAVE:
+            if INJECT_OCTAVE:
                         # 0. Orientamento dell'ancora d'ottava calcolata a 52.100 Hz [B, T_blocks, F_octave]
                         octave_spec = specs_gpu.permute(0, 2, 1)
 
                         # 1. Resampling congiunto 2D (F: 64, T: 700) e normalizzazione ufficiale CLAP bn0
-                        x_cond = convert_octave_to_msclap_mel(octave_spec, target_mels=64, target_time=700) # [B, 1, 64, 700][cite: 1]
+                        x_cond = convert_octave_to_msclap_mel(octave_spec, target_mels=64, target_time=700) # [B, 1, 64, 700]
 
                         # 2. Condizionamento della risoluzione d'ottava (es. 1, 3, 12, 32)
                         frac_tensor = torch.full((batch_tensor.shape[0],), fill_value=float(n_octave), device=device)
@@ -157,7 +158,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
                         # 4. TRASPOSIZIONE RIGOROSA PER HTS-AT:
                         # La U-Net produce [B, 1, F=64, T=700]. 
                         # reshape_wav2img richiede tassativamente [B, 1, T <= 1024, F == 64].
-                        mel_input = mel_reconstructed.permute(0, 1, 3, 2).contiguous() # [B, 1, 700, 64]
+                        mel_input = mel_reconstructed.permute(0, 1, 3, 2).contiguous().to(device)
 
                         # Clamping temporale difensivo (garantisce T <= 1024 contro frame eccedenti)
                         if mel_input.shape[2] > 1024:
@@ -165,9 +166,10 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
 
                         # 5. Formattazione patch 2D per lo Swin-Transformer (fa internamente zero-pad da 700 a 1024)
                         htsat_module = clap_model.clap.audio_encoder.base.htsat
-                        x_ready = htsat_module.reshape_wav2img(mel_input) # [B, 1, 256, 256]
+                        x_ready = htsat_module.reshape_wav2img(mel_input).to(device)
 
                         # 6. Forward su CLAP audio_encoder con estrazione robusta dell'embedding multimodale [0]
+                        clap_model.clap.audio_encoder.to(device)
                         out_encoder = clap_model.clap.audio_encoder(x_ready)
                         projected_vec = out_encoder[0] if isinstance(out_encoder, (tuple, list)) else out_encoder
                         if isinstance(projected_vec, dict):
