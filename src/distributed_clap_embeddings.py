@@ -142,7 +142,9 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
                 torch.cuda.empty_cache()
             
             # Step 2: CLAP Inference
-            if INJECT_OCTAVE:
+            with torch.no_grad():
+                if use_specs:
+                    if INJECT_OCTAVE:
                         # 0. Orientamento dell'ancora d'ottava calcolata a 52.100 Hz [B, T_blocks, F_octave]
                         octave_spec = specs_gpu.permute(0, 2, 1)
 
