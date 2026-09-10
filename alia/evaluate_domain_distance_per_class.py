@@ -55,7 +55,7 @@ def calculate_metrics(p_tensor, q_tensor):
     wasserstein = scipy.stats.wasserstein_distance(p_prob, q_prob)
     return frobenius, kl_div, wasserstein
 
-def apply_online_pipeline(raw_audio, sr, cut_secs, hts_at_engine, W_matrix, n_octave):
+def apply_online_pipeline(raw_audio, sr, cut_secs, hts_at_engine, n_octave):
     target_length = sr * cut_secs
     if len(raw_audio) > target_length:
         audio_cut = raw_audio[:target_length]
@@ -65,19 +65,27 @@ def apply_online_pipeline(raw_audio, sr, cut_secs, hts_at_engine, W_matrix, n_oc
     audio_tensor = torch.from_numpy(audio_cut).float().unsqueeze(0)
     
     with torch.no_grad():
+        # 1. Pipeline nativa ufficiale di CLAP: STFT -> LogMel -> bn0
         x_stft = hts_at_engine.spectrogram_extractor(audio_tensor)
         x_native_logmel = hts_at_engine.logmel_extractor(x_stft)
+        # x_native_norm shape: [1, 1, T_native, 64] (per 7s @ 52.1 kHz, T_native = 1140)
         x_native_norm = hts_at_engine.bn0(x_native_logmel.transpose(1, 3)).transpose(1, 3)
         
+        target_time = x_native_norm.shape[2]  # Determina dinamicamente T esatto di CLAP (1140)
+
+        # 2. Generazione spettrogramma ad ottave
         specs_cpu = spectrogram_n_octaveband_generator_gpu(
             audio_tensor, sr, int(n_octave), center_freqs=None, device='cpu'
         )
-        x_injected_norm = convert_octave_to_msclap_mel(specs_cpu)
-        
-        if x_native_norm.shape[2] != x_injected_norm.shape[2]:
-            x_injected_norm = F.interpolate(
-                x_injected_norm, size=(x_native_norm.shape[2], 64), mode='bicubic', align_corners=True
-            )
+        # Orientamento corretto per l'interpolazione: [B, T_blocks, F_octave]
+        specs_cpu = specs_cpu.permute(0, 2, 1)
+
+        # 3. Resampling 2D normalizzato bn0 sul target temporale esatto di CLAP
+        # convert_octave_to_msclap_mel restituisce [B, 1, 64, target_time]
+        x_cond = convert_octave_to_msclap_mel(specs_cpu, target_mels=64, target_time=target_time)
+
+        # 4. Riallineamento degli assi al formato di CLAP [B, 1, T, 64]
+        x_injected_norm = x_cond.permute(0, 1, 3, 2).contiguous()
             
     return x_native_norm, x_injected_norm
 
@@ -92,7 +100,6 @@ def main():
     hts_at_engine.eval()
     
     classes, _, _, _, sr, _, _, _, _, _, _ = get_config_from_yaml(args.config_file)
-    W_matrix = get_octave_to_mel_transition_matrix(int(args.n_octave), sample_rate=sr, device='cpu')
     
     raw_audio_root = os.path.join(
         os.environ.get("BASEDIR", "/leonardo_scratch/large/userexternal/user"),
@@ -126,7 +133,7 @@ def main():
                 track_id = meta_dict.get('track_name', f"{class_name}_tr_{idx}")
                 
                 p_tensor, q_tensor = apply_online_pipeline(
-                    raw_audio, sr, args.cut_secs, hts_at_engine, W_matrix, args.n_octave
+                    raw_audio, sr, args.cut_secs, hts_at_engine, args.n_octave
                 )
                 
                 frob, kl, wass = calculate_metrics(p_tensor, q_tensor)
@@ -136,7 +143,8 @@ def main():
                     'frobenius': frob, 'kl_divergence': kl, 'wasserstein': wass
                 })
                 
-                # 🎯 METANALISI 1: Estrazione residuo assoluto per singolo bin Mel
+                # 🎯 METANALISI 1: Residuo assoluto per singolo bin Mel (aggregato sull'asse temporale dim=2)
+                # Tensori entrambi orientati come [1, 1, Time, 64]
                 absolute_residual = torch.abs(p_tensor - q_tensor)
                 mel_profile = torch.mean(absolute_residual, dim=2).squeeze().cpu().numpy() # [64,]
                 
@@ -149,12 +157,11 @@ def main():
                         'discrepancy': float(val)
                     })
 
-                # 🎯 CONFIGURAZIONE NATIVA (Log-Mel CLAP): Forziamo lo squeeze solo di batch e canale [0, 1]
-                # Portiamo da [1, 1, Time, 64] a [Time, 64] e poi trasponiamo in [64, Time]
+                # 🎯 CONFIGURAZIONE NATIVA (Log-Mel CLAP): Da [1, 1, Time, 64] a [64, Time]
                 spec_2d_native = p_tensor.squeeze(0).squeeze(0).detach().cpu().numpy().T
                 class_time_resolved_specs_native.append(spec_2d_native)
                 
-                # 🎯 CONFIGURAZIONE INIETTATA (Le nostre Ottave): Stessa identica chirurgia geometrica
+                # 🎯 CONFIGURAZIONE INIETTATA: Stessa geometria rigorosamente allineata [64, Time]
                 spec_2d_injected = q_tensor.squeeze(0).squeeze(0).detach().cpu().numpy().T
                 class_time_resolved_specs_injected.append(spec_2d_injected)
 
@@ -172,7 +179,7 @@ def main():
 
     if len(per_audio_results) > 0:
         df = pd.DataFrame(per_audio_results)
-        output_dir = os.path.join(os.getenv("RESULTS_DIR"), "domain_analysis_online")
+        output_dir = os.path.join(os.getenv("RESULTS_DIR", "results"), "domain_analysis_online")
         os.makedirs(output_dir, exist_ok=True)
         
         class_suffix = f"_{args.class_to_process}" if args.class_to_process else ""
@@ -190,7 +197,7 @@ def main():
             np.save(f"{output_dir}/spectral_centroid_native{class_suffix}.npy", mean_native_spec_2d)
             print(f"   • Centroide Spettrale Nativo [64, Time] salvato con successo.")
             
-        # 🎯 CONSOLIDAMENTO CENTROIDE CONFIGURAZIONE INIETTATA (3 OTTAVE)
+        # 🎯 CONSOLIDAMENTO CENTROIDE CONFIGURAZIONE INIETTATA
         if len(class_time_resolved_specs_injected) > 0:
             stacked_injected = np.stack(class_time_resolved_specs_injected, axis=0)
             mean_injected_spec_2d = np.mean(stacked_injected, axis=0) # [64, Time]
