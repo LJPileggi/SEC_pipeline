@@ -65,7 +65,8 @@ import torch.nn.functional as F
 import numpy as np
 import h5py
 
-from src.models import CLAP_initializer, convert_octave_to_msclap_mel, spectrogram_n_octaveband_generator_gpu
+from src.models import CLAP_initializer, convert_octave_to_msclap_mel, \
+    spectrogram_n_octaveband_generator_gpu, extract_clap_embedding_from_reconstructed_mel
 from src.filterbank_diffusion.models.unet import SpectrogramUNet
 from src.filterbank_diffusion.models.diffusion import ConditionalGaussianDiffusion
 from src.filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
@@ -77,7 +78,7 @@ clap_model, _, _ = CLAP_initializer(device=device, use_cuda=True)
 htsat = clap_model.clap.audio_encoder.base.htsat
 htsat.eval()
 
-# Frequenza nativa del dataset
+# Sampling rate nativo del registratore
 sr_dataset = 52100
 
 # Caricamento audio di test
@@ -94,7 +95,7 @@ except Exception as e:
 
 audio_tensor = torch.as_tensor(raw_audio, dtype=torch.float32).flatten()
 
-# Normalizzazione temporale a 7 secondi nativi a 52100 Hz
+# Normalizzazione temporale rigorosa a 7.0 secondi nativi a 52.100 Hz (364.700 campioni)
 target_samples = int(sr_dataset * 7.0)
 if audio_tensor.numel() < target_samples:
     audio_tensor = F.pad(audio_tensor, (0, target_samples - audio_tensor.numel()))
@@ -104,7 +105,7 @@ else:
 audio_tensor = audio_tensor.unsqueeze(0).to(device)
 
 print("\n" + "="*65)
-print("🔍 TEST 1: ESTRAZIONE NATIVA UFFICIALE")
+print("🔍 TEST 1: ESTRAZIONE NATIVA UFFICIALE (Audio Grezzo 7s)")
 print("="*65)
 
 with torch.no_grad():
@@ -122,93 +123,80 @@ with torch.no_grad():
     x_norm = htsat.bn0(x_logmel.transpose(1, 3)).transpose(1, 3)
     
     print(f"✅ Embedding nativo estratto. Shape: {emb_official.shape}")
-    print(f"📐 x_norm post-bn0 shape: {x_norm.shape} (T={x_norm.shape[2]}, F={x_norm.shape[3]})")
+    print(f"📐 x_norm post-bn0 nativo shape: {x_norm.shape} (T={x_norm.shape[2]}, F={x_norm.shape[3]})")
 
 print("\n" + "="*65)
-print("🔍 TEST 2: ALLINEAMENTO IDENTITÀ (Crop T=1024 e Crop T=700)")
+print("🔍 TEST 2: ALLINEAMENTO IDENTITÀ (extract_clap_embedding vs Ufficiale)")
 print("="*65)
 
 with torch.no_grad():
-    # Test 2A: Finestra a 1024 frame
-    x_norm_1024 = x_norm[:, :, :1024, :]
-    x_ready_1024 = htsat.reshape_wav2img(x_norm_1024)
-    out_1024 = clap_model.clap.audio_encoder(x_ready_1024)
-    vec_1024 = out_1024[0] if isinstance(out_1024, (tuple, list)) else out_1024
-    if isinstance(vec_1024, dict):
-        vec_1024 = vec_1024.get('embedding', vec_1024.get('clipwise_output'))
-    if vec_1024.ndim > 2:
-        vec_1024 = vec_1024.squeeze(1)
-    emb_1024 = F.normalize(vec_1024, p=2, dim=-1)
+    # Convertiamo x_norm post-bn0 nel formato di input U-Net: [1, 1, 64, 1140]
+    mel_native_unet_space = x_norm.permute(0, 1, 3, 2).contiguous()
 
-    sim_1024 = F.cosine_similarity(emb_official, emb_1024, dim=-1).item()
-    print(f"🎯 Coseno Nativo Full vs Iniezione Log-Mel Nativo (1024 frame): {sim_1024:.6f}")
+    # Passaggio attraverso extract_clap_embedding_from_reconstructed_mel
+    emb_bridge = extract_clap_embedding_from_reconstructed_mel(
+        mel_reconstructed=mel_native_unet_space,
+        clap_model=clap_model,
+        target_time=1140,
+        device=device
+    )
 
-    # Test 2B: Finestra a 700 frame (la stessa che riceve la U-Net)
-    x_norm_700 = x_norm[:, :, :700, :]
-    x_ready_700 = htsat.reshape_wav2img(x_norm_700)
-    out_700 = clap_model.clap.audio_encoder(x_ready_700)
-    vec_700 = out_700[0] if isinstance(out_700, (tuple, list)) else out_700
-    if isinstance(vec_700, dict):
-        vec_700 = vec_700.get('embedding', vec_700.get('clipwise_output'))
-    if vec_700.ndim > 2:
-        vec_700 = vec_700.squeeze(1)
-    emb_ref_700 = F.normalize(vec_700, p=2, dim=-1)
-
-    sim_700_vs_full = F.cosine_similarity(emb_official, emb_ref_700, dim=-1).item()
-    print(f"🎯 Coseno Nativo Full vs Nativo Troncato a 700 frame:         {sim_700_vs_full:.6f}")
+    sim_identity = F.cosine_similarity(emb_official, emb_bridge, dim=-1).item()
+    print(f"🎯 Coseno Nativo Ufficiale vs Bridge extract_clap_embedding: {sim_identity:.6f}")
+    if abs(sim_identity - 1.0) < 1e-4:
+        print("   🏆 VERIFICA SUPERATA: Il bridging matematico di HTS-AT è identico all'ufficiale!")
+    else:
+        print(f"   ⚠️ ATTENZIONE: Delta di allineamento = {abs(sim_identity - 1.0):.6f}")
 
 print("\n" + "="*65)
-print("🔍 TEST 3: VERIFICA SPETTROGRAMMA RICOSTRUITO (DDIM EPOCA 89)")
+print("🔍 TEST 3: VERIFICA SPETTROGRAMMA RICOSTRUITO DA U-NET")
 print("="*65)
 
 ckpt_dir = "/tmp_data/models/diff_model"
 pts = [f for f in os.listdir(ckpt_dir) if f.endswith(".pt")]
-pts_sorted = sorted(pts, key=lambda x: int(x.replace("unet_epoch_", "").replace(".pt", "")))
-target_ckpt = os.path.join(ckpt_dir, pts_sorted[-1])
-print(f"📦 Checkpoint caricato: {target_ckpt}")
+if not pts:
+    print(f"⚠️ Nessun checkpoint trovato in {ckpt_dir}. Salto il Test 3.")
+else:
+    pts_sorted = sorted(pts, key=lambda x: int(x.replace("unet_epoch_", "").replace(".pt", "")))
+    target_ckpt = os.path.join(ckpt_dir, pts_sorted[-1])
+    print(f"📦 Checkpoint caricato: {target_ckpt}")
 
-unet = SpectrogramUNet(base_channels=64, emb_dim=256).to(device)
-ckpt = torch.load(target_ckpt, map_location=device)
-unet.load_state_dict(ckpt['model_state_dict'])
-diffusion = ConditionalGaussianDiffusion(unet_model=unet, timesteps=1000).to(device)
+    unet = SpectrogramUNet(base_channels=64, emb_dim=256).to(device)
+    ckpt = torch.load(target_ckpt, map_location=device)
+    unet.load_state_dict(ckpt['model_state_dict'])
+    diffusion = ConditionalGaussianDiffusion(unet_model=unet, timesteps=1000).to(device)
 
-# Target reale nello spazio U-Net a 700 frame: [1, 1, 64, 700]
-x_target_unet = x_norm_700.permute(0, 1, 3, 2)
+    # Riferimento per il calcolo della distanza di Frobenius
+    target_time_eval = 1152 if mel_native_unet_space.shape[-1] >= 1152 else mel_native_unet_space.shape[-1]
+    x_target_ref = mel_native_unet_space[:, :, :, :target_time_eval]
 
-with torch.no_grad():
-    for frac in [3, 32]:
-        # Calcolo rigoroso a frequenza nativa di 52100 Hz
-        spec_octave = spectrogram_n_octaveband_generator_gpu(
-            audio_tensor, sampling_rate=sr_dataset, n_octave=frac, center_freqs=None, ref=2e-5, device=device
-        )
-        spec_octave = spec_octave.permute(0, 2, 1)
+    with torch.no_grad():
+        for frac in [3, 32]:
+            spec_octave = spectrogram_n_octaveband_generator_gpu(
+                audio_tensor, sampling_rate=sr_dataset, n_octave=frac, center_freqs=None, ref=2e-5, device=device
+            )
+            spec_octave = spec_octave.permute(0, 2, 1)
 
-        # Resampling 2D normalizzato bn0 (target: [1, 1, 64, 700])
-        x_cond = convert_octave_to_msclap_mel(spec_octave, target_mels=64, target_time=700)
-        frac_t = torch.tensor([float(frac)], device=device)
+            # Resampling 2D normalizzato bn0 sulla nuova griglia da 1152 frame
+            x_cond = convert_octave_to_msclap_mel(spec_octave, target_mels=64, target_time=1152)
+            frac_t = torch.tensor([float(frac)], device=device)
 
-        # Campionamento DDIM (output: [1, 1, 64, 700])
-        mel_rec = diffusion.sample_ddim(x_cond, fraction_id=frac_t, ddim_steps=25)
+            # Campionamento DDIM
+            mel_rec = diffusion.sample_ddim(x_cond, fraction_id=frac_t, ddim_steps=25)
 
-        # Distanza di Frobenius rispetto al target 700
-        frob = torch.norm(x_target_unet - mel_rec, p='fro').item()
+            # Distanza di Frobenius sui frame sovrapposti
+            frob = torch.norm(x_target_ref - mel_rec[:, :, :, :target_time_eval], p='fro').item()
 
-        # TRASPOSIZIONE CORRETTA PER HTS-AT: da [1, 1, 64, 700] a [1, 1, 700, 64]
-        mel_rec_htsat = mel_rec.permute(0, 1, 3, 2)
-        x_rec_ready = htsat.reshape_wav2img(mel_rec_htsat)
+            # Estrazione embedding con la funzione di produzione
+            emb_rec = extract_clap_embedding_from_reconstructed_mel(
+                mel_reconstructed=mel_rec,
+                clap_model=clap_model,
+                target_time=1140,
+                device=device
+            )
 
-        out_rec = clap_model.clap.audio_encoder(x_rec_ready)
-        vec_rec = out_rec[0] if isinstance(out_rec, (tuple, list)) else out_rec
-        if isinstance(vec_rec, dict):
-            vec_rec = vec_rec.get('embedding', vec_rec.get('clipwise_output'))
-        if vec_rec.ndim > 2:
-            vec_rec = vec_rec.squeeze(1)
-        emb_rec = F.normalize(vec_rec, p=2, dim=-1)
-
-        sim_vs_700 = F.cosine_similarity(emb_ref_700, emb_rec, dim=-1).item()
-        sim_vs_full = F.cosine_similarity(emb_official, emb_rec, dim=-1).item()
-
-        print(f"🎯 Frazione 1/{frac:02d} | Frobenius: {frob:6.2f} | Coseno vs Nativo 700: {sim_vs_700:.6f} | Coseno vs Full: {sim_vs_full:.6f}")
+            sim_rec_vs_full = F.cosine_similarity(emb_official, emb_rec, dim=-1).item()
+            print(f"🎯 Frazione 1/{frac:02d} | Frobenius: {frob:6.2f} | Coseno Rec vs Full Nativo: {sim_rec_vs_full:.6f}")
 
 print("\n" + "="*65)
 print("🏁 DIAGNOSTICA COMPLETATA")

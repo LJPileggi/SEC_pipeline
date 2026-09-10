@@ -81,7 +81,7 @@ def main():
             optimizer.zero_grad(set_to_none=True)
             
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                # x_0_pristine and x_cond are both [B, 1, 64, 700] in identical CLAP bn0 space
+                # x_0_pristine and x_cond are both [B, 1, 64, 1152] aligned with CLAP bn0 space
                 x_0_pristine, x_cond = spectral_pipeline(raw_audio, format_id, fraction_id, device=device)
                 
                 t = torch.randint(0, 1000, (x_0_pristine.shape[0],), device=device).long()

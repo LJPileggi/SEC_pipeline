@@ -76,13 +76,22 @@ class OnlineSpectrogramPipeline(nn.Module):
         audio_signal = torch.nan_to_num(audio_signal, nan=0.0, posinf=0.0, neginf=0.0)
         audio_signal = torch.clamp(audio_signal, min=-10.0, max=10.0)
 
-        # 2. Extract clean target Log-Mel (x_0 pristine: [B, 1, 64, 700])
+        # 2. Extract clean target Log-Mel nativo post-bn0 (per 7s a 52.100 Hz ha T=1140)
         with torch.no_grad():
             x_stft = self.htsat.spectrogram_extractor(audio_signal)
             x_native_logmel = self.htsat.logmel_extractor(x_stft)
             x_native_norm = self.htsat.bn0(x_native_logmel.transpose(1, 3)).transpose(1, 3)
         
-        x_0_pristine = x_native_norm.permute(0, 1, 3, 2) # [B, 1, 64, 700]
+        # Trasposizione nel layout convoluzionale U-Net: [B, 1, F=64, T=1140]
+        x_target_native = x_native_norm.permute(0, 1, 3, 2).contiguous()
+
+        # Allineamento a potenza divisibile per 32 per la U-Net a 5 stadi: 1140 -> 1152 (+12 frame di pad)
+        target_time_unet = 1152
+        if x_target_native.shape[-1] < target_time_unet:
+            pad_amount = target_time_unet - x_target_native.shape[-1]
+            x_0_pristine = F.pad(x_target_native, (0, pad_amount), mode='replicate')
+        else:
+            x_0_pristine = x_target_native[:, :, :, :target_time_unet]
 
         # 3. Generate octave-band spectrogram on GPU
         with torch.cuda.amp.autocast(enabled=False):
@@ -98,7 +107,7 @@ class OnlineSpectrogramPipeline(nn.Module):
         
         octave_spec = octave_spec.permute(0, 2, 1) # [B, T_blocks, F_octave]
         
-        # 4. Joint 2D interpolation directly to [B, 1, 64, 700] with CLAP bn0 alignment
-        x_cond = convert_octave_to_msclap_mel(octave_spec, target_mels=64, target_time=x_0_pristine.shape[-1])
+        # 4. Resampling 2D normalizzato direttamente alla griglia U-Net [B, 1, 64, 1152]
+        x_cond = convert_octave_to_msclap_mel(octave_spec, target_mels=64, target_time=target_time_unet)
 
         return x_0_pristine, x_cond

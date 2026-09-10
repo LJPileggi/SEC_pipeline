@@ -57,10 +57,12 @@ class SpectrogramUNet(nn.Module):
     """
     5-level Conditional U-Net for spectrogram restoration.
     Inputs:
-      - x_t: [B, 1, 64, 700] (noisy latent)
+      - x_t: [B, 1, 64, 1152] (noisy latent)
       - t: [B] (diffusion timestep)
-      - x_cond: [B, 1, 64, 700] (low-res condition)
+      - x_cond: [B, 1, 64, 1152] (low-res condition)
       - fraction_id: [B] or float (octave resolution factor, e.g. 1, 3, 12, 32)
+    Outputs:
+      - epsilon: [B, 1, 64, 1152] (predicted noise)
     """
     def __init__(self, base_channels=64, emb_dim=256):
         super().__init__()
@@ -84,7 +86,7 @@ class SpectrogramUNet(nn.Module):
         # 2-channel input: [x_t, x_cond] concatenated along channels
         self.inc = AsymmetricConvBlock(2, c[0], emb_dim)
 
-        # Downsampling path
+        # Downsampling path (5 stadi: 64x1152 -> 32x576 -> 16x288 -> 8x144 -> 4x72 -> 2x36)
         self.down_conv1 = nn.Conv2d(c[0], c[0], kernel_size=3, stride=(2, 2), padding=1)
         self.down1_block = AsymmetricConvBlock(c[0], c[1], emb_dim)
 
@@ -100,7 +102,7 @@ class SpectrogramUNet(nn.Module):
         self.down_conv5 = nn.Conv2d(c[4], c[4], kernel_size=3, stride=(2, 2), padding=1)
         self.down5_block = AsymmetricConvBlock(c[4], c[4], emb_dim)
 
-        # Bottleneck (2x21)
+        # Bottleneck (2x36)
         self.mid1 = AsymmetricConvBlock(c[4], c[4], emb_dim)
         self.mid2 = AsymmetricConvBlock(c[4], c[4], emb_dim)
 
@@ -147,11 +149,11 @@ class SpectrogramUNet(nn.Module):
         h4 = self.down4_block(self.down_conv4(h3), fused_emb)
         h5 = self.down5_block(self.down_conv5(h4), fused_emb)
 
-        # Bottleneck
+        # Bottleneck (feature map: 2 x 36)
         h_mid = self.mid1(h5, fused_emb)
         h_mid = self.mid2(h_mid, fused_emb)
 
-        # Decoder
+        # Decoder (upsampling con risoluzioni esatte: 4x72, 8x144, 16x288, 32x576, 64x1152)
         u4 = self.up4(h_mid)
         if u4.shape[-2:] != h4.shape[-2:]:
             u4 = F.interpolate(u4, size=h4.shape[-2:], mode='bilinear', align_corners=False)

@@ -16,7 +16,7 @@ import json
 
 from .models import CLAP_initializer, spectrogram_n_octaveband_generator, \
     spectrogram_n_octaveband_generator_gpu, convert_octave_to_msclap_mel, \
-    spectrogram_to_audio_batch
+    spectrogram_to_audio_batch, extract_clap_embedding_from_reconstructed_mel
 from .utils import *
 from .dirs_config import *
 from .filterbank_diffusion.models.unet import SpectrogramUNet
@@ -145,44 +145,25 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
             with torch.no_grad():
                 if use_specs:
                     if INJECT_OCTAVE:
-                        # 0. Orientamento dell'ancora d'ottava calcolata a 52.100 Hz [B, T_blocks, F_octave]
+                        # 0. Orient octave representation calculated at 52.1 kHz [B, T_blocks, F_octave]
                         octave_spec = specs_gpu.permute(0, 2, 1)
 
-                        # 1. Resampling congiunto 2D (F: 64, T: 700) e normalizzazione ufficiale CLAP bn0
-                        x_cond = convert_octave_to_msclap_mel(octave_spec, target_mels=64, target_time=700) # [B, 1, 64, 700]
+                        # 1. 2D Bilinear Resampling to U-Net grid (F: 64, T: 1152) with CLAP bn0 normalization
+                        x_cond = convert_octave_to_msclap_mel(octave_spec, target_mels=64, target_time=1152)
 
-                        # 2. Condizionamento della risoluzione d'ottava (es. 1, 3, 12, 32)
+                        # 2. Conditioning resolution tensor
                         frac_tensor = torch.full((batch_tensor.shape[0],), fill_value=float(n_octave), device=device)
 
-                        # 3. DDIM Sampling condizionato: ricostruzione x_0 nello spazio U-Net [B, 1, 64, 700]
+                        # 3. DDIM Sampling conditioned on octave guide [B, 1, 64, 1152]
                         mel_reconstructed = diffusion_scheduler.sample_ddim(x_cond, fraction_id=frac_tensor, ddim_steps=25)
 
-                        # 4. TRASPOSIZIONE RIGOROSA PER HTS-AT:
-                        # La U-Net produce [B, 1, F=64, T=700]. 
-                        # reshape_wav2img richiede tassativamente [B, 1, T <= 1024, F == 64].
-                        mel_input = mel_reconstructed.permute(0, 1, 3, 2).contiguous().to(device)
-
-                        # Clamping temporale difensivo (garantisce T <= 1024 contro frame eccedenti)
-                        if mel_input.shape[2] > 1024:
-                            mel_input = mel_input[:, :, :1024, :]
-
-                        # 5. Formattazione patch 2D per lo Swin-Transformer (fa internamente zero-pad da 700 a 1024)
-                        htsat_module = clap_model.clap.audio_encoder.base.htsat
-                        x_ready = htsat_module.reshape_wav2img(mel_input).to(device)
-
-                        # 6. Forward su CLAP audio_encoder con estrazione robusta dell'embedding multimodale [0]
-                        clap_model.clap.audio_encoder.to(device)
-                        out_encoder = clap_model.clap.audio_encoder(x_ready)
-                        projected_vec = out_encoder[0] if isinstance(out_encoder, (tuple, list)) else out_encoder
-                        if isinstance(projected_vec, dict):
-                            projected_vec = projected_vec.get('embedding', projected_vec.get('clipwise_output'))
-
-                        # Squeeze protettivo di eventuali dimensioni dummy: [B, 1024]
-                        if projected_vec.ndim > 2:
-                            projected_vec = projected_vec.squeeze(1)
-
-                        # 7. Normalizzazione L2 nello spazio ipersferico di CLAP
-                        embeddings = F.normalize(projected_vec, p=2, dim=-1)
+                        # 4. Deterministic CLAP sliding-window feature extraction & L2 hypersphere normalization
+                        embeddings = extract_clap_embedding_from_reconstructed_mel(
+                            mel_reconstructed=mel_reconstructed,
+                            clap_model=clap_model,
+                            target_time=1140,
+                            device=device
+                        )
 
                     else:
                         clap_model.clap.audio_encoder.to(device)

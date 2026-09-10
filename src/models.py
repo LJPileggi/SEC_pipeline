@@ -366,6 +366,67 @@ def convert_octave_to_msclap_mel(spectrogram_gpu, target_mels=64, target_time=70
     # 5. Permute to standard PyTorch format [B, 1, F, T] = [B, 1, 64, 700]
     return x_norm.permute(0, 1, 3, 2)
 
+def extract_clap_embedding_from_reconstructed_mel(mel_reconstructed, clap_model, target_time=1140, device=None):
+    """
+    Extracts L2-normalized CLAP audio embeddings directly from U-Net reconstructed Mel-spectrograms.
+    Inputs:
+      - mel_reconstructed: Tensor of shape [B, 1, 64, T_unet] (e.g. T_unet=1152)
+      - clap_model: Initialized MS-CLAP model wrapper
+      - target_time: Exact temporal frames corresponding to raw audio duration (default: 1140 for 7s @ 52.1 kHz)
+      - device: Target compute device (defaults to mel_reconstructed.device)
+    Returns:
+      - embeddings: L2-normalized multimodal audio embeddings of shape [B, 1024]
+    """
+    if device is None:
+        device = mel_reconstructed.device
+
+    # Ensure CLAP submodules are mapped to the target device
+    clap_model.clap.to(device)
+    htsat = clap_model.clap.audio_encoder.base.htsat
+    htsat.eval()
+
+    # 1. Temporal slicing and spatial axis alignment: [B, 1, 64, T_unet] -> [B, 1, target_time, 64]
+    x_mel = mel_reconstructed[:, :, :, :target_time]
+    x = x_mel.permute(0, 1, 3, 2).contiguous().to(device)
+
+    frame_num = x.shape[2]
+
+    # 2. Regime A: Audio clips with frame count <= 1024 (e.g., <= 6.28s)
+    if frame_num <= htsat.freq_ratio * htsat.spec_size:
+        x_img = htsat.reshape_wav2img(x)  # Temporal zero-padding up to 1024 -> [B, 1, 256, 256]
+        output_dict = htsat.forward_features(x_img)
+        latent_output = output_dict['latent_output']
+
+    # 3. Regime B: Native 7.0s audio clips (frame_num = 1140 > 1024)
+    # Replicates MS-CLAP native sliding-window inference with exact averaging
+    else:
+        crop_size = 689
+        overlap_size = 344
+        output_dicts = []
+
+        for cur_pos in range(0, frame_num - crop_size - 1, overlap_size):
+            tx = htsat.crop_wav(x, crop_size=crop_size, spe_pos=cur_pos)
+            tx_img = htsat.reshape_wav2img(tx)  # [B, 1, 256, 256]
+            output_dicts.append(htsat.forward_features(tx_img))
+
+        latent_output = torch.zeros_like(output_dicts[0]["latent_output"]).float().to(device)
+        for d in output_dicts:
+            latent_output += d["latent_output"]
+        latent_output = latent_output / len(output_dicts)
+
+    # 4. Multimodal projection layer
+    audio_encoder = clap_model.clap.audio_encoder
+    if hasattr(audio_encoder, 'projection') and audio_encoder.projection is not None:
+        projected_vec = audio_encoder.projection(latent_output)
+    else:
+        projected_vec = latent_output
+
+    if projected_vec.ndim > 2:
+        projected_vec = projected_vec.squeeze(1)
+
+    # 5. L2 normalization on the unit hypersphere [B, 1024]
+    return F.normalize(projected_vec, p=2, dim=-1)
+
 def reshape_spectrogram(spectrogram_gpu, target_dim=64):
     """
     Converts octave spectrogram to a target spectral resolution using bilinear 

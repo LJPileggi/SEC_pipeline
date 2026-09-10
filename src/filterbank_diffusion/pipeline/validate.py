@@ -19,7 +19,7 @@ from src.filterbank_diffusion.models.diffusion import ConditionalGaussianDiffusi
 from src.filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
 from src.filterbank_diffusion.pipeline.spectral import OnlineSpectrogramPipeline
 
-TRAIN_EPOCHS = 90
+TRAIN_EPOCHS = 125
 
 def calculate_distribution_metrics(p_tensor, q_tensor):
     p_clean = torch.nan_to_num(p_tensor, nan=0.0, posinf=0.0, neginf=0.0)
@@ -167,7 +167,7 @@ def main():
                 
                 x_0_pristine, x_cond = spectral_pipeline(raw_audio, format_id=1, fraction_id=fraction, device=device)
                 
-                # Direct DDIM sampling of x_0 conditioned on x_cond
+                # Direct DDIM sampling of x_0 [B, 1, 64, 1152] conditioned on x_cond
                 x_reconstructed = diffusion_scheduler.sample_ddim(x_cond, fraction_id=frac_tensor, ddim_steps=ddim_steps)
                 
                 x_0_clean = torch.nan_to_num(x_0_pristine, nan=0.0, posinf=0.0, neginf=0.0)
