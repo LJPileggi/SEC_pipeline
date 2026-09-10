@@ -2,9 +2,9 @@
 #SBATCH --job-name=inspect_clap
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=2
-#SBATCH --time=00:05:00
-#SBATCH --mem=16G
+#SBATCH --cpus-per-task=4
+#SBATCH --time=00:08:00
+#SBATCH --mem=32G
 #SBATCH --gres=gpu:1
 #SBATCH -p boost_usr_prod
 #SBATCH -A IscrC_BrISkite_0
@@ -14,12 +14,15 @@
 TEMP_DIR="/leonardo_scratch/large/userexternal/$USER/tmp_inspect_$SLURM_JOB_ID"
 SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/clap_pipeline.sif"
 CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
-CLAP_TEXT_PATH="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/text_encoder"
+ROBERTA_PATH="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/roberta-base"
 
 mkdir -p "$TEMP_DIR/weights"
+mkdir -p "$TEMP_DIR/roberta-base"
 mkdir -p "$TEMP_DIR/numba_cache"
 
+echo "📦 Stage-in: Pesi CLAP e RoBERTa..."
 cp "$CLAP_SCRATCH_WEIGHTS" "$TEMP_DIR/weights/CLAP_weights_2023.pth" 2>/dev/null
+cp -r "$ROBERTA_PATH/." "$TEMP_DIR/roberta-base/" 2>/dev/null
 
 cat << 'EOF' > "$TEMP_DIR/run_inspect.py"
 import os
@@ -32,22 +35,25 @@ sys.path.insert(0, "/app")
 
 import inspect
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 
 import huggingface_hub
 import transformers
 import msclap
 
-# 1. Bypass offline del caricamento pesi HuggingFace
 def universal_path_redirect(*args, **kwargs):
     weights_path = os.getenv("LOCAL_CLAP_WEIGHTS_PATH")
     text_path = os.getenv("CLAP_TEXT_ENCODER_PATH")
+
     if any(x for x in args if 'msclap' in str(x)) or 'CLAP_weights' in str(kwargs):
         return weights_path
+
     filename = kwargs.get('filename') or (args[1] if len(args) > 1 else None)
-    if filename and text_path and os.path.exists(os.path.join(text_path, str(filename))):
-        return os.path.join(text_path, str(filename))
+    if filename and text_path:
+        target = os.path.join(text_path, str(filename))
+        if os.path.exists(target):
+            return target
+
     return text_path
 
 huggingface_hub.hf_hub_download = universal_path_redirect
@@ -55,33 +61,16 @@ transformers.utils.hub.cached_file = universal_path_redirect
 transformers.utils.hub.hf_hub_download = universal_path_redirect
 msclap.CLAPWrapper.hf_hub_download = universal_path_redirect
 
-# Se il text encoder non ha i pesi scaricati offline, facciamo un dummy mock per consentire a CLAP(...) di istanziarsi
-try:
-    orig_from_pretrained = transformers.AutoModel.from_pretrained
-    def safe_from_pretrained(*args, **kwargs):
-        try:
-            return orig_from_pretrained(*args, **kwargs)
-        except Exception:
-            class DummyTextModel(nn.Module):
-                def __init__(self):
-                    super().__init__()
-                    self.config = type('cfg', (), {'hidden_size': 768})()
-                def forward(self, *a, **k):
-                    return type('out', (), {'last_hidden_state': torch.zeros(1, 10, 768)})()
-            return DummyTextModel()
-    transformers.AutoModel.from_pretrained = safe_from_pretrained
-except Exception:
-    pass
-
-from msclap import CLAP
+from src.models import CLAP_initializer
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-print(f"Dispositivo: {device}")
+print(f"🔧 Device selezionato: {device}")
 
-# Inizializzazione CLAP standard pura nativa
-clap_model = CLAP(version='2023', use_cuda=torch.cuda.is_available())
+# Inizializzazione ufficiale della pipeline del progetto (con RoBERTa)
+clap_model, _, _ = CLAP_initializer(device=device, use_cuda=True)
 clap_model.clap.to(device)
 htsat = clap_model.clap.audio_encoder.base.htsat
+htsat.eval()
 
 print("\n" + "="*70)
 print("1. SORGENTE NATIVO DI HTSAT.forward")
@@ -112,12 +101,10 @@ def make_hook(name):
         shapes_log.append(f"   ↳ [{name}] In: {in_shape} -> Out: {out_shape}")
     return hook
 
-# Hook per i moduli PyTorch
 htsat.spectrogram_extractor.register_forward_hook(make_hook("spectrogram_extractor"))
 htsat.logmel_extractor.register_forward_hook(make_hook("logmel_extractor"))
 htsat.bn0.register_forward_hook(make_hook("bn0"))
 
-# Wrapping manuale per reshape_wav2img (è un metodo python nativo, non un nn.Module)
 orig_reshape = htsat.reshape_wav2img
 def wrapped_reshape(x):
     in_s = x.shape
@@ -153,10 +140,12 @@ for d in durations:
 print("\n" + "="*70)
 EOF
 
-export LOCAL_CLAP_WEIGHTS_PATH="$TEMP_DIR/weights/CLAP_weights_2023.pth"
-export CLAP_TEXT_ENCODER_PATH="$CLAP_TEXT_PATH"
-export NUMBA_CACHE_DIR="$TEMP_DIR/numba_cache"
+export HF_HUB_OFFLINE=1
+export CLAP_TEXT_ENCODER_PATH="/tmp_data/roberta-base"
+export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/weights/CLAP_weights_2023.pth"
+export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
 
+echo "🚀 Esecuzione test dimensioni..."
 singularity exec --nv --no-home \
     --bind "/leonardo_scratch:/leonardo_scratch" \
     --bind "$TEMP_DIR:/tmp_data" \
