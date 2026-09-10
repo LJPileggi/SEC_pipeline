@@ -17,16 +17,23 @@ CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.c
 CLAP_TEXT_PATH="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/text_encoder"
 
 mkdir -p "$TEMP_DIR/weights"
+mkdir -p "$TEMP_DIR/numba_cache"
+
 cp "$CLAP_SCRATCH_WEIGHTS" "$TEMP_DIR/weights/CLAP_weights_2023.pth" 2>/dev/null
 
 cat << 'EOF' > "$TEMP_DIR/run_inspect.py"
 import os
 import sys
+
+# Imposta la cache scrivibile prima di qualsiasi import di librerie audio
+os.environ["NUMBA_CACHE_DIR"] = "/tmp_data/numba_cache"
+os.environ["MPLCONFIGDIR"] = "/tmp_data/numba_cache"
+
+sys.path.insert(0, "/app")
+
 import inspect
 import torch
 import torch.nn.functional as F
-
-sys.path.insert(0, "/app")
 
 import huggingface_hub
 import transformers
@@ -118,12 +125,13 @@ EOF
 
 export LOCAL_CLAP_WEIGHTS_PATH="$TEMP_DIR/weights/CLAP_weights_2023.pth"
 export CLAP_TEXT_ENCODER_PATH="$CLAP_TEXT_PATH"
+export NUMBA_CACHE_DIR="$TEMP_DIR/numba_cache"
 
 singularity exec --nv --no-home \
     --bind "/leonardo_scratch:/leonardo_scratch" \
-    --bind "$TEMP_DIR:$TEMP_DIR" \
+    --bind "$TEMP_DIR:/tmp_data" \
     --bind "$(pwd):/app" --pwd "/app" \
     "$SIF_FILE" \
-    python3 "$TEMP_DIR/run_inspect.py"
+    python3 /tmp_data/run_inspect.py
 
 rm -rf "$TEMP_DIR"
