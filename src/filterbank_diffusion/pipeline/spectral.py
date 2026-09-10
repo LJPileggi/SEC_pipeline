@@ -89,7 +89,8 @@ class OnlineSpectrogramPipeline(nn.Module):
         target_time_unet = 1152
         if x_target_native.shape[-1] < target_time_unet:
             pad_amount = target_time_unet - x_target_native.shape[-1]
-            x_0_pristine = F.pad(x_target_native, (0, pad_amount), mode='replicate')
+            # Padding a zero costante sui 12 frame temporali finali (dimensione 4D supportata)
+            x_0_pristine = F.pad(x_target_native, (0, pad_amount, 0, 0), mode='constant', value=0.0)
         else:
             x_0_pristine = x_target_native[:, :, :, :target_time_unet]
 
