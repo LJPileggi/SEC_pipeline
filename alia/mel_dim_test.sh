@@ -14,18 +14,19 @@
 TEMP_DIR="/leonardo_scratch/large/userexternal/$USER/tmp_inspect_$SLURM_JOB_ID"
 SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/clap_pipeline.sif"
 CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
+CLAP_BN0_CONSTANTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/clap_bn0_constants.npz"
 CLAP_TEXT_PATH="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/text_encoder"
 
 mkdir -p "$TEMP_DIR/weights"
 mkdir -p "$TEMP_DIR/numba_cache"
 
 cp "$CLAP_SCRATCH_WEIGHTS" "$TEMP_DIR/weights/CLAP_weights_2023.pth" 2>/dev/null
+[ -f "$CLAP_BN0_CONSTANTS" ] && cp "$CLAP_BN0_CONSTANTS" "$TEMP_DIR/weights/clap_bn0_constants.npz" 2>/dev/null
 
 cat << 'EOF' > "$TEMP_DIR/run_inspect.py"
 import os
 import sys
 
-# Imposta la cache scrivibile prima di qualsiasi import di librerie audio
 os.environ["NUMBA_CACHE_DIR"] = "/tmp_data/numba_cache"
 os.environ["MPLCONFIGDIR"] = "/tmp_data/numba_cache"
 
@@ -33,7 +34,6 @@ sys.path.insert(0, "/app")
 
 import inspect
 import torch
-import torch.nn.functional as F
 
 import huggingface_hub
 import transformers
@@ -54,15 +54,15 @@ transformers.utils.hub.cached_file = universal_path_redirect
 transformers.utils.hub.hf_hub_download = universal_path_redirect
 msclap.CLAPWrapper.hf_hub_download = universal_path_redirect
 
-from msclap import CLAP
+from src.models import CLAP_initializer
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-print(f"Dispositivo: {device}")
+print(f"🔧 Device selezionato: {device}")
 
-# Inizializzazione CLAP standard pura (nessun monkey patch)
-clap_model = CLAP(version='2023', use_cuda=torch.cuda.is_available())
+clap_model, _, _ = CLAP_initializer(device=device, use_cuda=True)
 clap_model.clap.to(device)
 htsat = clap_model.clap.audio_encoder.base.htsat
+htsat.eval()
 
 print("\n" + "="*70)
 print("1. SORGENTE NATIVO DI HTSAT.forward")
@@ -73,15 +73,7 @@ except Exception as e:
     print(f"Errore ispezione htsat.forward: {e}")
 
 print("\n" + "="*70)
-print("2. SORGENTE NATIVO DI AudioEncoder.base.forward")
-print("="*70)
-try:
-    print(inspect.getsource(clap_model.clap.audio_encoder.base.forward))
-except Exception as e:
-    print(f"Errore ispezione base.forward: {e}")
-
-print("\n" + "="*70)
-print("3. TRACCIAMENTO HOOK SULLE FORME DEI TENSORI (SR = 52.100 Hz)")
+print("2. TRACCIAMENTO FORME DEI TENSORI CON AUDIO GREZZO (SR = 52.100 Hz)")
 print("="*70)
 
 shapes_log = []
@@ -112,7 +104,9 @@ for d in durations:
         emb = out[0] if isinstance(out, (tuple, list)) else out
         if isinstance(emb, dict):
             emb = emb.get('embedding', emb.get('clipwise_output'))
-        print(f"   ✅ Forward riuscito! Embedding: {emb.shape}")
+        if emb.ndim > 2:
+            emb = emb.squeeze(1)
+        print(f"   ✅ Forward riuscito! Embedding shape: {emb.shape}")
         for line in shapes_log:
             print(line)
     except Exception as e:
@@ -124,6 +118,7 @@ print("\n" + "="*70)
 EOF
 
 export LOCAL_CLAP_WEIGHTS_PATH="$TEMP_DIR/weights/CLAP_weights_2023.pth"
+export LOCAL_CLAP_BN0_CONSTANTS_PATH="$TEMP_DIR/weights/clap_bn0_constants.npz"
 export CLAP_TEXT_ENCODER_PATH="$CLAP_TEXT_PATH"
 export NUMBA_CACHE_DIR="$TEMP_DIR/numba_cache"
 
