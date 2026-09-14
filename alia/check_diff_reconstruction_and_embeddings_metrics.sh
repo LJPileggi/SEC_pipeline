@@ -1,9 +1,9 @@
 #!/bin/bash
-#SBATCH --job-name=eval_metrics_all
+#SBATCH --job-name=eval_heatmaps
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --time=00:35:00
+#SBATCH --time=00:40:00
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
 #SBATCH -p boost_usr_prod
@@ -31,17 +31,20 @@ echo "📦 Setup directory e pesi..."
 cp "$CLAP_SCRATCH_WEIGHTS" "$TEMP_DIR/weights/CLAP_weights_2023.pth" 2>/dev/null
 [ -f "$CLAP_BN0_CONSTANTS" ] && cp "$CLAP_BN0_CONSTANTS" "$TEMP_DIR/weights/clap_bn0_constants.npz" 2>/dev/null
 cp -r "$ROBERTA_PATH/." "$TEMP_DIR/roberta-base/" 2>/dev/null
-
-# Assicura copia ricorsiva/completa di TUTTI i file h5 raw
 cp -r "$DATASEC_GLOBAL/RAW_DATASET/raw_wav"/*.h5 "$TEMP_DIR/data/" 2>/dev/null
 cp "$MODELS_GLOBAL"/*.pt "$TEMP_DIR/models/" 2>/dev/null
 
 # ==============================================================================
-# SCRIPT 1: METRICHE SPETTRALI CON TUTTE LE CLASSI GARANTITE
+# SCRIPT 1: METRICHE SPETTRALI PER CLASSE + HEATMAP MATPLOTLIB
 # ==============================================================================
 cat << 'EOF' > "$TEMP_DIR/eval_spectral_per_class.py"
 import os
 import sys
+
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
@@ -78,7 +81,6 @@ unet.load_state_dict(ckpt['model_state_dict'])
 diffusion_scheduler = ConditionalGaussianDiffusion(unet_model=unet, timesteps=1000).to(device)
 
 raw_dataset_root = "/tmp_data/data"
-# Campionamento bilanciato su tutte le classi presenti
 test_dataset = DistributedAudioRAWDataset(base_dir=raw_dataset_root, split="test", target_samples_per_class=30)
 test_dataloader = DataLoader(test_dataset, batch_size=16, shuffle=False, num_workers=2)
 
@@ -138,14 +140,12 @@ with torch.no_grad():
                 rec_centroids[c_name].append(x_rec_clean[b].squeeze().cpu().numpy())
 
 df = pd.DataFrame(records)
-
-# 🎯 BLINDATURA: forziamo l'inclusione di TUTTE le classi anche se senza campioni
 class_summary = df.groupby('class')[['frobenius', 'kl_divergence', 'wasserstein']].agg(['mean', 'std'])
 class_summary = class_summary.reindex(classes_list)
 class_summary.to_csv(os.path.join(out_dir, "spectral_metrics_per_class.csv"))
 print("\n" + class_summary.to_string())
 
-# 🎯 MATRICI DI DISTANZA CENTROIDI SULL'INTERO SET DI CLASSI
+# MATRICI DI DISTANZA CENTROIDI
 n_cls = len(classes_list)
 frob_matrix = np.full((n_cls, n_cls), np.nan)
 wass_matrix = np.full((n_cls, n_cls), np.nan)
@@ -173,19 +173,66 @@ df_frob_mat.to_csv(os.path.join(out_dir, "centroid_frobenius_distance_matrix.csv
 df_wass_mat = pd.DataFrame(wass_matrix, index=classes_list, columns=classes_list)
 df_wass_mat.to_csv(os.path.join(out_dir, "centroid_wasserstein_distance_matrix.csv"))
 
-print("\n" + "="*80)
-print("🎯 MATRICE DISTANZA DI FROBENIUS (Righe: Ricostruiti | Colonne: Nativi)")
-print("="*80)
-print(df_frob_mat.to_string())
+# FUNZIONE PLOT HEATMAP NATIVA MATPLOTLIB
+def plot_matrix_heatmap(mat, labels, title, save_path, cmap="viridis", fmt="{:.1f}"):
+    fig, ax = plt.subplots(figsize=(12, 10))
+    im = ax.imshow(mat, cmap=cmap, aspect='auto')
+
+    cbar = ax.figure.colorbar(im, ax=ax)
+    cbar.ax.tick_params(labelsize=10)
+
+    ax.set_xticks(np.arange(len(labels)))
+    ax.set_yticks(np.arange(len(labels)))
+    ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=9)
+    ax.set_yticklabels(labels, fontsize=9)
+
+    ax.set_xlabel("Classi Native", fontsize=12, fontweight='bold', labelpad=10)
+    ax.set_ylabel("Classi Ricostruite (DDIM)", fontsize=12, fontweight='bold', labelpad=10)
+    ax.set_title(title, fontsize=14, fontweight='bold', pad=15)
+
+    # Annotazioni numeriche all'interno delle celle
+    valid_vals = mat[~np.isnan(mat)]
+    thresh = (np.nanmax(valid_vals) + np.nanmin(valid_vals)) / 2.0 if len(valid_vals) > 0 else 0
+    for i in range(len(labels)):
+        for j in range(len(labels)):
+            val = mat[i, j]
+            if not np.isnan(val):
+                text_color = "white" if val < thresh else "black"
+                ax.text(j, i, fmt.format(val), ha="center", va="center", color=text_color, fontsize=7)
+
+    fig.tight_layout()
+    plt.savefig(save_path, dpi=300)
+    plt.close(fig)
+    print(f"🖼️ Heatmap salvata con successo in: {save_path}")
+
+plot_matrix_heatmap(
+    frob_matrix, classes_list, 
+    "Matrice di Confusione Geometrica: Distanza di Frobenius tra Centroidi",
+    os.path.join(out_dir, "centroid_frobenius_heatmap.png"),
+    cmap="magma_r", fmt="{:.1f}"
+)
+
+plot_matrix_heatmap(
+    wass_matrix, classes_list, 
+    "Matrice di Confusione Spettrale: Distanza 1D Wasserstein tra Profili",
+    os.path.join(out_dir, "centroid_wasserstein_heatmap.png"),
+    cmap="viridis_r", fmt="{:.3f}"
+)
+
 test_dataset.close()
 EOF
 
 # ==============================================================================
-# SCRIPT 2: COSINE SIMILARITY CON TUTTE LE CLASSI GARANTITE
+# SCRIPT 2: COSINE SIMILARITY EMBEDDINGS HDF5 + HEATMAP DI SEPARABILITÀ
 # ==============================================================================
 cat << 'EOF' > "$TEMP_DIR/eval_hdf5_cosine_similarity.py"
 import os
 import sys
+
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
 import h5py
 import torch
 import torch.nn.functional as F
@@ -258,20 +305,65 @@ df_pairs = pd.DataFrame({
 })
 df_pairs.to_csv(os.path.join(out_dir, "pairwise_embedding_similarities.csv"), index=False)
 
-# 🎯 BLINDATURA: forziamo la tabella con tutte le classi di config0.yaml
 cls_stats = df_pairs.groupby('class')['cosine_similarity'].agg(['count', 'mean', 'std', 'min', 'max'])
 cls_stats = cls_stats.reindex(classes_list)
 cls_stats.to_csv(os.path.join(out_dir, "cosine_similarity_per_class.csv"))
-print("\n📊 COSINE SIMILARITY PER CLASSE (Tutte le classi garantite):")
+print("\n📊 COSINE SIMILARITY PER CLASSE:")
 print(cls_stats.to_string())
 
-# 🎯 MARGINI DI SEPARABILITÀ PER TUTTE LE CLASSI
+# CENTROIDI LATENTI E MATRICE DI SIMILARITÀ N x N
 raw_centroids = {}
+oct_centroids = {}
 for c in classes_list:
     mask = [cls == c for cls in paired_classes]
     if any(mask):
         raw_centroids[c] = F.normalize(t_raw[mask].mean(dim=0, keepdim=True), p=2, dim=-1)
+        oct_centroids[c] = F.normalize(t_oct[mask].mean(dim=0, keepdim=True), p=2, dim=-1)
 
+n_cls = len(classes_list)
+cos_matrix = np.full((n_cls, n_cls), np.nan)
+
+for i, c_rec in enumerate(classes_list):
+    if c_rec not in oct_centroids:
+        continue
+    for j, c_nat in enumerate(classes_list):
+        if c_nat not in raw_centroids:
+            continue
+        cos_matrix[i, j] = F.cosine_similarity(oct_centroids[c_rec], raw_centroids[c_nat], dim=-1).item()
+
+df_cos_mat = pd.DataFrame(cos_matrix, index=classes_list, columns=classes_list)
+df_cos_mat.to_csv(os.path.join(out_dir, "embedding_cosine_similarity_matrix.csv"))
+
+# HEATMAP MATPLOTLIB COSINE SIMILARITY
+fig, ax = plt.subplots(figsize=(12, 10))
+im = ax.imshow(cos_matrix, cmap='coolwarm', vmin=-1.0, vmax=1.0, aspect='auto')
+
+cbar = ax.figure.colorbar(im, ax=ax)
+cbar.ax.tick_params(labelsize=10)
+
+ax.set_xticks(np.arange(n_cls))
+ax.set_yticks(np.arange(n_cls))
+ax.set_xticklabels(classes_list, rotation=45, ha="right", fontsize=9)
+ax.set_yticklabels(classes_list, fontsize=9)
+
+ax.set_xlabel("Centroidi CLAP Nativi", fontsize=12, fontweight='bold', labelpad=10)
+ax.set_ylabel("Centroidi CLAP Ricostruiti", fontsize=12, fontweight='bold', labelpad=10)
+ax.set_title("Matrice di Similarità Coseno tra Centroidi Latenti (CLAP Space)", fontsize=14, fontweight='bold', pad=15)
+
+for i in range(n_cls):
+    for j in range(n_cls):
+        val = cos_matrix[i, j]
+        if not np.isnan(val):
+            text_color = "white" if abs(val) > 0.6 else "black"
+            ax.text(j, i, f"{val:.2f}", ha="center", va="center", color=text_color, fontsize=7)
+
+fig.tight_layout()
+cos_plot_path = os.path.join(out_dir, "embedding_cosine_similarity_heatmap.png")
+plt.savefig(cos_plot_path, dpi=300)
+plt.close(fig)
+print(f"🖼️ Heatmap Similarità Coseno salvata in: {cos_plot_path}")
+
+# CALCOLO MARGINI DI SEPARABILITÀ
 delta_records = []
 for i in range(len(paired_classes)):
     c_true = paired_classes[i]
@@ -311,7 +403,7 @@ export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
 export RESULTS_DIR="$RESULTS_DIR"
 export HF_HUB_OFFLINE=1
 
-echo "🚀 Esecuzione Analisi 1..."
+echo "🚀 Esecuzione Analisi 1 (Spettrale + Heatmap)..."
 singularity exec --nv --no-home \
     --bind "/leonardo_scratch:/leonardo_scratch" \
     --bind "$TEMP_DIR:/tmp_data" \
@@ -319,7 +411,7 @@ singularity exec --nv --no-home \
     "$SIF_FILE" \
     python3 /tmp_data/eval_spectral_per_class.py
 
-echo "🚀 Esecuzione Analisi 2..."
+echo "🚀 Esecuzione Analisi 2 (Embedding Coseno + Heatmap)..."
 singularity exec --nv --no-home \
     --bind "/leonardo_scratch:/leonardo_scratch" \
     --bind "$TEMP_DIR:/tmp_data" \
@@ -328,4 +420,4 @@ singularity exec --nv --no-home \
     python3 /tmp_data/eval_hdf5_cosine_similarity.py
 
 rm -rf "$TEMP_DIR"
-echo "✅ Analisi completata per tutte le classi. Report in: $RESULTS_DIR"
+echo "✅ Job terminato! Immagini e tabelle generate in: $RESULTS_DIR"
