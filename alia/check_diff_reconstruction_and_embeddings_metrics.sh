@@ -164,7 +164,7 @@ for i, c_rec in enumerate(classes_list):
         p_prof = np.mean(rec_c, axis=1)
         q_prof = np.mean(nat_c, axis=1)
         p_prob = np.exp(p_prof) / np.sum(np.exp(p_prof))
-        q_prob = np.exp(q_prof) / np.sum(np.exp(q_prob))
+        q_prob = np.exp(q_prof) / np.sum(np.exp(q_prof))
         wass_matrix[i, j] = scipy.stats.wasserstein_distance(p_prob, q_prob)
 
 df_frob_mat = pd.DataFrame(frob_matrix, index=classes_list, columns=classes_list)
