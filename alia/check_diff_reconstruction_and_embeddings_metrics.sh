@@ -1,9 +1,9 @@
 #!/bin/bash
-#SBATCH --job-name=eval_heatmaps
+#SBATCH --job-name=eval_metrics_all
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --time=00:40:00
+#SBATCH --time=00:45:00
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
 #SBATCH -p boost_usr_prod
@@ -105,7 +105,7 @@ def compute_track_metrics(p_clean, q_clean):
     return frob, float(kl), float(wass)
 
 print("\n" + "="*80)
-print("📊 CALCOLO METRICHE SPETTRALI PER CLASSE (1/3 d'ottava)")
+print("📊 PARTE 1: CALCOLO METRICHE SPETTRALI PER CLASSE (1/3 d'ottava)")
 print("="*80)
 
 records = []
@@ -164,7 +164,7 @@ for i, c_rec in enumerate(classes_list):
         p_prof = np.mean(rec_c, axis=1)
         q_prof = np.mean(nat_c, axis=1)
         p_prob = np.exp(p_prof) / np.sum(np.exp(p_prof))
-        q_prob = np.exp(q_prof) / np.sum(np.exp(q_prof))
+        q_prob = np.exp(q_prof) / np.sum(np.exp(q_prob))
         wass_matrix[i, j] = scipy.stats.wasserstein_distance(p_prob, q_prob)
 
 df_frob_mat = pd.DataFrame(frob_matrix, index=classes_list, columns=classes_list)
@@ -173,24 +173,22 @@ df_frob_mat.to_csv(os.path.join(out_dir, "centroid_frobenius_distance_matrix.csv
 df_wass_mat = pd.DataFrame(wass_matrix, index=classes_list, columns=classes_list)
 df_wass_mat.to_csv(os.path.join(out_dir, "centroid_wasserstein_distance_matrix.csv"))
 
-# FUNZIONE PLOT HEATMAP NATIVA MATPLOTLIB
 def plot_matrix_heatmap(mat, labels, title, save_path, cmap="viridis", fmt="{:.1f}"):
-    fig, ax = plt.subplots(figsize=(12, 10))
+    fig, ax = plt.subplots(figsize=(13, 11))
     im = ax.imshow(mat, cmap=cmap, aspect='auto')
 
-    cbar = ax.figure.colorbar(im, ax=ax)
+    cbar = ax.figure.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     cbar.ax.tick_params(labelsize=10)
 
     ax.set_xticks(np.arange(len(labels)))
     ax.set_yticks(np.arange(len(labels)))
-    ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=9)
-    ax.set_yticklabels(labels, fontsize=9)
+    ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
+    ax.set_yticklabels(labels, fontsize=8)
 
-    ax.set_xlabel("Classi Native", fontsize=12, fontweight='bold', labelpad=10)
-    ax.set_ylabel("Classi Ricostruite (DDIM)", fontsize=12, fontweight='bold', labelpad=10)
-    ax.set_title(title, fontsize=14, fontweight='bold', pad=15)
+    ax.set_xlabel("Classi Native", fontsize=11, fontweight='bold', labelpad=10)
+    ax.set_ylabel("Classi Ricostruite (DDIM)", fontsize=11, fontweight='bold', labelpad=10)
+    ax.set_title(title, fontsize=13, fontweight='bold', pad=15)
 
-    # Annotazioni numeriche all'interno delle celle
     valid_vals = mat[~np.isnan(mat)]
     thresh = (np.nanmax(valid_vals) + np.nanmin(valid_vals)) / 2.0 if len(valid_vals) > 0 else 0
     for i in range(len(labels)):
@@ -198,12 +196,12 @@ def plot_matrix_heatmap(mat, labels, title, save_path, cmap="viridis", fmt="{:.1
             val = mat[i, j]
             if not np.isnan(val):
                 text_color = "white" if val < thresh else "black"
-                ax.text(j, i, fmt.format(val), ha="center", va="center", color=text_color, fontsize=7)
+                ax.text(j, i, fmt.format(val), ha="center", va="center", color=text_color, fontsize=6.5)
 
     fig.tight_layout()
     plt.savefig(save_path, dpi=300)
     plt.close(fig)
-    print(f"🖼️ Heatmap salvata con successo in: {save_path}")
+    print(f"🖼️ Heatmap salvata in: {save_path}")
 
 plot_matrix_heatmap(
     frob_matrix, classes_list, 
@@ -223,7 +221,7 @@ test_dataset.close()
 EOF
 
 # ==============================================================================
-# SCRIPT 2: COSINE SIMILARITY EMBEDDINGS HDF5 + HEATMAP DI SEPARABILITÀ
+# SCRIPT 2: SIMILARITÀ CENTROIDI EMBEDDINGS HDF5 (NESSUN VINCOLO SU ID)
 # ==============================================================================
 cat << 'EOF' > "$TEMP_DIR/eval_hdf5_cosine_similarity.py"
 import os
@@ -244,81 +242,48 @@ from src.utils import get_config_from_yaml
 
 classes_list, _, _, _, _, _, _, _, _, _, _ = get_config_from_yaml("config0.yaml")
 
-h5_octave_path = "/leonardo_scratch/large/userexternal/" + os.environ["USER"] + "/dataSEC/PREPROCESSED_DATASET/wav/3_octave/7_secs/combined_test.h5"
-h5_raw_path = "/leonardo_scratch/large/userexternal/" + os.environ["USER"] + "/dataSEC/PREPROCESSED_DATASET/wav/0_octave/7_secs/combined_test.h5"
+h5_octave_path = f"/leonardo_scratch/large/userexternal/{os.environ['USER']}/dataSEC/PREPROCESSED_DATASET/wav/3_octave/7_secs/combined_test.h5"
+h5_raw_path = f"/leonardo_scratch/large/userexternal/{os.environ['USER']}/dataSEC/PREPROCESSED_DATASET/wav/0_octave/7_secs/combined_test.h5"
 out_dir = os.getenv("RESULTS_DIR", "/app/results")
 
 print("\n" + "="*80)
-print("🔍 CALCOLO COSINE SIMILARITY EMBEDDINGS SU TUTTE LE CLASSI")
-print(f"   • Octave (Rec): {h5_octave_path}")
-print(f"   • Raw (Native): {h5_raw_path}")
+print("🔍 PARTE 2: SIMILARITÀ TRA CENTROIDI EMBEDDINGS (3_octave vs 0_octave)")
 print("="*80)
 
 if not os.path.exists(h5_octave_path) or not os.path.exists(h5_raw_path):
-    print("❌ Errore: File HDF5 non trovati!")
+    print(f"❌ Errore: File HDF5 non trovati!\n   • Octave: {h5_octave_path}\n   • Raw: {h5_raw_path}")
     sys.exit(1)
 
 with h5py.File(h5_octave_path, 'r') as hf_oct, h5py.File(h5_raw_path, 'r') as hf_raw:
     oct_dset = hf_oct['embedding_dataset']
     raw_dset = hf_raw['embedding_dataset']
 
-    oct_ids = [k.decode('utf-8') if isinstance(k, bytes) else str(k) for k in oct_dset['ID'][:]]
-    raw_ids = [k.decode('utf-8') if isinstance(k, bytes) else str(k) for k in raw_dset['ID'][:]]
-
     oct_classes = [c.decode('utf-8') if isinstance(c, bytes) else str(c) for c in oct_dset['classes'][:]]
     raw_classes = [c.decode('utf-8') if isinstance(c, bytes) else str(c) for c in raw_dset['classes'][:]]
 
-    oct_embs = oct_dset['embeddings'][:]
-    raw_embs = raw_dset['embeddings'][:]
+    oct_embs = torch.from_numpy(oct_dset['embeddings'][:]).float()
+    raw_embs = torch.from_numpy(raw_dset['embeddings'][:]).float()
 
-raw_lookup = {raw_ids[i]: (raw_embs[i], raw_classes[i]) for i in range(len(raw_ids))}
+oct_embs = F.normalize(oct_embs, p=2, dim=-1)
+raw_embs = F.normalize(raw_embs, p=2, dim=-1)
 
-paired_oct_embs = []
-paired_raw_embs = []
-paired_classes = []
-paired_keys = []
-
-for i, key in enumerate(oct_ids):
-    if key in raw_lookup:
-        paired_oct_embs.append(oct_embs[i])
-        paired_raw_embs.append(raw_lookup[key][0])
-        paired_classes.append(oct_classes[i])
-        paired_keys.append(key)
-
-if not paired_oct_embs:
-    print("⚠️ Fallback allineamento sequenziale...")
-    min_len = min(len(oct_embs), len(raw_embs))
-    paired_oct_embs = oct_embs[:min_len]
-    paired_raw_embs = raw_embs[:min_len]
-    paired_classes = oct_classes[:min_len]
-    paired_keys = oct_ids[:min_len]
-
-t_oct = F.normalize(torch.from_numpy(np.array(paired_oct_embs)).float(), p=2, dim=-1)
-t_raw = F.normalize(torch.from_numpy(np.array(paired_raw_embs)).float(), p=2, dim=-1)
-
-cosine_sims = F.cosine_similarity(t_raw, t_oct, dim=-1).cpu().numpy()
-
-df_pairs = pd.DataFrame({
-    'ID': paired_keys,
-    'class': paired_classes,
-    'cosine_similarity': cosine_sims
-})
-df_pairs.to_csv(os.path.join(out_dir, "pairwise_embedding_similarities.csv"), index=False)
-
-cls_stats = df_pairs.groupby('class')['cosine_similarity'].agg(['count', 'mean', 'std', 'min', 'max'])
-cls_stats = cls_stats.reindex(classes_list)
-cls_stats.to_csv(os.path.join(out_dir, "cosine_similarity_per_class.csv"))
-print("\n📊 COSINE SIMILARITY PER CLASSE:")
-print(cls_stats.to_string())
-
-# CENTROIDI LATENTI E MATRICE DI SIMILARITÀ N x N
 raw_centroids = {}
 oct_centroids = {}
+oct_embs_by_class = {}
+
 for c in classes_list:
-    mask = [cls == c for cls in paired_classes]
-    if any(mask):
-        raw_centroids[c] = F.normalize(t_raw[mask].mean(dim=0, keepdim=True), p=2, dim=-1)
-        oct_centroids[c] = F.normalize(t_oct[mask].mean(dim=0, keepdim=True), p=2, dim=-1)
+    mask_raw = [cls == c for cls in raw_classes]
+    mask_oct = [cls == c for cls in oct_classes]
+
+    if any(mask_raw):
+        raw_c = raw_embs[mask_raw].mean(dim=0, keepdim=True)
+        raw_centroids[c] = F.normalize(raw_c, p=2, dim=-1)
+
+    if any(mask_oct):
+        oct_subset = oct_embs[mask_oct]
+        oct_embs_by_class[c] = oct_subset
+        oct_c = oct_subset.mean(dim=0, keepdim=True)
+        oct_centroids[c] = F.normalize(oct_c, p=2, dim=-1)
 
 n_cls = len(classes_list)
 cos_matrix = np.full((n_cls, n_cls), np.nan)
@@ -332,70 +297,82 @@ for i, c_rec in enumerate(classes_list):
         cos_matrix[i, j] = F.cosine_similarity(oct_centroids[c_rec], raw_centroids[c_nat], dim=-1).item()
 
 df_cos_mat = pd.DataFrame(cos_matrix, index=classes_list, columns=classes_list)
-df_cos_mat.to_csv(os.path.join(out_dir, "embedding_cosine_similarity_matrix.csv"))
+df_cos_mat.to_csv(os.path.join(out_dir, "centroid_embedding_cosine_matrix.csv"))
 
-# HEATMAP MATPLOTLIB COSINE SIMILARITY
-fig, ax = plt.subplots(figsize=(12, 10))
-im = ax.imshow(cos_matrix, cmap='coolwarm', vmin=-1.0, vmax=1.0, aspect='auto')
+class_summary_rows = []
 
-cbar = ax.figure.colorbar(im, ax=ax)
+for c in classes_list:
+    has_raw = c in raw_centroids
+    has_oct = c in oct_centroids
+
+    if not has_raw or not has_oct:
+        class_summary_rows.append({
+            'class': c,
+            'n_samples_oct': len(oct_embs_by_class.get(c, [])),
+            'centroid_cosine_intra': np.nan,
+            'mean_sample_to_native_centroid': np.nan,
+            'max_inter_centroid_cosine': np.nan,
+            'centroid_margin_delta': np.nan
+        })
+        continue
+
+    c_intra = F.cosine_similarity(oct_centroids[c], raw_centroids[c], dim=-1).item()
+    sample_sims = F.cosine_similarity(oct_embs_by_class[c], raw_centroids[c], dim=-1).cpu().numpy()
+    mean_sample_sim = sample_sims.mean()
+
+    other_sims = [F.cosine_similarity(oct_centroids[c], raw_centroids[other_c], dim=-1).item()
+                  for other_c in raw_centroids if other_c != c]
+    max_inter = max(other_sims) if other_sims else np.nan
+
+    class_summary_rows.append({
+        'class': c,
+        'n_samples_oct': len(oct_embs_by_class[c]),
+        'centroid_cosine_intra': c_intra,
+        'mean_sample_to_native_centroid': mean_sample_sim,
+        'max_inter_centroid_cosine': max_inter,
+        'centroid_margin_delta': c_intra - max_inter if not np.isnan(max_inter) else np.nan
+    })
+
+df_summary = pd.DataFrame(class_summary_rows)
+df_summary.to_csv(os.path.join(out_dir, "class_embedding_similarity_summary.csv"), index=False)
+
+print("\n" + "="*80)
+print("📊 TABELLA SIMILARITÀ EMBEDDING PER CLASSE (22 CLASSI)")
+print("="*80)
+print(df_summary.to_string())
+
+fig, ax = plt.subplots(figsize=(13, 11))
+im = ax.imshow(cos_matrix, cmap='coolwarm', vmin=-0.2, vmax=1.0, aspect='auto')
+
+cbar = ax.figure.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 cbar.ax.tick_params(labelsize=10)
+cbar.set_label("Cosine Similarity", fontsize=11, fontweight='bold')
 
 ax.set_xticks(np.arange(n_cls))
 ax.set_yticks(np.arange(n_cls))
-ax.set_xticklabels(classes_list, rotation=45, ha="right", fontsize=9)
-ax.set_yticklabels(classes_list, fontsize=9)
+ax.set_xticklabels(classes_list, rotation=45, ha="right", fontsize=8)
+ax.set_yticklabels(classes_list, fontsize=8)
 
-ax.set_xlabel("Centroidi CLAP Nativi", fontsize=12, fontweight='bold', labelpad=10)
-ax.set_ylabel("Centroidi CLAP Ricostruiti", fontsize=12, fontweight='bold', labelpad=10)
-ax.set_title("Matrice di Similarità Coseno tra Centroidi Latenti (CLAP Space)", fontsize=14, fontweight='bold', pad=15)
+ax.set_xlabel("Centroidi Audio Grezzo Nativo (0_octave)", fontsize=11, fontweight='bold', labelpad=10)
+ax.set_ylabel("Centroidi Ricostruiti da Terze (3_octave)", fontsize=11, fontweight='bold', labelpad=10)
+ax.set_title("Matrice di Similarità Coseno tra Centroidi di Classe (CLAP Space)", fontsize=13, fontweight='bold', pad=15)
 
 for i in range(n_cls):
     for j in range(n_cls):
         val = cos_matrix[i, j]
         if not np.isnan(val):
-            text_color = "white" if abs(val) > 0.6 else "black"
-            ax.text(j, i, f"{val:.2f}", ha="center", va="center", color=text_color, fontsize=7)
+            text_color = "white" if abs(val) > 0.65 else "black"
+            ax.text(j, i, f"{val:.2f}", ha="center", va="center", color=text_color, fontsize=6.5)
 
 fig.tight_layout()
-cos_plot_path = os.path.join(out_dir, "embedding_cosine_similarity_heatmap.png")
-plt.savefig(cos_plot_path, dpi=300)
+heatmap_path = os.path.join(out_dir, "centroid_embedding_cosine_heatmap.png")
+plt.savefig(heatmap_path, dpi=300)
 plt.close(fig)
-print(f"🖼️ Heatmap Similarità Coseno salvata in: {cos_plot_path}")
-
-# CALCOLO MARGINI DI SEPARABILITÀ
-delta_records = []
-for i in range(len(paired_classes)):
-    c_true = paired_classes[i]
-    if c_true not in raw_centroids:
-        continue
-    emb_rec = t_oct[i:i+1]
-
-    sim_intra = F.cosine_similarity(emb_rec, raw_centroids[c_true], dim=-1).item()
-    other_sims = [F.cosine_similarity(emb_rec, raw_centroids[c_other], dim=-1).item() 
-                  for c_other in raw_centroids if c_other != c_true]
-    sim_inter = max(other_sims) if other_sims else np.nan
-
-    delta_records.append({
-        'class': c_true,
-        'sim_intra': sim_intra,
-        'sim_inter_max': sim_inter,
-        'margin_delta': sim_intra - sim_inter if not np.isnan(sim_inter) else np.nan
-    })
-
-df_delta = pd.DataFrame(delta_records)
-df_delta.to_csv(os.path.join(out_dir, "class_separability_margins.csv"), index=False)
-
-margin_summary = df_delta.groupby('class')[['sim_intra', 'sim_inter_max', 'margin_delta']].mean()
-margin_summary = margin_summary.reindex(classes_list)
-margin_summary.to_csv(os.path.join(out_dir, "class_separability_margins_summary.csv"))
-
-print("\n" + "="*80)
-print("🎯 MARGINI DI SEPARABILITÀ SULLE CLASSI TOTALI:")
+print(f"\n🖼️ Heatmap salvata in: {heatmap_path}")
 print("="*80)
-print(margin_summary.to_string())
 EOF
 
+# Esportazione variabili d'ambiente per il container
 export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/weights/CLAP_weights_2023.pth"
 export LOCAL_CLAP_BN0_CONSTANTS_PATH="/tmp_data/weights/clap_bn0_constants.npz"
 export CLAP_TEXT_ENCODER_PATH="/tmp_data/roberta-base"
@@ -403,7 +380,7 @@ export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
 export RESULTS_DIR="$RESULTS_DIR"
 export HF_HUB_OFFLINE=1
 
-echo "🚀 Esecuzione Analisi 1 (Spettrale + Heatmap)..."
+echo "🚀 Esecuzione Parte 1: Metriche Spettrali e Centroidi per Classe..."
 singularity exec --nv --no-home \
     --bind "/leonardo_scratch:/leonardo_scratch" \
     --bind "$TEMP_DIR:/tmp_data" \
@@ -411,7 +388,7 @@ singularity exec --nv --no-home \
     "$SIF_FILE" \
     python3 /tmp_data/eval_spectral_per_class.py
 
-echo "🚀 Esecuzione Analisi 2 (Embedding Coseno + Heatmap)..."
+echo "🚀 Esecuzione Parte 2: Similarità Coseno tra Centroidi HDF5 e Heatmap..."
 singularity exec --nv --no-home \
     --bind "/leonardo_scratch:/leonardo_scratch" \
     --bind "$TEMP_DIR:/tmp_data" \
@@ -420,4 +397,4 @@ singularity exec --nv --no-home \
     python3 /tmp_data/eval_hdf5_cosine_similarity.py
 
 rm -rf "$TEMP_DIR"
-echo "✅ Job terminato! Immagini e tabelle generate in: $RESULTS_DIR"
+echo "✅ Analisi unificata completata con successo! Tutti i file e i grafici sono in: $RESULTS_DIR"
