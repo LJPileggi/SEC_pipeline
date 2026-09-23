@@ -5,7 +5,7 @@ export SIF_FILE="$PROJECT_DIR/.containers/clap_pipeline.sif"
 SCRIPT_PATH="$(find "$PROJECT_DIR" -name "convert_ESC50_to_hdf5.py" 2>/dev/null | head -n 1)"
 [ -z "$SCRIPT_PATH" ] && SCRIPT_PATH="$(pwd)/alia/convert_ESC50_to_hdf5.py"
 
-singularity exec --no-home \
+singularity exec --nv --no-home \
     --bind "/leonardo_scratch:/leonardo_scratch" \
     --bind "$PROJECT_DIR:/app" \
     --pwd "/app" \
