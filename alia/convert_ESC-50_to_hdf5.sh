@@ -1,13 +1,13 @@
 export PROJECT_DIR="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline"
 export SIF_FILE="$PROJECT_DIR/.containers/clap_pipeline.sif"
+TARGET_SCRIPT="$(find /leonardo_scratch/large/userexternal/$USER -name "convert_ESC50_to_hdf5.py" 2>/dev/null | head -n 1)"
 
-# Trova il percorso assoluto reale del file di conversione
-SCRIPT_PATH="$(find "$PROJECT_DIR" -name "convert_ESC50_to_hdf5.py" 2>/dev/null | head -n 1)"
-[ -z "$SCRIPT_PATH" ] && SCRIPT_PATH="$(pwd)/alia/convert_ESC50_to_hdf5.py"
+# Cartella di cache scrivibile per numba
+mkdir -p "/leonardo_scratch/large/userexternal/$USER/tmp_numba_cache"
+export NUMBA_CACHE_DIR="/leonardo_scratch/large/userexternal/$USER/tmp_numba_cache"
 
 singularity exec --nv --no-home \
     --bind "/leonardo_scratch:/leonardo_scratch" \
-    --bind "$PROJECT_DIR:/app" \
-    --pwd "/app" \
+    --env NUMBA_CACHE_DIR="$NUMBA_CACHE_DIR" \
     "$SIF_FILE" \
-    python3 "$SCRIPT_PATH"
+    python3 "$TARGET_SCRIPT"
