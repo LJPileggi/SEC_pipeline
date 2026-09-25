@@ -122,7 +122,7 @@ def main():
                     sqrt_one_minus_alpha = torch.sqrt(torch.clamp(1.0 - diffusion_scheduler.alphas_bar[t].view(-1, 1, 1, 1), min=0.0))
                     pred_x0 = (x_t - sqrt_one_minus_alpha * noise_pred) / sqrt_alpha
                     loss_spec = spectral_loss_fn(pred_x0, x_0_pristine)
-                    loss = loss_mse + 0.1 * loss_spec
+                    loss = loss_mse + 0.01 * loss_spec
                 else:
                     loss = loss_mse
                 
