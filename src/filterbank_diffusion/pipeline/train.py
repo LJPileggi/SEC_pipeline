@@ -19,7 +19,7 @@ from filterbank_diffusion.models.diffusion import ConditionalGaussianDiffusion
 from filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
 from filterbank_diffusion.pipeline.spectral import OnlineSpectrogramPipeline, SpectralConvergenceLoss
 
-# 🎯 Loss Ibrida: MSE sul rumore + Spectral Convergence su x_0
+# Loss Ibrida: MSE + Spectral Convergence
 LOSS_TYPE = "hybrid"
 TRAIN_EPOCHS = 125          
 LOCAL_BATCH_SIZE = 12       
@@ -46,15 +46,24 @@ def main():
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=seed)
     dataloader = DataLoader(dataset, batch_size=LOCAL_BATCH_SIZE, sampler=sampler, num_workers=8, pin_memory=True, drop_last=True)
 
-    # U-Net potenziata (3 canali in ingresso, Attention al bottleneck, multi-scale conditioning)
+    # U-Net con 3 canali in ingresso, Attention al bottleneck e multi-scale conditioning
     unet = SpectrogramUNet(base_channels=64, emb_dim=256, cond_channels=16).to(device)
     diffusion_scheduler = ConditionalGaussianDiffusion(unet_model=unet, timesteps=1000).to(device)
     spectral_loss_fn = SpectralConvergenceLoss().to(device)
     
+    # 🎯 FIX DDP: find_unused_parameters=True evita il crash su parametri/rami con gradiente non tracciato
     if torch.cuda.is_available():
-        unet = nn.parallel.DistributedDataParallel(unet, device_ids=[rank], output_device=rank)
+        unet = nn.parallel.DistributedDataParallel(
+            unet, 
+            device_ids=[rank], 
+            output_device=rank, 
+            find_unused_parameters=True
+        )
     else:
-        unet = nn.parallel.DistributedDataParallel(unet)
+        unet = nn.parallel.DistributedDataParallel(
+            unet, 
+            find_unused_parameters=True
+        )
 
     optimizer = torch.optim.AdamW(unet.parameters(), lr=2e-4, weight_decay=1e-4)
 
@@ -89,22 +98,21 @@ def main():
                 noise = torch.randn_like(x_0_pristine)
                 x_t = diffusion_scheduler.q_sample(x_0_pristine, t, noise)
                 
-                # 🎯 SELF-CONDITIONING SINCRONIZZATO E ANTI-CRASH DDP
-                # 50% dei passi: identico su tutti i rank senza divergenza di seed
+                # Self-conditioning sincronizzato su tutti i rank
                 x_self_cond = torch.zeros_like(x_0_pristine)
                 if step % 2 == 0:
                     with torch.no_grad():
                         sqrt_alpha_t = torch.sqrt(torch.clamp(diffusion_scheduler.alphas_bar[t].view(-1, 1, 1, 1), min=1e-8))
                         sqrt_one_minus_alpha_t = torch.sqrt(torch.clamp(1.0 - diffusion_scheduler.alphas_bar[t].view(-1, 1, 1, 1), min=0.0))
                         
-                        # Invocazione del modello sottostante (raw unet) per non sporcare il riduttore DDP
+                        # Invocazione diretta del modello raw per non sporcare il riduttore DDP
                         raw_unet = unet.module if hasattr(unet, 'module') else unet
                         eps_est = raw_unet(x_t, t, x_cond, fraction_id=frac_tensor, x_self_cond=x_self_cond)
                         
                         x_self_cond = (x_t - sqrt_one_minus_alpha_t * eps_est) / sqrt_alpha_t
                         x_self_cond = torch.clamp(x_self_cond.detach(), min=-20.0, max=20.0)
 
-                # Unica forward pass DDP tracciata per la retropropagazione del gradiente
+                # Forward pass tracciata per la retropropagazione
                 noise_pred = unet(x_t, t, x_cond, fraction_id=frac_tensor, x_self_cond=x_self_cond)
                 
                 loss_mse = nn.functional.mse_loss(noise_pred, noise)
