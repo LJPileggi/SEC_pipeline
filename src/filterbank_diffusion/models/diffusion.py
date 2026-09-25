@@ -3,10 +3,6 @@ import torch
 import torch.nn as nn
 
 class ConditionalGaussianDiffusion(nn.Module):
-    """
-    Standard DDPM / DDIM scheduler for Image-to-Image Super-Resolution (Ho et al. Cascaded Diffusion).
-    Diffuses pristine spectrogram x_0 and reconstructs it directly conditioned on x_cond.
-    """
     def __init__(self, unet_model, timesteps=1000, beta_start=1e-4, beta_end=0.02):
         super().__init__()
         self.model = unet_model
@@ -29,7 +25,6 @@ class ConditionalGaussianDiffusion(nn.Module):
         self.register_buffer("pred_noise_coef", pred_noise_coef)
 
     def q_sample(self, x_0, t, noise):
-        """Standard DDPM forward process: z_t = sqrt(alpha_bar)*x_0 + sqrt(1-alpha_bar)*noise."""
         sqrt_alpha_bar = self.sqrt_alphas_bar[t].view(-1, 1, 1, 1)
         sqrt_one_minus_alpha_bar = self.sqrt_one_minus_alphas_bar[t].view(-1, 1, 1, 1)
         x_t = sqrt_alpha_bar * x_0 + sqrt_one_minus_alpha_bar * noise
@@ -38,23 +33,24 @@ class ConditionalGaussianDiffusion(nn.Module):
     @torch.no_grad()
     def sample_ddim(self, x_cond, fraction_id=None, ddim_steps=25, eta=0.0):
         """
-        Fast DDIM reverse sampling directly recovering x_0 pristine target.
+        Fast DDIM reverse sampling con Self-Conditioning progressivo di x_0.
         """
         self.model.eval()
         device = x_cond.device
         batch_size, _, freq_bins, time_steps = x_cond.shape
         shape = (batch_size, 1, freq_bins, time_steps)
 
-        # 🎯 Discesa rigorosa da T-1 (999) fino a 0 esatto
         times = torch.linspace(self.timesteps - 1, 0, ddim_steps + 1, device=device).long()
         time_pairs = list(zip(times[:-1], times[1:]))
 
-        # Start from standard normal noise in data space
         x_t = torch.randn(shape, device=device)
+        x_self_cond = torch.zeros_like(x_t)
 
         for t_curr, t_prev in time_pairs:
             t_tensor = torch.full((batch_size,), fill_value=t_curr.item(), dtype=torch.long, device=device)
-            eps_hat = self.model(x_t, t_tensor, x_cond, fraction_id=fraction_id)
+            
+            # Forward con self-conditioning passato dal passo precedente
+            eps_hat = self.model(x_t, t_tensor, x_cond, fraction_id=fraction_id, x_self_cond=x_self_cond)
             eps_hat = torch.nan_to_num(eps_hat, nan=0.0, posinf=10.0, neginf=-10.0)
 
             alpha_bar_curr = self.alphas_bar[t_curr]
@@ -65,6 +61,9 @@ class ConditionalGaussianDiffusion(nn.Module):
 
             pred_x0 = (x_t - sqrt_one_minus_alpha * eps_hat) / sqrt_alpha_curr
             pred_x0 = torch.clamp(pred_x0, min=-20.0, max=20.0)
+
+            # Aggiornamento stima per il prossimo passo
+            x_self_cond = pred_x0.detach()
 
             denom = torch.clamp(1.0 - alpha_bar_curr, min=1e-8)
             sigma = eta * torch.sqrt(
