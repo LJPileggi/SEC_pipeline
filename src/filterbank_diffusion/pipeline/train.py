@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import math
+import argparse
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -21,15 +22,27 @@ from filterbank_diffusion.pipeline.spectral import OnlineSpectrogramPipeline, Sp
 
 # Loss Ibrida: MSE + Spectral Convergence
 LOSS_TYPE = "hybrid"
-TRAIN_EPOCHS = 125          
+DEFAULT_EPOCHS = 125          
 LOCAL_BATCH_SIZE = 12       
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Distributed Training per Spectrogram Diffusion con Resumption")
+    parser.add_argument("--start_epoch", type=int, default=int(os.environ.get("START_EPOCH", 0)),
+                        help="Epoca da cui far partire/riprendere il training (default: 0)")
+    parser.add_argument("--epochs", type=int, default=int(os.environ.get("NUM_EPOCHS", DEFAULT_EPOCHS)),
+                        help="Numero di epoche da eseguire in questa sessione (default: 125)")
+    return parser.parse_args()
+
 def main():
+    args = parse_args()
+    start_epoch = args.start_epoch
+    num_epochs = args.epochs
+    end_epoch = start_epoch + num_epochs
+
     rank, world_size = setup_environ_vars(slurm=True)
     device = setup_distributed_environment(rank, world_size, slurm=True)
     
     classes_list, patience, _, _, sampling_rate, _, _, seed, _, _, _ = get_config_from_yaml("config0.yaml")
-    epochs = TRAIN_EPOCHS
 
     local_seed = seed + rank
     torch.manual_seed(local_seed)
@@ -46,12 +59,49 @@ def main():
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=seed)
     dataloader = DataLoader(dataset, batch_size=LOCAL_BATCH_SIZE, sampler=sampler, num_workers=8, pin_memory=True, drop_last=True)
 
-    # U-Net con 3 canali in ingresso, Attention al bottleneck e multi-scale conditioning
+    # U-Net potenziata (Attention al bottleneck, Multi-scale conditioning, Self-conditioning)
     unet = SpectrogramUNet(base_channels=64, emb_dim=256, cond_channels=16).to(device)
+    optimizer = torch.optim.AdamW(unet.parameters(), lr=2e-4, weight_decay=1e-4)
+
+    base_model_dir = os.environ.get("MODEL_CHECKPOINT_DIR", os.path.join(src_root, ".models", "diff_model"))
+    target_model_dir = base_model_dir if base_model_dir.startswith("/") else os.path.join(src_root, base_model_dir)
+    os.makedirs(target_model_dir, exist_ok=True)
+
+    # 🎯 LOGICA DI RESUMPTION: Ripresa automatica dello stato precedente
+    if start_epoch > 0:
+        prev_epoch = start_epoch - 1
+        ckpt_candidate = os.path.join(target_model_dir, f"unet_epoch_{prev_epoch}.pt")
+        
+        # Fallback nel caso in cui il path locale del container non contenga il file ma esista in MODELS_GLOBAL
+        if not os.path.exists(ckpt_candidate) and os.environ.get("MODELS_GLOBAL"):
+            ckpt_candidate = os.path.join(os.environ.get("MODELS_GLOBAL"), f"unet_epoch_{prev_epoch}.pt")
+
+        if os.path.exists(ckpt_candidate):
+            if rank == 0:
+                print(f"🔄 [RESUMPTION] Caricamento checkpoint epoca precedente: {ckpt_candidate}", flush=True)
+            checkpoint = torch.load(ckpt_candidate, map_location=device)
+            
+            raw_state = checkpoint.get('model_state_dict', checkpoint)
+            clean_state = {k.replace('module.', ''): v for k, v in raw_state.items()}
+            unet.load_state_dict(clean_state)
+            
+            if 'optimizer_state_dict' in checkpoint:
+                try:
+                    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                    if rank == 0:
+                        print("✅ [RESUMPTION] Stato dell'ottimizzatore AdamW ripristinato con successo!", flush=True)
+                except Exception as e:
+                    if rank == 0:
+                        print(f"⚠️ [WARNING] Impossibile caricare optimizer_state_dict: {e}", flush=True)
+        else:
+            if rank == 0:
+                print(f"❌ [CRITICAL] Checkpoint {ckpt_candidate} non trovato per start_epoch={start_epoch}!", flush=True)
+            sys.exit(1)
+
     diffusion_scheduler = ConditionalGaussianDiffusion(unet_model=unet, timesteps=1000).to(device)
     spectral_loss_fn = SpectralConvergenceLoss().to(device)
     
-    # 🎯 FIX DDP: find_unused_parameters=True evita il crash su parametri/rami con gradiente non tracciato
+    # Wrapping DDP dopo il ripristino dei pesi
     if torch.cuda.is_available():
         unet = nn.parallel.DistributedDataParallel(
             unet, 
@@ -65,16 +115,15 @@ def main():
             find_unused_parameters=True
         )
 
-    optimizer = torch.optim.AdamW(unet.parameters(), lr=2e-4, weight_decay=1e-4)
-
     total_steps = len(dataloader)
     print_freq = max(1, total_steps // 10)
 
     if rank == 0:
-        print(f"🏁 DDP Init Complete | GPUs: {world_size} | Mode: Enhanced Spectrogram DDPM | Loss={LOSS_TYPE} | Epochs={epochs}")
-        print(f"📊 Steps per Epoch: {total_steps} | Print every {print_freq} steps (10%)")
+        print(f"🏁 DDP Init Complete | GPUs: {world_size} | Mode: Enhanced Spectrogram DDPM | Loss={LOSS_TYPE}", flush=True)
+        print(f"📊 Range epoche programmato: [{start_epoch} -> {end_epoch - 1}] ({num_epochs} epoche)", flush=True)
+        print(f"📊 Steps per Epoch: {total_steps} | Print every {print_freq} steps (10%)\n", flush=True)
 
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, end_epoch):
         unet.train()
         sampler.set_epoch(epoch)
         epoch_loss = 0.0
@@ -105,7 +154,6 @@ def main():
                         sqrt_alpha_t = torch.sqrt(torch.clamp(diffusion_scheduler.alphas_bar[t].view(-1, 1, 1, 1), min=1e-8))
                         sqrt_one_minus_alpha_t = torch.sqrt(torch.clamp(1.0 - diffusion_scheduler.alphas_bar[t].view(-1, 1, 1, 1), min=0.0))
                         
-                        # Invocazione diretta del modello raw per non sporcare il riduttore DDP
                         raw_unet = unet.module if hasattr(unet, 'module') else unet
                         eps_est = raw_unet(x_t, t, x_cond, fraction_id=frac_tensor, x_self_cond=x_self_cond)
                         
@@ -144,7 +192,7 @@ def main():
                     elapsed = time.time() - step_start_time
                     percent = ((step + 1) / total_steps) * 100
                     avg_step_loss = running_loss / print_freq
-                    print(f" ⏱️  Epoch [{epoch:03d}/{epochs:03d}] | Progress: {percent:5.1f}% ({step+1}/{total_steps} steps) | "
+                    print(f" ⏱️  Epoch [{epoch:03d}/{end_epoch-1:03d}] | Progress: {percent:5.1f}% ({step+1}/{total_steps} steps) | "
                           f"Step Loss: {current_loss:.6f} | Avg 10% Loss: {avg_step_loss:.6f} | Time: {elapsed:.1f}s", flush=True)
                 running_loss = 0.0
                 step_start_time = time.time()
@@ -152,12 +200,9 @@ def main():
         if rank == 0:
             avg_loss = epoch_loss / total_steps
             total_epoch_time = time.time() - epoch_start_time
-            print(f"📢 Epoch {epoch:03d} Complete in {total_epoch_time/60:.2f} min. Master Average Loss: {avg_loss:.6f}\n")
+            print(f"📢 Epoch {epoch:03d} Complete in {total_epoch_time/60:.2f} min. Master Average Loss: {avg_loss:.6f}\n", flush=True)
             
-            base_model_dir = os.environ.get("MODEL_CHECKPOINT_DIR", os.path.join(src_root, ".models", "diff_model"))
-            target_model_dir = base_model_dir if base_model_dir.startswith("/") else os.path.join(src_root, base_model_dir)
-            os.makedirs(target_model_dir, exist_ok=True)
-            
+            # Salvataggio progressivo con indice dell'epoca esatta
             checkpoint_path = os.path.join(target_model_dir, f"unet_epoch_{epoch}.pt")
             torch.save({
                 'epoch': epoch,
@@ -166,7 +211,7 @@ def main():
                 'loss': avg_loss,
                 'epoch_time_secs': total_epoch_time,
             }, checkpoint_path)
-            print(f"💾 Checkpoint saved cleanly to: {checkpoint_path}")
+            print(f"💾 Checkpoint saved cleanly to: {checkpoint_path}", flush=True)
 
     dataset.close()
     cleanup_distributed_environment(rank)
