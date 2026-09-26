@@ -11,14 +11,15 @@
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
 
+PROJECT_DIR="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline"
 TEMP_DIR="/leonardo_scratch/large/userexternal/$USER/tmp_eval_$SLURM_JOB_ID"
-SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/clap_pipeline.sif"
-CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
-CLAP_BN0_CONSTANTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/clap_bn0_constants.npz"
-ROBERTA_PATH="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/roberta-base"
+SIF_FILE="$PROJECT_DIR/.containers/clap_pipeline.sif"
+CLAP_SCRATCH_WEIGHTS="$PROJECT_DIR/.clap_weights/CLAP_weights_2023.pth"
+CLAP_BN0_CONSTANTS="$PROJECT_DIR/.clap_weights/clap_bn0_constants.npz"
+ROBERTA_PATH="$PROJECT_DIR/.clap_weights/roberta-base"
 DATASEC_GLOBAL="/leonardo_scratch/large/userexternal/$USER/dataSEC"
-MODELS_GLOBAL="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.models/diff_model"
-RESULTS_DIR="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/results/supervisor_report"
+MODELS_GLOBAL="$PROJECT_DIR/.models/diff_model"
+RESULTS_DIR="$PROJECT_DIR/results/supervisor_report"
 
 mkdir -p "$TEMP_DIR/weights"
 mkdir -p "$TEMP_DIR/roberta-base"
@@ -40,6 +41,7 @@ cp "$MODELS_GLOBAL"/*.pt "$TEMP_DIR/models/" 2>/dev/null
 cat << 'EOF' > "$TEMP_DIR/eval_spectral_per_class.py"
 import os
 import sys
+import re
 
 import matplotlib
 matplotlib.use('Agg')
@@ -71,13 +73,28 @@ spectral_pipeline = OnlineSpectrogramPipeline(weights_path=weights_path, sample_
 
 model_dir = "/tmp_data/models"
 pts = [f for f in os.listdir(model_dir) if f.endswith(".pt")]
-pts_sorted = sorted(pts, key=lambda x: int(x.replace("unet_epoch_", "").replace(".pt", "")))
+if not pts:
+    print(f"❌ Nessun checkpoint .pt trovato in {model_dir}")
+    sys.exit(1)
+
+def extract_epoch(fname):
+    nums = re.findall(r'\d+', fname)
+    return int(nums[-1]) if nums else -1
+
+pts_sorted = sorted(pts, key=extract_epoch)
 latest_ckpt = os.path.join(model_dir, pts_sorted[-1])
 print(f"📦 Checkpoint U-Net caricato: {latest_ckpt}")
 
-unet = SpectrogramUNet(base_channels=64, emb_dim=256).to(device)
+# 🎯 Inizializzazione U-Net con l'architettura potenziata (Self-Attention + Multi-Scale Cond)
+unet = SpectrogramUNet(base_channels=64, emb_dim=256, cond_channels=16).to(device)
 ckpt = torch.load(latest_ckpt, map_location=device)
-unet.load_state_dict(ckpt['model_state_dict'])
+raw_state = ckpt.get('model_state_dict', ckpt)
+
+# Pulizia automatica da eventuali prefissi 'module.' ereditati da DDP
+clean_state = {k.replace('module.', ''): v for k, v in raw_state.items()}
+unet.load_state_dict(clean_state)
+unet.eval()
+
 diffusion_scheduler = ConditionalGaussianDiffusion(unet_model=unet, timesteps=1000).to(device)
 
 raw_dataset_root = "/tmp_data/data"
@@ -118,6 +135,8 @@ with torch.no_grad():
         frac_tensor = torch.full((raw_audio.shape[0],), fill_value=3.0, device=device)
 
         x_0_pristine, x_cond = spectral_pipeline(raw_audio, format_id=1, fraction_id=3, device=device)
+        
+        # sample_ddim gestisce internamente la catena con self-conditioning
         x_rec = diffusion_scheduler.sample_ddim(x_cond, fraction_id=frac_tensor, ddim_steps=25)
 
         x_0_clean = torch.nan_to_num(x_0_pristine, nan=0.0)[:, :, :, :1140]
@@ -145,7 +164,7 @@ class_summary = class_summary.reindex(classes_list)
 class_summary.to_csv(os.path.join(out_dir, "spectral_metrics_per_class.csv"))
 print("\n" + class_summary.to_string())
 
-# MATRICI DI DISTANZA CENTROIDI
+# Matrici di distanza centroidi
 n_cls = len(classes_list)
 frob_matrix = np.full((n_cls, n_cls), np.nan)
 wass_matrix = np.full((n_cls, n_cls), np.nan)
@@ -221,11 +240,12 @@ test_dataset.close()
 EOF
 
 # ==============================================================================
-# SCRIPT 2: SIMILARITÀ CENTROIDI EMBEDDINGS HDF5 (NESSUN VINCOLO SU ID)
+# SCRIPT 2: SIMILARITÀ CENTROIDI EMBEDDINGS HDF5 (CON SUPPORTO FILE SINGOLI O COMBINATI)
 # ==============================================================================
 cat << 'EOF' > "$TEMP_DIR/eval_hdf5_cosine_similarity.py"
 import os
 import sys
+import glob
 
 import matplotlib
 matplotlib.use('Agg')
@@ -242,27 +262,57 @@ from src.utils import get_config_from_yaml
 
 classes_list, _, _, _, _, _, _, _, _, _, _ = get_config_from_yaml("config0.yaml")
 
-h5_octave_path = f"/leonardo_scratch/large/userexternal/{os.environ['USER']}/dataSEC/PREPROCESSED_DATASET/wav/3_octave/7_secs/combined_test.h5"
-h5_raw_path = f"/leonardo_scratch/large/userexternal/{os.environ['USER']}/dataSEC/PREPROCESSED_DATASET/wav/0_octave/7_secs/combined_test.h5"
+base_preproc = f"/leonardo_scratch/large/userexternal/{os.environ['USER']}/dataSEC/PREPROCESSED_DATASET/wav"
 out_dir = os.getenv("RESULTS_DIR", "/app/results")
 
 print("\n" + "="*80)
 print("🔍 PARTE 2: SIMILARITÀ TRA CENTROIDI EMBEDDINGS (3_octave vs 0_octave)")
 print("="*80)
 
-if not os.path.exists(h5_octave_path) or not os.path.exists(h5_raw_path):
-    print(f"❌ Errore: File HDF5 non trovati!\n   • Octave: {h5_octave_path}\n   • Raw: {h5_raw_path}")
-    sys.exit(1)
+def load_embeddings_dataset(folder_path):
+    comb_path = os.path.join(folder_path, "combined_test.h5")
+    embs_list, classes_collected = [], []
 
-with h5py.File(h5_octave_path, 'r') as hf_oct, h5py.File(h5_raw_path, 'r') as hf_raw:
-    oct_dset = hf_oct['embedding_dataset']
-    raw_dset = hf_raw['embedding_dataset']
+    if os.path.exists(comb_path):
+        with h5py.File(comb_path, 'r') as hf:
+            dset = hf['embedding_dataset']
+            c_raw = [c.decode('utf-8') if isinstance(c, bytes) else str(c) for c in dset['classes'][:]]
+            e_raw = dset['embeddings'][:]
+            return torch.from_numpy(e_raw).float(), c_raw
 
-    oct_classes = [c.decode('utf-8') if isinstance(c, bytes) else str(c) for c in oct_dset['classes'][:]]
-    raw_classes = [c.decode('utf-8') if isinstance(c, bytes) else str(c) for c in raw_dset['classes'][:]]
+    # Fallback su cartelle di classe individuali
+    pattern = os.path.join(folder_path, "*", "*_emb.h5")
+    files = glob.glob(pattern)
+    if not files:
+        pattern = os.path.join(folder_path, "*_emb.h5")
+        files = glob.glob(pattern)
 
-    oct_embs = torch.from_numpy(oct_dset['embeddings'][:]).float()
-    raw_embs = torch.from_numpy(raw_dset['embeddings'][:]).float()
+    for fpath in files:
+        try:
+            with h5py.File(fpath, 'r') as hf:
+                if 'embedding_dataset' in hf:
+                    dset = hf['embedding_dataset']
+                    c_raw = [c.decode('utf-8') if isinstance(c, bytes) else str(c) for c in dset['classes'][:]]
+                    e_raw = dset['embeddings'][:]
+                    embs_list.append(torch.from_numpy(e_raw).float())
+                    classes_collected.extend(c_raw)
+        except Exception:
+            pass
+
+    if embs_list:
+        return torch.cat(embs_list, dim=0), classes_collected
+    return None, None
+
+dir_octave = os.path.join(base_preproc, "3_octave", "7_secs")
+dir_raw = os.path.join(base_preproc, "0_octave", "7_secs")
+
+oct_embs, oct_classes = load_embeddings_dataset(dir_octave)
+raw_embs, raw_classes = load_embeddings_dataset(dir_raw)
+
+if oct_embs is None or raw_embs is None:
+    print(f"⚠️ Avviso: File HDF5 degli embedding non trovati in:\n   • {dir_octave}\n   • {dir_raw}")
+    print("Salto Parte 2 in attesa dell'estrazione completa degli embedding.")
+    sys.exit(0)
 
 oct_embs = F.normalize(oct_embs, p=2, dim=-1)
 raw_embs = F.normalize(raw_embs, p=2, dim=-1)
@@ -384,7 +434,7 @@ echo "🚀 Esecuzione Parte 1: Metriche Spettrali e Centroidi per Classe..."
 singularity exec --nv --no-home \
     --bind "/leonardo_scratch:/leonardo_scratch" \
     --bind "$TEMP_DIR:/tmp_data" \
-    --bind "$(pwd):/app" --pwd "/app" \
+    --bind "$PROJECT_DIR:/app" --pwd "/app" \
     "$SIF_FILE" \
     python3 /tmp_data/eval_spectral_per_class.py
 
@@ -392,7 +442,7 @@ echo "🚀 Esecuzione Parte 2: Similarità Coseno tra Centroidi HDF5 e Heatmap..
 singularity exec --nv --no-home \
     --bind "/leonardo_scratch:/leonardo_scratch" \
     --bind "$TEMP_DIR:/tmp_data" \
-    --bind "$(pwd):/app" --pwd "/app" \
+    --bind "$PROJECT_DIR:/app" --pwd "/app" \
     "$SIF_FILE" \
     python3 /tmp_data/eval_hdf5_cosine_similarity.py
 
