@@ -60,7 +60,7 @@ submit_and_wait_task() {
 
 # 🎯 PATH DEFINITION (Absolute resolution) 
 export TEMP_DIR="/leonardo_scratch/large/userexternal/$CURRENT_USER/tmp_job_\$SLURM_JOB_ID"
-export TARGET_EPOCH=125
+export TARGET_EPOCH=500
 TARGET_GLOBAL="$FINAL_DEST"
 
 # 🛠️ DIRECTORY SETUP (Mirroring run_embedding_pipeline.sh) 
