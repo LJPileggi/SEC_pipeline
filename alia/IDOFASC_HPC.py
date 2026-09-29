@@ -96,8 +96,10 @@ def extract_gfcc(sig, sr, n=13):
     return np.mean(gfcc.T, axis=0)
 
 def extract_cqcc(sig, sr, n=13):
-    cq = librosa.feature.chroma_cqt(y=sig, sr=sr).T
-    return np.mean(cq, axis=0)[:n]
+  cqt = np.abs(librosa.cqt(sig, sr=sr))
+  log_cqt = librosa.amplitude_to_db(cqt)
+  cqcc = fftpack.dct(log_cqt, axis=0, type=2, norm='ortho')[:n]
+  return np.mean(cqcc.T, axis=0)
 
 def compute_metrics(X, y_true, y_pred):
     return {
