@@ -344,7 +344,7 @@ def main():
                 )
 
                 # Metriche globali per questa run
-                m_single = compute_metrics(X, y_true, y_pred)
+                m_single = compute_metrics(X_pca, y_true, y_pred)
                 run_global_metrics.append(m_single)
 
                 # Matrice di confusione normalizzata per riga (recall-based)
