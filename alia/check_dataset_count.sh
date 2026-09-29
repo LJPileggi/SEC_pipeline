@@ -29,27 +29,34 @@ PY_SCRIPT=$(mktemp /tmp/inspect_h5_XXXXXX.py)
 cat << 'EOF' > "$PY_SCRIPT"
 import os
 import sys
+import time
 import h5py
+
+print("⏳ Inizio ispezione tra 10 secondi (tempo per agganciare tail -f)...", flush=True)
+for i in range(10, 0, -1):
+    print(f"   {i}...", flush=True)
+    time.sleep(1)
+print("🚀 Partenza analisi!\n", flush=True)
 
 input_dir = sys.argv[1]
 audio_format = sys.argv[2]
 dataset_name = sys.argv[3]
 
 if not os.path.exists(input_dir):
-    print(f"❌ Errore: cartella non trovata -> {input_dir}")
+    print(f"❌ Errore: cartella non trovata -> {input_dir}", flush=True)
     sys.exit(1)
 
 h5_files = sorted([f for f in os.listdir(input_dir) if f.endswith(f'_{audio_format}_dataset.h5')])
 
 if not h5_files:
-    print(f"❌ Nessun file _{audio_format}_dataset.h5 trovato in {input_dir}")
+    print(f"❌ Nessun file _{audio_format}_dataset.h5 trovato in {input_dir}", flush=True)
     sys.exit(1)
 
-print("\n" + "=" * 95)
-print(f"🔍 ANALISI CONTEGGI DATASET: {dataset_name} ({audio_format.upper()})")
-print("=" * 95)
-print(f"{'Classe':<40} | {'Campioni Tot':<15} | {'Tracce Univoche':<18} | {'Duplicati/Chunk'}")
-print("-" * 95)
+print("=" * 95, flush=True)
+print(f"🔍 ANALISI CONTEGGI DATASET: {dataset_name} ({audio_format.upper()})", flush=True)
+print("=" * 95, flush=True)
+print(f"{'Classe':<40} | {'Campioni Tot':<15} | {'Tracce Univoche':<18} | {'Duplicati/Chunk'}", flush=True)
+print("-" * 95, flush=True)
 
 tot_samples = 0
 tot_unique = 0
@@ -70,11 +77,11 @@ for h5_file in h5_files:
         tot_samples += n_samples
         tot_unique += n_unique
         
-        print(f"{label:<40} | {n_samples:<15} | {n_unique:<18} | {diff}")
+        print(f"{label:<40} | {n_samples:<15} | {n_unique:<18} | {diff}", flush=True)
 
-print("-" * 95)
-print(f"{'TOTALE':<40} | {tot_samples:<15} | {tot_unique:<18} | {tot_samples - tot_unique}")
-print("=" * 95 + "\n")
+print("-" * 95, flush=True)
+print(f"{'TOTALE':<40} | {tot_samples:<15} | {tot_unique:<18} | {tot_samples - tot_unique}", flush=True)
+print("=" * 95 + "\n", flush=True)
 EOF
 
 echo "📂 Ispezione da: $H5_SOURCE_DIR"
