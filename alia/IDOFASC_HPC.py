@@ -10,6 +10,8 @@ import scipy.fftpack as fftpack
 import matplotlib
 matplotlib.use('Agg')  # Headless mode per cluster
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+from scipy.spatial import ConvexHull
 from scipy.optimize import linear_sum_assignment
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
@@ -22,7 +24,6 @@ from sklearn.metrics import (
 # Priorità ai moduli in /app
 sys.path.insert(0, '/app')
 
-# Production pipeline patches and redirects
 import huggingface_hub
 import transformers
 import msclap
@@ -96,18 +97,18 @@ def extract_gfcc(sig, sr, n=13):
     return np.mean(gfcc.T, axis=0)
 
 def extract_cqcc(sig, sr, n=13):
-  cqt = np.abs(librosa.cqt(sig, sr=sr))
-  log_cqt = librosa.amplitude_to_db(cqt)
-  cqcc = fftpack.dct(log_cqt, axis=0, type=2, norm='ortho')[:n]
-  return np.mean(cqcc.T, axis=0)
+    cqt = np.abs(librosa.cqt(sig, sr=sr))
+    log_cqt = librosa.amplitude_to_db(cqt)
+    cqcc = fftpack.dct(log_cqt, axis=0, type=2, norm='ortho')[:n]
+    return np.mean(cqcc.T, axis=0)
 
 def compute_metrics(X, y_true, y_pred):
     return {
-        "silhouette": silhouette_score(X, y_pred),
-        "rand": adjusted_rand_score(y_true, y_pred),
-        "fowlkes_mallows": fowlkes_mallows_score(y_true, y_pred),
-        "calinski_harabasz": calinski_harabasz_score(X, y_pred),
-        "davies_bouldin": davies_bouldin_score(X, y_pred),
+        "silhouette": float(silhouette_score(X, y_pred)),
+        "rand": float(adjusted_rand_score(y_true, y_pred)),
+        "fowlkes_mallows": float(fowlkes_mallows_score(y_true, y_pred)),
+        "calinski_harabasz": float(calinski_harabasz_score(X, y_pred)),
+        "davies_bouldin": float(davies_bouldin_score(X, y_pred)),
     }
 
 # ==============================================================================
@@ -135,7 +136,6 @@ def compute_contingency_and_matching(y_true, y_pred, n_classes):
 
     row_ind, col_ind = linear_sum_assignment(-N)
     cluster_to_class = {c: r for r, c in zip(row_ind, col_ind)}
-    
     y_matched = np.array([cluster_to_class.get(p, -1) for p in y_pred])
     
     matched_matrix = np.zeros((n_classes, n_classes), dtype=int)
@@ -157,7 +157,6 @@ def compute_class_metrics_single_run(N, matched_matrix, classes):
             continue
             
         C_i = np.max(row_n) / N_i
-        
         p_ij = row_n / N_i
         p_ij_nonzero = p_ij[p_ij > 0]
         H_i = -np.sum(p_ij_nonzero * np.log(p_ij_nonzero)) / np.log(K) if K > 1 else 0.0
@@ -180,7 +179,7 @@ def compute_class_metrics_single_run(N, matched_matrix, classes):
             "matched_precision": precision,
             "matched_recall": recall,
             "matched_f1": f1,
-            "confused_row_counts": confused_row  # vettore di conteggi di confusione verso altre classi
+            "confused_row_counts": confused_row
         }
         
     return run_metrics
@@ -213,6 +212,48 @@ def plot_and_save_heatmap(matrix, row_labels, col_labels, title, save_path, fmt=
     plt.savefig(save_path, dpi=300)
     plt.close(fig)
 
+def plot_and_save_pca_clusters(X_pca, y_pred, y_true, classes, centroids, title, save_path):
+    X2 = PCA(n_components=2).fit_transform(X_pca)
+    cents2 = PCA(n_components=2).fit(X_pca).transform(centroids)
+    
+    n_c = len(classes)
+    cmap = cm.get_cmap("tab20" if n_c <= 20 else "gist_ncar", n_c)
+    color_list = [cmap(i) for i in range(n_c)]
+    
+    plt.figure(figsize=(11, 9))
+    for c in range(n_c):
+        col = color_list[c]
+        pts_cluster = X2[y_pred == c]
+        pts_true = X2[y_true == c]
+        
+        if len(pts_cluster) >= 3:
+            try:
+                jitter = np.random.normal(0, 1e-9, pts_cluster.shape)
+                pts_jittered = pts_cluster + jitter
+                hull = ConvexHull(pts_jittered)
+                hp = pts_jittered[hull.vertices]
+                plt.plot(np.r_[hp[:, 0], hp[0, 0]], np.r_[hp[:, 1], hp[0, 1]], "--", color=col, lw=1.5, alpha=0.6)
+                plt.fill(hp[:, 0], hp[:, 1], color=col, alpha=0.05)
+            except Exception:
+                pass
+
+        if len(pts_true) > 0:
+            gt_mean_x = np.mean(pts_true[:, 0])
+            gt_mean_y = np.mean(pts_true[:, 1])
+            plt.text(gt_mean_x, gt_mean_y, str(c+1), 
+                     fontsize=11, fontweight='bold', color='black',
+                     bbox=dict(facecolor='white', alpha=0.7, edgecolor=col, boxstyle='round,pad=0.2'))
+            plt.plot(gt_mean_x, gt_mean_y, "o", c="black", markersize=4)
+
+    plt.scatter(cents2[:, 0], cents2[:, 1], c="red", s=90, marker="X", label="Cluster Centroids", alpha=0.85)
+    plt.title(title, fontsize=12, fontweight='bold')
+    plt.xlabel("Principal Component 1")
+    plt.ylabel("Principal Component 2")
+    plt.grid(True, linestyle=":", alpha=0.5)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300)
+    plt.close()
+
 # ==============================================================================
 # MAIN PIPELINE
 # ==============================================================================
@@ -235,7 +276,6 @@ def main():
     all_filenames, all_labels = [], []
 
     h5_files = sorted([f for f in os.listdir(input_dir) if f.endswith(f'_{audio_format}_dataset.h5')])
-    
     if not h5_files:
         print(f"❌ ERROR: No .h5 files found in {input_dir}")
         sys.exit(1)
@@ -279,14 +319,22 @@ def main():
     matrices_dir = os.path.join(output_folder, "matrices")
     heatmaps_dir = os.path.join(output_folder, "heatmaps")
     sample_level_dir = os.path.join(output_folder, "sample_level")
+    pca_plots_dir = os.path.join(output_folder, "pca_plots")
+    
     os.makedirs(matrices_dir, exist_ok=True)
     os.makedirs(heatmaps_dir, exist_ok=True)
     os.makedirs(sample_level_dir, exist_ok=True)
+    os.makedirs(pca_plots_dir, exist_ok=True)
 
-    # 🎯 20 Random Initializations esplicitamente tracciate
+    # Parametri esatti concordati per il manoscritto
+    KMEANS_N_INIT = 50
+    BISECT_N_INIT = 10
+    MAX_ITER = 1000
+
     N_RUNS = 20
     SEEDS = [42 + i for i in range(N_RUNS)]
-    log_step(f"📋 Semi stocastici utilizzati per le {N_RUNS} random initializations: {SEEDS}")
+    log_step(f"📋 Semi stocastici (20 Runs): {SEEDS}")
+    log_step(f"⚙️ Parametri: KMeans(n_init={KMEANS_N_INIT}, max_iter={MAX_ITER}) | Bisecting(n_init={BISECT_N_INIT}, max_iter={MAX_ITER})")
 
     master_class_records = []
     global_results = []
@@ -314,7 +362,6 @@ def main():
                 "confused_counts_list": []
             } for c in classes}
 
-            # Collezionatori di matrici sulle 20 run
             contingency_mats = []
             matched_mats = []
             matched_norm_mats = []
@@ -322,14 +369,22 @@ def main():
 
             for seed_idx, curr_seed in enumerate(SEEDS):
                 if algo_name == "kmeans":
-                    model = KMeans(n_clusters=n_classes, random_state=curr_seed, n_init=10, max_iter=500).fit(X_pca)
+                    model = KMeans(n_clusters=n_classes, random_state=curr_seed, n_init=KMEANS_N_INIT, max_iter=MAX_ITER).fit(X_pca)
                 else:
-                    model = BisectingKMeans(n_clusters=n_classes, random_state=curr_seed, n_init=5, max_iter=500).fit(X_pca)
+                    model = BisectingKMeans(n_clusters=n_classes, random_state=curr_seed, n_init=BISECT_N_INIT, max_iter=MAX_ITER).fit(X_pca)
 
                 y_pred = model.labels_
                 N, matched_mat, y_matched = compute_contingency_and_matching(y_true, y_pred, n_classes)
 
-                # 🎯 Salvataggio CSV sample-level per ciascuna run
+                # Salvataggio plot PCA con Convex Hulls sulla run di riferimento (seed 42)
+                if curr_seed == 42:
+                    plot_save_path = os.path.join(pca_plots_dir, f"pca_clusters_{dataset_name}_{feat_name}_{algo_name}_seed42.png")
+                    plot_and_save_pca_clusters(
+                        X_pca, y_pred, y_true, classes, model.cluster_centers_,
+                        f"PCA Cluster Geometry: {dataset_name} | {feat_name.upper()} - {algo_name.capitalize()} (Seed 42)",
+                        plot_save_path
+                    )
+
                 matched_class_names = [classes[idx] if idx >= 0 else "Unmatched" for idx in y_matched]
                 true_class_names = [classes[idx] for idx in y_true]
                 df_sample_level = pd.DataFrame({
@@ -343,11 +398,9 @@ def main():
                     index=False
                 )
 
-                # Metriche globali per questa run
                 m_single = compute_metrics(X_pca, y_true, y_pred)
                 run_global_metrics.append(m_single)
 
-                # Matrice di confusione normalizzata per riga (recall-based)
                 m_row_sums = matched_mat.sum(axis=1, keepdims=True)
                 m_norm = np.divide(matched_mat, m_row_sums, out=np.zeros_like(matched_mat, dtype=float), where=m_row_sums != 0)
 
@@ -364,7 +417,7 @@ def main():
                     runs_metrics_collector[c_name]["matched_f1"].append(m_vals["matched_f1"])
                     runs_metrics_collector[c_name]["confused_counts_list"].append(m_vals["confused_row_counts"])
 
-            # 🎯 AGGREGAZIONE METRICHE GLOBALI SULLE 20 RUNS
+            # Aggregazione metriche globali (Media +- Std)
             df_rgm = pd.DataFrame(run_global_metrics)
             global_record = {
                 "dataset": dataset_name,
@@ -385,7 +438,7 @@ def main():
             }
             global_results.append(global_record)
 
-            # 🎯 MATRICI MEDIE E DEVIAZIONE STANDARD SULLE 20 RUNS
+            # Matrici medie e deviazione standard
             matched_mean = np.mean(matched_norm_mats, axis=0)
             matched_std = np.std(matched_norm_mats, axis=0)
 
@@ -395,13 +448,12 @@ def main():
             df_matched_std = pd.DataFrame(matched_std, index=classes, columns=classes)
             df_matched_std.to_csv(os.path.join(matrices_dir, f"matched_confusion_std_{dataset_name}_{feat_name}_{algo_name}.csv"))
 
-            # Salva anche la media assoluta di contingency
             contingency_mean = np.mean(contingency_mats, axis=0)
             cluster_cols = [f"Cluster_{j}" for j in range(n_classes)]
             df_cont_mean = pd.DataFrame(contingency_mean, index=classes, columns=cluster_cols)
             df_cont_mean.to_csv(os.path.join(matrices_dir, f"contingency_abs_mean_{dataset_name}_{feat_name}_{algo_name}.csv"))
 
-            # Generazione Heatmaps Medie
+            # Heatmaps
             plot_and_save_heatmap(
                 matched_mean, classes, classes,
                 f"Matched Confusion Matrix (Mean 20 Runs): {feat_name.upper()} - {algo_name.capitalize()}",
@@ -415,16 +467,15 @@ def main():
                 fmt="{:.2f}", cmap="viridis"
             )
 
-            # 🎯 AGGREGAZIONE METRICHE CLASS-WISE SULLE 20 RUNS
+            # Aggregazione metriche class-wise
             for i, c_name in enumerate(classes):
                 c_data = runs_metrics_collector[c_name]
                 sil_info = sem_sil_dict[c_name]
                 n_samples_class = sil_info["n_samples"]
                 total_samples_evaluated = n_samples_class * N_RUNS
 
-                # Somma dei conteggi di confusione verso ciascuna altra classe su tutte le 20 run
                 sum_confused_counts = np.sum(np.array(c_data["confused_counts_list"]), axis=0)
-                sum_confused_counts[i] = -1  # escludiamo la vera classe
+                sum_confused_counts[i] = -1
 
                 max_conf_idx = np.argmax(sum_confused_counts)
                 total_conf_n = sum_confused_counts[max_conf_idx]
@@ -432,7 +483,6 @@ def main():
                 if total_conf_n > 0:
                     top_other = classes[max_conf_idx]
                     mean_conf_n_per_run = total_conf_n / N_RUNS
-                    # 🎯 Calcolato sull'intero campione delle 20 run:
                     main_conf_pct_overall = (total_conf_n / total_samples_evaluated) * 100.0
                 else:
                     top_other = "None"
@@ -462,7 +512,6 @@ def main():
                     "std_semantic_silhouette": sil_info["std_semantic_silhouette"]
                 })
 
-    # --- SALVATAGGIO DEI RISULTATI FINALI GLOBALI E CLASS-WISE ---
     df_global = pd.DataFrame(global_results)
     global_csv_path = os.path.join(output_folder, f"metrics_{dataset_name}_{audio_format}.csv")
     df_global.to_csv(global_csv_path, index=False)
@@ -472,10 +521,11 @@ def main():
     df_master.to_csv(master_csv_path, index=False)
     
     log_step(f"✅ Analisi completata! Risultati esportati in:")
-    log_step(f"   • Metriche globali: {global_csv_path}")
+    log_step(f"   • Metriche globali (Media +- Std): {global_csv_path}")
     log_step(f"   • Metriche class-wise: {master_csv_path}")
     log_step(f"   • Matrici (mean/std): {matrices_dir}")
     log_step(f"   • Heatmaps: {heatmaps_dir}")
+    log_step(f"   • PCA Cluster Plots (Convex Hulls): {pca_plots_dir}")
     log_step(f"   • Sample-level CSVs (20 runs): {sample_level_dir}")
 
 if __name__ == "__main__":
