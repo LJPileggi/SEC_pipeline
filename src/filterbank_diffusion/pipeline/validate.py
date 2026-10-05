@@ -120,7 +120,7 @@ def main():
     classes_list, _, _, _, sampling_rate, _, _, seed, _, _, _ = get_config_from_yaml("config0.yaml")
     
     samples_per_class = 50
-    ddim_steps = 25
+    ddim_steps = 100
     eval_batch_size = 16
     target_fractions = [1, 3, 6, 12, 16, 24, 32]
     
