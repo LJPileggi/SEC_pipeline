@@ -155,7 +155,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
                         frac_tensor = torch.full((batch_tensor.shape[0],), fill_value=float(n_octave), device=device)
 
                         # 3. DDIM Sampling conditioned on octave guide [B, 1, 64, 1152]
-                        mel_reconstructed = diffusion_scheduler.sample_ddim(x_cond, fraction_id=frac_tensor, ddim_steps=200)
+                        mel_reconstructed = diffusion_scheduler.sample_ddim(x_cond, fraction_id=frac_tensor, ddim_steps=100)
 
                         # 4. Deterministic CLAP sliding-window feature extraction & L2 hypersphere normalization
                         embeddings = extract_clap_embedding_from_reconstructed_mel(
