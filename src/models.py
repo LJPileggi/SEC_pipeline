@@ -372,6 +372,64 @@ def convert_octave_to_msclap_mel(spectrogram_gpu, target_mels=64, target_time=70
     # 5. Permute to standard PyTorch format [B, 1, F, T] = [B, 1, 64, 700]
     return x_norm.permute(0, 1, 3, 2)
 
+def hyperresolve_octave_pchip_gpu(octave_spec, n_octave, target_bands=320, target_time=1152, sample_rate=52100):
+    """
+    Iperrisoluzione analitico-acustica delle frazioni d'ottava verso la griglia di riferimento a 1/32
+    (F_ref = target_bands, es. 320) mediante Spline Monotone PCHIP su asse logaritmico delle frequenze.
+    Conserva l'integrale energetico ed elimina l'aliasing spettrale.
+    
+    Input:  octave_spec: [B, T_blocks, F_in] (dB o ampiezza)
+    Output: x_cond: [B, 1, target_bands, target_time] (320 x 1152) normalizzato per U-Net
+    """
+    device = octave_spec.device
+    B, T_in, F_in = octave_spec.shape
+    
+    # 1. Definizione fisica dei centri banda sorgente e target
+    nyquist = sample_rate / 2.0
+    f_ref = 1000.0
+    
+    # Griglia sorgente
+    n_min_src = int(np.round(n_octave * np.log2(20.0 / f_ref)))
+    n_max_src = int(np.round(n_octave * np.log2(nyquist / f_ref)))
+    freqs_src = f_ref * (2.0 ** (np.arange(n_min_src, n_max_src + 1) / n_octave))
+    freqs_src = freqs_src[freqs_src < nyquist - 100.0]
+    
+    # Se per tolleranze di arrotondamento la lunghezza differisce da F_in, interpoliamo linearmente le frequenze
+    if len(freqs_src) != F_in:
+        log_f_src = np.linspace(np.log2(20.0), np.log2(nyquist - 100.0), F_in)
+    else:
+        log_f_src = np.log2(freqs_src)
+        
+    # Griglia universale di riferimento (32esime d'ottava fisse)
+    log_f_target = np.linspace(log_f_src[0], log_f_src[-1], target_bands)
+    
+    # 2. PCHIP Spline 1D lungo l'asse spettrale
+    # octave_spec_np: [B * T_in, F_in]
+    spec_flat = octave_spec.reshape(-1, F_in).detach().cpu().numpy()
+    
+    if F_in == target_bands:
+        spec_pchip = spec_flat
+    else:
+        # PchipInterpolator è monotono e privo di overshoot/gibbs
+        pchip = scipy.interpolate.PchipInterpolator(log_f_src, spec_flat, axis=-1, extrapolate=True)
+        spec_pchip = pchip(log_f_target)
+        
+    spec_target = torch.from_numpy(spec_pchip).float().to(device).reshape(B, T_in, target_bands)
+    
+    # 3. Trasposizione e allineamento temporale verso target_time (1152)
+    # [B, T_in, target_bands] -> [B, 1, target_bands, T_in]
+    x_cond = spec_target.permute(0, 2, 1).unsqueeze(1)
+    
+    if T_in != target_time:
+        x_cond = F.interpolate(x_cond, size=(target_bands, target_time), mode='bilinear', align_corners=False)
+        
+    # 4. Normalizzazione standardizzata per U-Net
+    mean = x_cond.mean(dim=(2, 3), keepdim=True)
+    std = x_cond.std(dim=(2, 3), keepdim=True)
+    x_cond_norm = (x_cond - mean) / (std + 1e-6)
+    
+    return torch.nan_to_num(x_cond_norm, nan=0.0, posinf=10.0, neginf=-10.0)
+
 def extract_clap_embedding_from_reconstructed_mel(mel_reconstructed, clap_model, target_time=1140, device=None):
     """
     Extracts L2-normalized CLAP audio embeddings directly from U-Net reconstructed Mel-spectrograms.

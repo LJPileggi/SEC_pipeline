@@ -18,7 +18,7 @@ from utils import setup_environ_vars, setup_distributed_environment, cleanup_dis
 from filterbank_diffusion.models.unet import SpectrogramUNet
 from filterbank_diffusion.models.diffusion import ConditionalGaussianDiffusion
 from filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
-from filterbank_diffusion.pipeline.spectral import OnlineSpectrogramPipeline, SpectralConvergenceLoss
+from filterbank_diffusion.pipeline.spectral import OnlineSpectrogramPipeline, AcousticStructuralLoss
 
 # Loss Ibrida: MSE + Spectral Convergence
 LOSS_TYPE = "hybrid"
@@ -165,12 +165,30 @@ def main():
                 
                 loss_mse = nn.functional.mse_loss(noise_pred, noise)
                 
+                # Forward pass tracciata per la retropropagazione
+                noise_pred = unet(x_t, t, x_cond, fraction_id=frac_tensor, x_self_cond=x_self_cond)
+                
+                loss_mse = nn.functional.mse_loss(noise_pred, noise)
+                
                 if LOSS_TYPE == "hybrid":
+                    # Estrazione dei coefficienti di diffusione al timestep t del batch
                     sqrt_alpha = torch.sqrt(torch.clamp(diffusion_scheduler.alphas_bar[t].view(-1, 1, 1, 1), min=1e-8))
                     sqrt_one_minus_alpha = torch.sqrt(torch.clamp(1.0 - diffusion_scheduler.alphas_bar[t].view(-1, 1, 1, 1), min=0.0))
+                    
+                    # Stima differenziabile istantanea di x_0
                     pred_x0 = (x_t - sqrt_one_minus_alpha * noise_pred) / sqrt_alpha
-                    loss_spec = spectral_loss_fn(pred_x0, x_0_pristine)
-                    loss = loss_mse + 0.01 * loss_spec
+                    pred_x0 = torch.clamp(pred_x0, min=-20.0, max=20.0)
+                    
+                    # Calcolo della Loss Acustica vettorializzata per campione: [B]
+                    per_sample_acoustic = acoustic_loss_fn(pred_x0, x_0_pristine)
+                    
+                    # Fattore di attenuazione per ciascun campione: w_t = sqrt(alphas_bar[t])
+                    # Per t vicini a 1000 (alto rumore), w_t tende a 0, proteggendo la rete da stime instabili
+                    w_t = sqrt_alpha.view(-1)
+                    loss_acoustic = torch.mean(w_t * per_sample_acoustic)
+                    
+                    # Bilanciamento: lambda = 0.1 garantisce equilibrio paritetico con MSE
+                    loss = loss_mse + 0.1 * loss_acoustic
                 else:
                     loss = loss_mse
                 

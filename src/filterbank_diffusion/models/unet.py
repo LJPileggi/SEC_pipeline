@@ -16,8 +16,7 @@ class SinusoidalPositionEmbeddings(nn.Module):
         embeddings = math.log(10000) / (half_dim - 1)
         embeddings = torch.exp(torch.arange(half_dim, device=device) * -embeddings)
         embeddings = x[:, None] * embeddings[None, :]
-        embeddings = torch.cat((embeddings.sin(), embeddings.cos()), dim=-1)
-        return embeddings
+        return torch.cat((embeddings.sin(), embeddings.cos()), dim=-1)
 
 class FiLMBlock(nn.Module):
     """Feature-wise Linear Modulation block."""
@@ -53,44 +52,55 @@ class AsymmetricConvBlock(nn.Module):
             h = self.film(h, emb)
         return h + self.res_conv(x)
 
-class MultiHeadSelfAttention2D(nn.Module):
-    """Leggerissimo layer di Self-Attention spaziale per feature map compresse."""
+class GuidedCrossAttention2D(nn.Module):
+    """
+    Bottleneck Cross-Attention: il ramo audio (Query) viene guidato e condizionato 
+    dalla rappresentazione latente delle ottave (Key, Value).
+    """
     def __init__(self, channels, num_heads=4):
         super().__init__()
         self.num_heads = num_heads
-        self.norm = nn.GroupNorm(8, channels)
-        self.qkv = nn.Conv2d(channels, channels * 3, kernel_size=1)
+        self.norm_audio = nn.GroupNorm(8, channels)
+        self.norm_cond = nn.GroupNorm(8, channels)
+        
+        self.to_q = nn.Conv2d(channels, channels, kernel_size=1)
+        self.to_k = nn.Conv2d(channels, channels, kernel_size=1)
+        self.to_v = nn.Conv2d(channels, channels, kernel_size=1)
         self.proj = nn.Conv2d(channels, channels, kernel_size=1)
         
-    def forward(self, x):
-        B, C, H, W = x.shape
-        h = self.norm(x)
-        qkv = self.qkv(h)
-        q, k, v = qkv.chunk(3, dim=1)
+    def forward(self, x_audio, x_cond):
+        B, C, Ha, Wa = x_audio.shape
+        _, _, Hc, Wc = x_cond.shape
+        
+        ha = self.norm_audio(x_audio)
+        hc = self.norm_cond(x_cond)
+        
+        q = self.to_q(ha)
+        k = self.to_k(hc)
+        v = self.to_v(hc)
         
         head_dim = C // self.num_heads
-        q = q.view(B, self.num_heads, head_dim, H * W).transpose(-1, -2)
-        k = k.view(B, self.num_heads, head_dim, H * W).transpose(-1, -2)
-        v = v.view(B, self.num_heads, head_dim, H * W).transpose(-1, -2)
+        q = q.view(B, self.num_heads, head_dim, Ha * Wa).transpose(-1, -2) # [B, heads, Na, head_dim]
+        k = k.view(B, self.num_heads, head_dim, Hc * Wc).transpose(-1, -2) # [B, heads, Nc, head_dim]
+        v = v.view(B, self.num_heads, head_dim, Hc * Wc).transpose(-1, -2) # [B, heads, Nc, head_dim]
         
         scale = 1.0 / (head_dim ** 0.5)
         attn = torch.softmax(torch.matmul(q, k.transpose(-1, -2)) * scale, dim=-1)
-        out = torch.matmul(attn, v)
+        out = torch.matmul(attn, v) # [B, heads, Na, head_dim]
         
-        out = out.transpose(-1, -2).contiguous().view(B, C, H, W)
-        return x + self.proj(out)
+        out = out.transpose(-1, -2).contiguous().view(B, C, Ha, Wa)
+        return x_audio + self.proj(out)
 
 class SpectrogramUNet(nn.Module):
     """
-    Enhanced 5-level U-Net:
-    - 3-channel input: [x_t, x_cond, x_self_cond] for Self-Conditioning
-    - Bottleneck Multi-Head Self-Attention
-    - Multi-scale condition injection into the decoder
+    Dual-Stream Asymmetric U-Net con Ramo di Condizionamento Iper-Risoluto (F_ref=320)
+    e Bottleneck Guided Attention.
     """
     def __init__(self, base_channels=64, emb_dim=256, cond_channels=16):
         super().__init__()
         self.cond_channels = cond_channels
 
+        # Time & Resolution Embeddings
         self.time_embedding = nn.Sequential(
             SinusoidalPositionEmbeddings(emb_dim),
             nn.Linear(emb_dim, emb_dim),
@@ -109,10 +119,10 @@ class SpectrogramUNet(nn.Module):
         c = [base_channels, base_channels * 2, base_channels * 4, base_channels * 8, base_channels * 8]
         # c = [64, 128, 256, 512, 512]
 
-        # 3 canali di ingresso: [x_t, x_cond, x_self_cond]
-        self.inc = AsymmetricConvBlock(3, c[0], emb_dim)
-
-        # Downsampling path
+        # ----------------------------------------------------------------------
+        # 1. RAMO PRINCIPALE (AUDIO): [x_t, x_self_cond] -> 2 canali in ingresso
+        # ----------------------------------------------------------------------
+        self.inc_audio = AsymmetricConvBlock(2, c[0], emb_dim)
         self.down_conv1 = nn.Conv2d(c[0], c[0], kernel_size=3, stride=(2, 2), padding=1)
         self.down1_block = AsymmetricConvBlock(c[0], c[1], emb_dim)
 
@@ -128,15 +138,42 @@ class SpectrogramUNet(nn.Module):
         self.down_conv5 = nn.Conv2d(c[4], c[4], kernel_size=3, stride=(2, 2), padding=1)
         self.down5_block = AsymmetricConvBlock(c[4], c[4], emb_dim)
 
-        # Bottleneck: mid1 + Self-Attention (72 token) + mid2
+        # ----------------------------------------------------------------------
+        # 2. RAMO CONDIZIONAMENTO DEDICATO: x_cond [1, 320, 1152]
+        # ----------------------------------------------------------------------
+        self.inc_cond = AsymmetricConvBlock(1, cond_channels, emb_dim)
+        # Livelli di riduzione dedicati per portare 320 alla scala del bottleneck
+        self.down_cond1 = nn.Sequential(
+            nn.Conv2d(cond_channels, cond_channels, kernel_size=3, stride=(2, 2), padding=1),
+            AsymmetricConvBlock(cond_channels, cond_channels, emb_dim)
+        )
+        self.down_cond2 = nn.Sequential(
+            nn.Conv2d(cond_channels, cond_channels, kernel_size=3, stride=(2, 2), padding=1),
+            AsymmetricConvBlock(cond_channels, cond_channels, emb_dim)
+        )
+        self.down_cond3 = nn.Sequential(
+            nn.Conv2d(cond_channels, cond_channels, kernel_size=3, stride=(2, 2), padding=1),
+            AsymmetricConvBlock(cond_channels, cond_channels, emb_dim)
+        )
+        self.down_cond4 = nn.Sequential(
+            nn.Conv2d(cond_channels, cond_channels, kernel_size=3, stride=(2, 2), padding=1),
+            AsymmetricConvBlock(cond_channels, cond_channels, emb_dim)
+        )
+        self.down_cond5 = nn.Sequential(
+            nn.Conv2d(cond_channels, cond_channels, kernel_size=3, stride=(2, 2), padding=1),
+            AsymmetricConvBlock(cond_channels, c[4], emb_dim) # Allineato a c[4] al bottleneck
+        )
+
+        # ----------------------------------------------------------------------
+        # 3. BOTTLENECK: GUIDED ATTENTION + FiLM MODULATION
+        # ----------------------------------------------------------------------
         self.mid1 = AsymmetricConvBlock(c[4], c[4], emb_dim)
-        self.attn_mid = MultiHeadSelfAttention2D(c[4], num_heads=4)
+        self.guided_attn = GuidedCrossAttention2D(c[4], num_heads=4)
         self.mid2 = AsymmetricConvBlock(c[4], c[4], emb_dim)
 
-        # Proiezione feature di x_cond per re-iniezione gerarchica
-        self.cond_proj = nn.Conv2d(1, cond_channels, kernel_size=3, padding=1)
-
-        # Upsampling path: Skip Connections + feature di x_cond riscalata
+        # ----------------------------------------------------------------------
+        # 4. DECODER CON SKIP CONNECTIONS E FUSIONE CONDIZIONAMENTO
+        # ----------------------------------------------------------------------
         self.up4 = nn.ConvTranspose2d(c[4], c[4], kernel_size=2, stride=2)
         self.up_block4 = AsymmetricConvBlock(c[4] * 2 + cond_channels, c[4], emb_dim)
 
@@ -158,7 +195,7 @@ class SpectrogramUNet(nn.Module):
         if x_self_cond is None:
             x_self_cond = torch.zeros_like(x_t)
 
-        x_in = torch.cat([x_t, x_cond, x_self_cond], dim=1)
+        x_audio_in = torch.cat([x_t, x_self_cond], dim=1) # [B, 2, 64, 1152]
         t_emb = self.time_embedding(t)
 
         if fraction_id is not None:
@@ -173,51 +210,40 @@ class SpectrogramUNet(nn.Module):
             dummy_res = torch.zeros_like(t_emb)
             fused_emb = self.fused_embedding(torch.cat([t_emb, dummy_res], dim=-1))
 
-        # Mappa multi-scala del condizionamento
-        c_feat = self.cond_proj(x_cond)
+        # --- Forward Ramo Condizionamento ---
+        c0 = self.inc_cond(x_cond, fused_emb) # [B, cond_ch, 320, 1152]
+        c1 = self.down_cond1[1](self.down_cond1[0](c0), fused_emb)
+        c2 = self.down_cond2[1](self.down_cond2[0](c1), fused_emb)
+        c3 = self.down_cond3[1](self.down_cond3[0](c2), fused_emb)
+        c4 = self.down_cond4[1](self.down_cond4[0](c3), fused_emb)
+        c5 = self.down_cond5[1](self.down_cond5[0](c4), fused_emb) # [B, c[4], 10, 36]
 
-        # Encoder
-        h0 = self.inc(x_in, fused_emb)
+        # --- Forward Ramo Principale Audio ---
+        h0 = self.inc_audio(x_audio_in, fused_emb) # [B, 64, 64, 1152]
         h1 = self.down1_block(self.down_conv1(h0), fused_emb)
         h2 = self.down2_block(self.down_conv2(h1), fused_emb)
         h3 = self.down3_block(self.down_conv3(h2), fused_emb)
         h4 = self.down4_block(self.down_conv4(h3), fused_emb)
-        h5 = self.down5_block(self.down_conv5(h4), fused_emb)
+        h5 = self.down5_block(self.down_conv5(h4), fused_emb) # [B, c[4], 2, 36]
 
-        # Bottleneck con Self-Attention
+        # --- Bottleneck Guidato (Cross-Attention Audio <- Condizione) ---
         h_mid = self.mid1(h5, fused_emb)
-        h_mid = self.attn_mid(h_mid)
+        h_mid = self.guided_attn(h_mid, c5) # Guidata dalla rappresentazione latente di c5!
         h_mid = self.mid2(h_mid, fused_emb)
 
-        # Decoder con Skip Connections e Condizionamento Multi-Scala
-        c4 = F.interpolate(c_feat, size=h4.shape[-2:], mode='bilinear', align_corners=False)
-        u4 = self.up4(h_mid)
-        if u4.shape[-2:] != h4.shape[-2:]:
-            u4 = F.interpolate(u4, size=h4.shape[-2:], mode='bilinear', align_corners=False)
-        h_up4 = self.up_block4(torch.cat([u4, h4, c4], dim=1), fused_emb)
+        # Helper per l'adattamento dimensionale delle skip del condizionamento
+        def match_and_cat(u, h_skip, c_skip):
+            if u.shape[-2:] != h_skip.shape[-2:]:
+                u = F.interpolate(u, size=h_skip.shape[-2:], mode='bilinear', align_corners=False)
+            if c_skip.shape[-2:] != h_skip.shape[-2:]:
+                c_skip = F.interpolate(c_skip, size=h_skip.shape[-2:], mode='bilinear', align_corners=False)
+            return torch.cat([u, h_skip, c_skip], dim=1)
 
-        c3 = F.interpolate(c_feat, size=h3.shape[-2:], mode='bilinear', align_corners=False)
-        u3 = self.up3(h_up4)
-        if u3.shape[-2:] != h3.shape[-2:]:
-            u3 = F.interpolate(u3, size=h3.shape[-2:], mode='bilinear', align_corners=False)
-        h_up3 = self.up_block3(torch.cat([u3, h3, c3], dim=1), fused_emb)
-
-        c2 = F.interpolate(c_feat, size=h2.shape[-2:], mode='bilinear', align_corners=False)
-        u2 = self.up2(h_up3)
-        if u2.shape[-2:] != h2.shape[-2:]:
-            u2 = F.interpolate(u2, size=h2.shape[-2:], mode='bilinear', align_corners=False)
-        h_up2 = self.up_block2(torch.cat([u2, h2, c2], dim=1), fused_emb)
-
-        c1 = F.interpolate(c_feat, size=h1.shape[-2:], mode='bilinear', align_corners=False)
-        u1 = self.up1(h_up2)
-        if u1.shape[-2:] != h1.shape[-2:]:
-            u1 = F.interpolate(u1, size=h1.shape[-2:], mode='bilinear', align_corners=False)
-        h_up1 = self.up_block1(torch.cat([u1, h1, c1], dim=1), fused_emb)
-
-        c0 = c_feat
-        u0 = self.up0(h_up1)
-        if u0.shape[-2:] != h0.shape[-2:]:
-            u0 = F.interpolate(u0, size=h0.shape[-2:], mode='bilinear', align_corners=False)
-        h_up0 = self.up_block0(torch.cat([u0, h0, c0], dim=1), fused_emb)
+        # --- Decoder con Skip Connections ---
+        h_up4 = self.up_block4(match_and_cat(self.up4(h_mid), h4, c4), fused_emb)
+        h_up3 = self.up_block3(match_and_cat(self.up3(h_up4), h3, c3), fused_emb)
+        h_up2 = self.up_block2(match_and_cat(self.up2(h_up3), h2, c2), fused_emb)
+        h_up1 = self.up_block1(match_and_cat(self.up1(h_up2), h1, c1), fused_emb)
+        h_up0 = self.up_block0(match_and_cat(self.up0(h_up1), h0, c0), fused_emb)
 
         return self.outc(h_up0)

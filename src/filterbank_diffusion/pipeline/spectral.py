@@ -34,17 +34,37 @@ transformers.utils.hub.cached_file = universal_path_redirect
 transformers.utils.hub.hf_hub_download = universal_path_redirect
 msclap.CLAPWrapper.hf_hub_download = universal_path_redirect
 
-from src.models import spectrogram_n_octaveband_generator_gpu, convert_octave_to_msclap_mel, CLAP_initializer
+from src.models import spectrogram_n_octaveband_generator_gpu, hyperresolve_octave_pchip_gpu, CLAP_initializer
 
-class SpectralConvergenceLoss(nn.Module):
-    """Relative Frobenius norm error between predicted and target mel spectrograms."""
-    def __init__(self):
+class AcousticStructuralLoss(nn.Module):
+    """
+    Loss Acustica Strutturale Differenziabile per Mel-Spettrogrammi:
+    L_acoustic = L_contrast + alpha * L_transient + beta * L_texture
+    Calcolata elemento per elemento per consentire la corretta attenuazione sul timestep.
+    """
+    def __init__(self, alpha=0.5, beta=0.5):
         super().__init__()
-        
+        self.alpha = alpha
+        self.beta = beta
+
     def forward(self, x_pred, x_target):
-        diff_norm = torch.norm(x_target - x_pred, p='fro')
-        target_norm = torch.norm(x_target, p='fro') + 1e-8
-        return diff_norm / target_norm
+        # x_pred, x_target: [B, 1, F, T]
+        
+        # 1. Dynamic Range L1 Contrast (media spaziale per campione)
+        l_contrast = torch.abs(x_pred - x_target).mean(dim=(1, 2, 3))
+
+        # 2. Transienti Temporali (Derivata prima finita lungo l'asse T)
+        grad_t_pred = x_pred[..., 1:] - x_pred[..., :-1]
+        grad_t_target = x_target[..., 1:] - x_target[..., :-1]
+        l_transient = torch.abs(grad_t_pred - grad_t_target).mean(dim=(1, 2, 3))
+
+        # 3. Tessiture Spettrali Stazionarie (Derivata prima finita lungo l'asse F)
+        grad_f_pred = x_pred[..., 1:, :] - x_pred[..., :-1, :]
+        grad_f_target = x_target[..., 1:, :] - x_target[..., :-1, :]
+        l_texture = torch.abs(grad_f_pred - grad_f_target).mean(dim=(1, 2, 3))
+
+        # Ritorna il tensore per-campione [B]
+        return l_contrast + self.alpha * l_transient + self.beta * l_texture
 
 class OnlineSpectrogramPipeline(nn.Module):
     def __init__(self, weights_path, sample_rate=52100, device='cuda'):
@@ -109,6 +129,6 @@ class OnlineSpectrogramPipeline(nn.Module):
         octave_spec = octave_spec.permute(0, 2, 1) # [B, T_blocks, F_octave]
         
         # 4. Resampling 2D normalizzato direttamente alla griglia U-Net [B, 1, 64, 1152]
-        x_cond = convert_octave_to_msclap_mel(octave_spec, target_mels=64, target_time=target_time_unet)
+        x_cond = hyperresolve_octave_pchip_gpu(octave_spec, fraction_id, target_bands=320, target_time=target_time_unet)
 
         return x_0_pristine, x_cond
