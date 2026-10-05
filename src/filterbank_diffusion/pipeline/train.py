@@ -202,16 +202,17 @@ def main():
             total_epoch_time = time.time() - epoch_start_time
             print(f"📢 Epoch {epoch:03d} Complete in {total_epoch_time/60:.2f} min. Master Average Loss: {avg_loss:.6f}\n", flush=True)
             
-            # Salvataggio progressivo con indice dell'epoca esatta
-            checkpoint_path = os.path.join(target_model_dir, f"unet_epoch_{epoch}.pt")
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': unet.module.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'loss': avg_loss,
-                'epoch_time_secs': total_epoch_time,
-            }, checkpoint_path)
-            print(f"💾 Checkpoint saved cleanly to: {checkpoint_path}", flush=True)
+            # Salvataggio progressivo ogni 5 epoche e all'ultima epoca programmata
+            if (epoch + 1) % 5 == 0 or epoch == (end_epoch - 1):
+                checkpoint_path = os.path.join(target_model_dir, f"unet_epoch_{epoch}.pt")
+                torch.save({
+                    'epoch': epoch,
+                    'model_state_dict': unet.module.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'loss': avg_loss,
+                    'epoch_time_secs': total_epoch_time,
+                }, checkpoint_path)
+                print(f"💾 Checkpoint saved cleanly to: {checkpoint_path}", flush=True)
 
     dataset.close()
     cleanup_distributed_environment(rank)
