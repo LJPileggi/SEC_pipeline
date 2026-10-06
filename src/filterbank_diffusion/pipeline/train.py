@@ -99,7 +99,7 @@ def main():
             sys.exit(1)
 
     diffusion_scheduler = ConditionalGaussianDiffusion(unet_model=unet, timesteps=1000).to(device)
-    spectral_loss_fn = SpectralConvergenceLoss().to(device)
+    spectral_loss_fn = AcousticStructuralLoss().to(device)
     
     # Wrapping DDP dopo il ripristino dei pesi
     if torch.cuda.is_available():
