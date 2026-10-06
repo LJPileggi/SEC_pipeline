@@ -52,6 +52,33 @@ class AsymmetricConvBlock(nn.Module):
             h = self.film(h, emb)
         return h + self.res_conv(x)
 
+class MultiHeadSelfAttention2D(nn.Module):
+    """Layer di Self-Attention spaziale per il flusso audio compresso."""
+    def __init__(self, channels, num_heads=4):
+        super().__init__()
+        self.num_heads = num_heads
+        self.norm = nn.GroupNorm(8, channels)
+        self.qkv = nn.Conv2d(channels, channels * 3, kernel_size=1)
+        self.proj = nn.Conv2d(channels, channels, kernel_size=1)
+        
+    def forward(self, x):
+        B, C, H, W = x.shape
+        h = self.norm(x)
+        qkv = self.qkv(h)
+        q, k, v = qkv.chunk(3, dim=1)
+        
+        head_dim = C // self.num_heads
+        q = q.view(B, self.num_heads, head_dim, H * W).transpose(-1, -2)
+        k = k.view(B, self.num_heads, head_dim, H * W).transpose(-1, -2)
+        v = v.view(B, self.num_heads, head_dim, H * W).transpose(-1, -2)
+        
+        scale = 1.0 / (head_dim ** 0.5)
+        attn = torch.softmax(torch.matmul(q, k.transpose(-1, -2)) * scale, dim=-1)
+        out = torch.matmul(attn, v)
+        
+        out = out.transpose(-1, -2).contiguous().view(B, C, H, W)
+        return x + self.proj(out)
+
 class GuidedCrossAttention2D(nn.Module):
     """
     Bottleneck Cross-Attention: il ramo audio (Query) viene guidato e condizionato 
@@ -91,10 +118,37 @@ class GuidedCrossAttention2D(nn.Module):
         out = out.transpose(-1, -2).contiguous().view(B, C, Ha, Wa)
         return x_audio + self.proj(out)
 
+class BottleneckDualAttention(nn.Module):
+    """
+    Doppio stadio attentivo al bottleneck:
+    1. Self-Attention: coerenza e correlazione armonica interna del segnale audio rumoroso.
+    2. Guided Cross-Attention: ancoraggio alle feature fisiche della griglia a frazioni d'ottava (320 bin).
+    3. FFN: raffinamento non lineare residuo.
+    """
+    def __init__(self, channels=512, num_heads=4):
+        super().__init__()
+        self.self_attn = MultiHeadSelfAttention2D(channels, num_heads=num_heads)
+        self.cross_attn = GuidedCrossAttention2D(channels, num_heads=num_heads)
+        self.norm = nn.GroupNorm(8, channels)
+        self.ffn = nn.Sequential(
+            nn.Conv2d(channels, channels * 2, kernel_size=1),
+            nn.SiLU(),
+            nn.Conv2d(channels * 2, channels, kernel_size=1)
+        )
+
+    def forward(self, x_audio, x_cond):
+        h = self.self_attn(x_audio)
+        h = self.cross_attn(h, x_cond)
+        h = h + self.ffn(self.norm(h))
+        return h
+
 class SpectrogramUNet(nn.Module):
     """
-    Dual-Stream Asymmetric U-Net con Ramo di Condizionamento Iper-Risoluto (F_ref=320)
-    e Bottleneck Guided Attention.
+    Dual-Stream Asymmetric U-Net con:
+    - Ramo di Ingresso Audio a 2 canali: [x_t, x_self_cond] (64 x 1152)
+    - Ramo di Condizionamento Iper-Risoluto (F_ref=320, 1152)
+    - Bottleneck Dual-Attention (Self-Attention + Guided Cross-Attention + FFN)
+    - Re-iniezione multi-scala del condizionamento nel Decoder
     """
     def __init__(self, base_channels=64, emb_dim=256, cond_channels=16):
         super().__init__()
@@ -120,7 +174,7 @@ class SpectrogramUNet(nn.Module):
         # c = [64, 128, 256, 512, 512]
 
         # ----------------------------------------------------------------------
-        # 1. RAMO PRINCIPALE (AUDIO): [x_t, x_self_cond] -> 2 canali in ingresso
+        # 1. RAMO PRINCIPALE (AUDIO): [x_t, x_self_cond] -> 2 canali (64 x 1152)
         # ----------------------------------------------------------------------
         self.inc_audio = AsymmetricConvBlock(2, c[0], emb_dim)
         self.down_conv1 = nn.Conv2d(c[0], c[0], kernel_size=3, stride=(2, 2), padding=1)
@@ -142,7 +196,6 @@ class SpectrogramUNet(nn.Module):
         # 2. RAMO CONDIZIONAMENTO DEDICATO: x_cond [1, 320, 1152]
         # ----------------------------------------------------------------------
         self.inc_cond = AsymmetricConvBlock(1, cond_channels, emb_dim)
-        # Livelli di riduzione dedicati per portare 320 alla scala del bottleneck
         self.down_cond1 = nn.Sequential(
             nn.Conv2d(cond_channels, cond_channels, kernel_size=3, stride=(2, 2), padding=1),
             AsymmetricConvBlock(cond_channels, cond_channels, emb_dim)
@@ -161,14 +214,14 @@ class SpectrogramUNet(nn.Module):
         )
         self.down_cond5 = nn.Sequential(
             nn.Conv2d(cond_channels, cond_channels, kernel_size=3, stride=(2, 2), padding=1),
-            AsymmetricConvBlock(cond_channels, c[4], emb_dim) # Allineato a c[4] al bottleneck
+            AsymmetricConvBlock(cond_channels, c[4], emb_dim)
         )
 
         # ----------------------------------------------------------------------
-        # 3. BOTTLENECK: GUIDED ATTENTION + FiLM MODULATION
+        # 3. BOTTLENECK: DUAL ATTENTION + FiLM MODULATION
         # ----------------------------------------------------------------------
         self.mid1 = AsymmetricConvBlock(c[4], c[4], emb_dim)
-        self.guided_attn = GuidedCrossAttention2D(c[4], num_heads=4)
+        self.bottleneck_dual_attn = BottleneckDualAttention(channels=c[4], num_heads=4)
         self.mid2 = AsymmetricConvBlock(c[4], c[4], emb_dim)
 
         # ----------------------------------------------------------------------
@@ -211,7 +264,7 @@ class SpectrogramUNet(nn.Module):
             fused_emb = self.fused_embedding(torch.cat([t_emb, dummy_res], dim=-1))
 
         # --- Forward Ramo Condizionamento ---
-        c0 = self.inc_cond(x_cond, fused_emb) # [B, cond_ch, 320, 1152]
+        c0 = self.inc_cond(x_cond, fused_emb) # [B, cond_channels, 320, 1152]
         c1 = self.down_cond1[1](self.down_cond1[0](c0), fused_emb)
         c2 = self.down_cond2[1](self.down_cond2[0](c1), fused_emb)
         c3 = self.down_cond3[1](self.down_cond3[0](c2), fused_emb)
@@ -226,9 +279,9 @@ class SpectrogramUNet(nn.Module):
         h4 = self.down4_block(self.down_conv4(h3), fused_emb)
         h5 = self.down5_block(self.down_conv5(h4), fused_emb) # [B, c[4], 2, 36]
 
-        # --- Bottleneck Guidato (Cross-Attention Audio <- Condizione) ---
+        # --- Bottleneck con Doppia Attenzione (Self + Guided Cross) ---
         h_mid = self.mid1(h5, fused_emb)
-        h_mid = self.guided_attn(h_mid, c5) # Guidata dalla rappresentazione latente di c5!
+        h_mid = self.bottleneck_dual_attn(h_mid, c5)
         h_mid = self.mid2(h_mid, fused_emb)
 
         # Helper per l'adattamento dimensionale delle skip del condizionamento
@@ -239,7 +292,7 @@ class SpectrogramUNet(nn.Module):
                 c_skip = F.interpolate(c_skip, size=h_skip.shape[-2:], mode='bilinear', align_corners=False)
             return torch.cat([u, h_skip, c_skip], dim=1)
 
-        # --- Decoder con Skip Connections ---
+        # --- Decoder con Skip Connections e Condizionamento Multi-Scala ---
         h_up4 = self.up_block4(match_and_cat(self.up4(h_mid), h4, c4), fused_emb)
         h_up3 = self.up_block3(match_and_cat(self.up3(h_up4), h3, c3), fused_emb)
         h_up2 = self.up_block2(match_and_cat(self.up2(h_up3), h2, c2), fused_emb)
