@@ -99,7 +99,7 @@ cp -r "$ROBERTA_PATH/." "\$TEMP_DIR/roberta-base/" || exit 1
 # 🎯 STAGE-IN PESI MODELLO DI DIFFUSIONE
 if [ -d "$DIFF_MODELS_PATH" ]; then
     echo "📦 Staging diffusion model weights from $DIFF_MODELS_PATH..."
-    cp "$DIFF_MODELS_PATH/unet_epoch_${TARGET_EPOCH-1}.pt" "\$TEMP_DIR/work_dir/diff_model/" || exit 1
+    cp "$DIFF_MODELS_PATH/unet_epoch_\$(( TARGET_EPOCH - 1 )).pt" "\$TEMP_DIR/work_dir/diff_model/" || exit 1
 else
     echo "⚠️ Warning: Diffusion models path '$DIFF_MODELS_PATH' not found!"
 fi
