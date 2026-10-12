@@ -54,6 +54,6 @@ singularity exec --nv --no-home \
     --bind "$TEMP_DIR:/tmp_data" \
     --bind "$(pwd):/app" --pwd "/app" \
     "$SIF_FILE" \
-    python3 src/filterbank_diffusion/pipeline/plot_mel_reconstructions.py
+    python3 src/filterbank_diffusion/pipeline/plot_mel_reconstruction.py
 
 cleanup_job_scratch
