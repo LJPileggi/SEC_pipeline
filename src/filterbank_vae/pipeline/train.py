@@ -33,7 +33,7 @@ def parse_args():
     parser.add_argument("--bottleneck_type", type=str, default=BOTTLENECK_TYPE, choices=["1d", "2d"])
     parser.add_argument("--latent_dim", type=int, default=LATENT_DIM)
     parser.add_argument("--use_spectral_loss", action="store_true", default=False,
-                        help="Se True, aggiunge SpectralConvergenceLoss a L1")
+                        help="Se True, aggiunge AcousticStructuralLoss a L1")
     return parser.parse_args()
 
 class InfoNCELoss(nn.Module):
@@ -132,7 +132,7 @@ def main():
     mel_vae = nn.parallel.DistributedDataParallel(mel_vae, device_ids=[rank], output_device=rank, find_unused_parameters=False)
     octave_vae = nn.parallel.DistributedDataParallel(octave_vae, device_ids=[rank], output_device=rank, find_unused_parameters=False)
 
-    acoustic_loss_fn = SpectralConvergenceLoss().to(device) if use_spectral_loss else None
+    acoustic_loss_fn = AcousticStructuralLoss().to(device) if use_spectral_loss else None
     contrastive_fn = InfoNCELoss(temperature=0.07).to(device)
 
     total_steps = len(dataloader)
