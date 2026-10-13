@@ -18,7 +18,7 @@ from filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
 from filterbank_diffusion.pipeline.spectral import OnlineSpectrogramPipeline
 from filterbank_vae.models.vae import MelVAE, OctaveVAE, DEFAULT_BOTTLENECK_TYPE
 
-TRAIN_EPOCHS = int(os.environ.get("NUM_EPOCHS", 100))
+TRAIN_EPOCHS = int(os.environ.get("NUM_EPOCHS", 50))
 BOTTLENECK_TYPE = os.environ.get("BOTTLENECK_TYPE", DEFAULT_BOTTLENECK_TYPE)
 LATENT_DIM = int(os.environ.get("LATENT_DIM", 512))
 
