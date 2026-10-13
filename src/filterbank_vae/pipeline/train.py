@@ -132,7 +132,7 @@ def main():
     mel_vae = nn.parallel.DistributedDataParallel(mel_vae, device_ids=[rank], output_device=rank, find_unused_parameters=False)
     octave_vae = nn.parallel.DistributedDataParallel(octave_vae, device_ids=[rank], output_device=rank, find_unused_parameters=False)
 
-    spec_loss_fn = SpectralConvergenceLoss().to(device) if use_spectral_loss else None
+    acoustic_loss_fn = SpectralConvergenceLoss().to(device) if use_spectral_loss else None
     contrastive_fn = InfoNCELoss(temperature=0.07).to(device)
 
     total_steps = len(dataloader)
