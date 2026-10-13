@@ -31,14 +31,16 @@ class ConditionalGaussianDiffusion(nn.Module):
         return torch.nan_to_num(x_t, nan=0.0, posinf=20.0, neginf=-20.0)
 
     @torch.no_grad()
-    def sample_ddim(self, x_cond, fraction_id=None, ddim_steps=25, eta=0.0):
+    def sample_ddim(self, x_cond, fraction_id=None, ddim_steps=25, eta=0.0, target_mel_freq=64, target_time=1152):
         """
-        Fast DDIM reverse sampling con Self-Conditioning progressivo di x_0.
+        Fast DDIM reverse sampling con Cross-Attention Conditioning e Self-Conditioning.
+        x_cond: filterbank condizionante [B, 1, 320, 1152]
+        Ritorna: Mel ricostruito puro [B, 1, target_mel_freq=64, target_time=1152]
         """
         self.model.eval()
         device = x_cond.device
-        batch_size, _, freq_bins, time_steps = x_cond.shape
-        shape = (batch_size, 1, freq_bins, time_steps)
+        batch_size = x_cond.shape[0]
+        shape = (batch_size, 1, target_mel_freq, target_time)
 
         times = torch.linspace(self.timesteps - 1, 0, ddim_steps + 1, device=device).long()
         time_pairs = list(zip(times[:-1], times[1:]))
@@ -49,7 +51,7 @@ class ConditionalGaussianDiffusion(nn.Module):
         for t_curr, t_prev in time_pairs:
             t_tensor = torch.full((batch_size,), fill_value=t_curr.item(), dtype=torch.long, device=device)
             
-            # Forward con self-conditioning passato dal passo precedente
+            # Forward: x_t è 64x1152, x_cond è 320x1152 (Cross-Attention interna)
             eps_hat = self.model(x_t, t_tensor, x_cond, fraction_id=fraction_id, x_self_cond=x_self_cond)
             eps_hat = torch.nan_to_num(eps_hat, nan=0.0, posinf=10.0, neginf=-10.0)
 
@@ -62,7 +64,6 @@ class ConditionalGaussianDiffusion(nn.Module):
             pred_x0 = (x_t - sqrt_one_minus_alpha * eps_hat) / sqrt_alpha_curr
             pred_x0 = torch.clamp(pred_x0, min=-20.0, max=20.0)
 
-            # Aggiornamento stima per il prossimo passo
             x_self_cond = pred_x0.detach()
 
             denom = torch.clamp(1.0 - alpha_bar_curr, min=1e-8)

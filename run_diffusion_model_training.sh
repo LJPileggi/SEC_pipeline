@@ -1,9 +1,9 @@
 #!/bin/bash
-#SBATCH --job-name=unet_train_dist
+#SBATCH --job-name=unet_train_cross
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=8
-#SBATCH --time=23:59:59
+#SBATCH --time=13:00:00
 #SBATCH --mem=128G
 #SBATCH --gres=gpu:4
 #SBATCH -p boost_usr_prod
@@ -11,12 +11,11 @@
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
 
-# Parametri passati da riga di comando (default: 0 e 125)
 START_EPOCH=${1:-0}
 NUM_EPOCHS=${2:-125}
 
 PROJECT_DIR="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline"
-TEMP_DIR="/leonardo_scratch/large/userexternal/$USER/tmp_train_$SLURM_JOB_ID"
+TEMP_DIR="/leonardo_scratch/large/userexternal/$USER/tmp_train_diff_$SLURM_JOB_ID"
 SIF_FILE="$PROJECT_DIR/.containers/clap_pipeline.sif"
 CLAP_SCRATCH_WEIGHTS="$PROJECT_DIR/.clap_weights/CLAP_weights_2023.pth"
 CLAP_BN0_CONSTANTS="$PROJECT_DIR/.clap_weights/clap_bn0_constants.npz"
@@ -46,7 +45,7 @@ cleanup_job_scratch() {
 trap 'cleanup_job_scratch' SIGTERM SIGINT
 
 echo "=========================================================="
-echo "🎯 Training Session Config:"
+echo "🎯 Diffusion Training (Guided Cross-Attention):"
 echo "   • Start Epoch:      $START_EPOCH"
 echo "   • Number of Epochs: $NUM_EPOCHS"
 echo "   • End Epoch Target: $((START_EPOCH + NUM_EPOCHS - 1))"
@@ -57,7 +56,6 @@ cp "$CLAP_SCRATCH_WEIGHTS" "$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth"
 [ -f "$CLAP_BN0_CONSTANTS" ] && cp "$CLAP_BN0_CONSTANTS" "$TEMP_DIR/work_dir/weights/clap_bn0_constants.npz"
 cp "$DATASEC_GLOBAL/RAW_DATASET/raw_wav"/*.h5 "$TEMP_DIR/dataSEC/RAW_DATASET/raw_wav/" 2>/dev/null
 
-# Stage-in dei checkpoint esistenti per consentire la ripresa
 if [ -d "$MODELS_GLOBAL" ]; then
     echo "📂 Stage-in dei checkpoint precedenti da $MODELS_GLOBAL..."
     cp -r "$MODELS_GLOBAL/." "$TEMP_DIR/models/diff_model/" 2>/dev/null
@@ -74,13 +72,11 @@ export VERBOSE="False"
 export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
 export PYTHONUNBUFFERED=1
 export PYTORCH_ALLOC_CONF=expandable_segments:True
-export CUDA_LAUNCH_BLOCKING=1
-export TORCH_USE_CUDA_DSA=1
 
 export MASTER_ADDR=$(hostname)
 export MASTER_PORT=$(expr 20000 + ${SLURM_JOB_ID} % 10000)
 
-echo "🚀 Launching Distributed Training on 4 ranks (Epoche $START_EPOCH -> $((START_EPOCH + NUM_EPOCHS - 1)))..."
+echo "🚀 Launching Distributed Training on 4 ranks..."
 srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \
     singularity exec --nv --no-home \
     --bind "/leonardo_scratch:/leonardo_scratch" \
