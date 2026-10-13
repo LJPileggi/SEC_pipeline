@@ -189,11 +189,8 @@ class MelVAE(nn.Module):
 
 class OctaveEncoder(nn.Module):
     """
-    Encoder per Spettrogrammi a frazioni d'ottava (32esime):
-    Ingresso a 320 bande.
-    Comprime le frequenze da 320 a 4 (rapporto 80:1) e il tempo da 1152 a 72 (rapporto 16:1):
-    320x1152 -> (s: 2x2) 160x576 -> (s: 2x2) 80x288 -> (s: 2x2) 40x144 -> 
-                 (s: 2x2) 20x72  -> (s: 2x1) 10x72  -> (s: 2x1) 5x72 -> (s: Conv 5->4) 4x72
+    Encoder per Spettrogrammi d'ottava (Input: [B, 1, F_oct, 1152]):
+    Porta le feature a [B, 256, 4, 72] in modo matematicamente garantito.
     """
     def __init__(self, in_channels=1, base_channels=64, bottleneck_type=DEFAULT_BOTTLENECK_TYPE, latent_dim=512):
         super().__init__()
@@ -202,29 +199,28 @@ class OctaveEncoder(nn.Module):
 
         self.init_conv = nn.Conv2d(in_channels, base_channels, kernel_size=3, padding=1)
 
-        # 320x1152 -> 160x576
+        # 4 stadi di dimezzamento tempo e frequenza (stride 2x2)
+        # Tempo: 1152 -> 576 -> 288 -> 144 -> 72
         self.res1 = ResBlock(base_channels, base_channels)
         self.down1 = nn.Conv2d(base_channels, base_channels * 2, kernel_size=3, stride=2, padding=1)
 
-        # 160x576 -> 80x288
         self.res2 = ResBlock(base_channels * 2, base_channels * 2)
         self.down2 = nn.Conv2d(base_channels * 2, base_channels * 4, kernel_size=3, stride=2, padding=1)
 
-        # 80x288 -> 40x144
         self.res3 = ResBlock(base_channels * 4, base_channels * 4)
         self.down3 = nn.Conv2d(base_channels * 4, base_channels * 4, kernel_size=3, stride=2, padding=1)
 
-        # 40x144 -> 20x72 (Tempo è ora a 72, lo preserviamo!)
         self.res4 = ResBlock(base_channels * 4, base_channels * 4)
         self.down4 = nn.Conv2d(base_channels * 4, base_channels * 4, kernel_size=3, stride=2, padding=1)
 
-        # 20x72 -> 10x72 (Stride 2 solo in frequenza)
+        # A questo punto il tempo è esattamente a 72.
+        # Riduciamo ulteriormente la frequenza mantenendo fisso il tempo:
         self.res5 = ResBlock(base_channels * 4, base_channels * 4)
         self.down5 = nn.Conv2d(base_channels * 4, base_channels * 4, kernel_size=3, stride=(2, 1), padding=1)
 
-        # 10x72 -> 4x72 (Conv che mappa esattamente 10 bin a 4 bin)
-        self.res6 = ResBlock(base_channels * 4, base_channels * 4)
-        self.down6 = nn.Conv2d(base_channels * 4, base_channels * 4, kernel_size=(4, 3), stride=(2, 1), padding=(0, 1))
+        # Adaptive pooling che garantisce AL 100% che la griglia finale sia [B, C, 4, 72]
+        self.align_pool = nn.AdaptiveAvgPool2d((4, 72))
+        self.res_final = ResBlock(base_channels * 4, base_channels * 4)
 
         self.attn = AttentionBlock(base_channels * 4, num_heads=4)
 
@@ -243,7 +239,7 @@ class OctaveEncoder(nn.Module):
         h = self.down3(self.res3(h))
         h = self.down4(self.res4(h))
         h = self.down5(self.res5(h))
-        h = self.down6(self.res6(h))
+        h = self.res_final(self.align_pool(h))
         h = self.attn(h)
 
         if self.bottleneck_type == "1d":
@@ -258,13 +254,15 @@ class OctaveEncoder(nn.Module):
 
 class OctaveDecoder(nn.Module):
     """
-    Decoder per Spettrogrammi d'ottava (ricostruisce [B, 1, 320, 1152]):
-    4x72 -> 10x72 -> 20x72 -> 40x144 -> 80x288 -> 160x576 -> 320x1152
+    Decoder per Spettrogrammi d'ottava (Ricostruisce [B, 1, 320, 1152]):
+    Parte da [B, 256, 4, 72] e fa upsample verso 320x1152.
     """
-    def __init__(self, out_channels=1, base_channels=64, bottleneck_type=DEFAULT_BOTTLENECK_TYPE, latent_dim=512):
+    def __init__(self, out_channels=1, base_channels=64, bottleneck_type=DEFAULT_BOTTLENECK_TYPE, latent_dim=512, target_freq=320, target_time=1152):
         super().__init__()
         self.bottleneck_type = bottleneck_type
         self.latent_dim = latent_dim
+        self.target_freq = target_freq
+        self.target_time = target_time
 
         if self.bottleneck_type == "1d":
             self.fc_in = nn.Linear(latent_dim, base_channels * 4 * 4 * 72)
@@ -273,27 +271,23 @@ class OctaveDecoder(nn.Module):
 
         self.attn = AttentionBlock(base_channels * 4, num_heads=4)
 
-        # 4x72 -> 10x72
-        self.up6 = nn.ConvTranspose2d(base_channels * 4, base_channels * 4, kernel_size=(4, 3), stride=(2, 1), padding=(0, 1))
-        self.res6 = ResBlock(base_channels * 4, base_channels * 4)
-
-        # 10x72 -> 20x72
+        # 4x72 -> 8x72
         self.up5 = nn.ConvTranspose2d(base_channels * 4, base_channels * 4, kernel_size=(4, 3), stride=(2, 1), padding=(1, 1))
         self.res5 = ResBlock(base_channels * 4, base_channels * 4)
 
-        # 20x72 -> 40x144
+        # 8x72 -> 16x144
         self.up4 = nn.ConvTranspose2d(base_channels * 4, base_channels * 4, kernel_size=4, stride=2, padding=1)
         self.res4 = ResBlock(base_channels * 4, base_channels * 4)
 
-        # 40x144 -> 80x288
+        # 16x144 -> 32x288
         self.up3 = nn.ConvTranspose2d(base_channels * 4, base_channels * 4, kernel_size=4, stride=2, padding=1)
         self.res3 = ResBlock(base_channels * 4, base_channels * 4)
 
-        # 80x288 -> 160x576
+        # 32x288 -> 64x576
         self.up2 = nn.ConvTranspose2d(base_channels * 4, base_channels * 2, kernel_size=4, stride=2, padding=1)
         self.res2 = ResBlock(base_channels * 2, base_channels * 2)
 
-        # 160x576 -> 320x1152
+        # 64x576 -> 128x1152
         self.up1 = nn.ConvTranspose2d(base_channels * 2, base_channels, kernel_size=4, stride=2, padding=1)
         self.res1 = ResBlock(base_channels, base_channels)
 
@@ -306,13 +300,16 @@ class OctaveDecoder(nn.Module):
             h = self.conv_in(z)
 
         h = self.attn(h)
-        h = self.res6(self.up6(h))
         h = self.res5(self.up5(h))
         h = self.res4(self.up4(h))
         h = self.res3(self.up3(h))
         h = self.res2(self.up2(h))
         h = self.res1(self.up1(h))
         out = self.out_conv(h)
+
+        # Interpolazione finale esatta verso target_freq (320) x target_time (1152)
+        if out.shape[-2:] != (self.target_freq, self.target_time):
+            out = F.interpolate(out, size=(self.target_freq, self.target_time), mode='bilinear', align_corners=False)
         return out
 
 
