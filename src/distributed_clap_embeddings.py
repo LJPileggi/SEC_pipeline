@@ -16,11 +16,13 @@ import json
 
 from .models import CLAP_initializer, spectrogram_n_octaveband_generator, \
     spectrogram_n_octaveband_generator_gpu, convert_octave_to_msclap_mel, \
-    spectrogram_to_audio_batch, extract_clap_embedding_from_reconstructed_mel
+    spectrogram_to_audio_batch, extract_clap_embedding_from_reconstructed_mel, \
+    hyperresolve_octave_pchip_gpu
 from .utils import *
 from .dirs_config import *
 from .filterbank_diffusion.models.unet import SpectrogramUNet
 from .filterbank_diffusion.models.diffusion import ConditionalGaussianDiffusion
+from .filterbank_vae.models.vae import MelVAE, OctaveVAE, DEFAULT_BOTTLENECK_TYPE
 
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
@@ -31,13 +33,13 @@ os.environ["NUMEXPR_NUM_THREADS"] = "1"
 # Production global variables
 VERBOSE = os.environ.get("VERBOSE", "False").lower() == "true"
 INJECT_OCTAVE = os.environ.get("INJECT_OCTAVE", "False").lower() == "true"
+GENERATIVE_BACKBONE = os.environ.get("GENERATIVE_BACKBONE", "diffusion").lower()
 
 def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class_to_process, cut_secs, n_octave, config, audio_dataset_manager=None):
     """
     Processes a specific audio class by extracting fixed-length audio segments, generating 
     CLAP embeddings and octave spectrograms in a batched, GPU-accelerated pipeline.
-    Uses the 3-level Residual Diffusion Model with Bottleneck Attention to restore Log-Mel 
-    spectrograms without class guidance.
+    Supports both the Residual Diffusion Model and the Dual-VAE Cross-Domain translation.
     """
     root_source, root_target = config['dirs']['root_source'], config['dirs']['root_target']
     target_class_dir = os.path.join(root_target, f'{cut_secs}_secs', class_to_process)
@@ -58,7 +60,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     BATCH_SIZE = max(8, int(base_batch * (3 / n_octave)))
     
     if VERBOSE and rank == 0:
-        print(f"[RANK {rank}] Dynamic Batch set to {BATCH_SIZE} (n_octave={n_octave}, cut={cut_secs}s)", flush=True)
+        print(f"[RANK {rank}] Dynamic Batch set to {BATCH_SIZE} (n_octave={n_octave}, cut={cut_secs}s, backbone={GENERATIVE_BACKBONE})", flush=True)
     
     def write_perf_log():
         if stats["count"] > 0:
@@ -89,25 +91,56 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     batch_audio = []; batch_meta = []
 
     # Checkpoint configuration
-    TARGET_EPOCH = int(os.environ.get("TARGET_EPOCH", 125))
-    
-    # Residual U-Net instantiation and checkpoint loading (Agnostic / No class embeddings)
-    diff_unet = SpectrogramUNet(base_channels=64, emb_dim=256).to(device)
-    
-    # target_model_dir = os.environ.get("DIFFUSION_MODELS_PATH", os.path.join(".models", "diff_model_residual"))
-    target_model_dir = os.path.join(os.environ.get("TEMP_DIR"), "work_dir", "diff_model")
-    checkpoint_path = os.path.join(target_model_dir, f"unet_epoch_{TARGET_EPOCH - 1}.pt")
+    TARGET_EPOCH = int(os.environ.get("TARGET_EPOCH", 125 if GENERATIVE_BACKBONE == "diffusion" else 100))
+    target_work_dir = os.path.join(os.environ.get("TEMP_DIR", "/tmp"), "work_dir")
 
-    if not os.path.exists(checkpoint_path):
-        pts = [f for f in os.listdir(target_model_dir) if f.endswith(".pt")] if os.path.exists(target_model_dir) else []
-        if pts: 
-            checkpoint_path = os.path.join(target_model_dir, sorted(pts)[-1])
+    diff_unet = None
+    diffusion_scheduler = None
+    mel_vae = None
+    octave_vae = None
 
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    diff_unet.load_state_dict(checkpoint['model_state_dict'])
-    diff_unet.eval()
+    if GENERATIVE_BACKBONE == "vae":
+        target_model_dir = os.path.join(target_work_dir, "vae_model")
+        checkpoint_path = os.path.join(target_model_dir, f"dual_vae_epoch_{TARGET_EPOCH - 1}.pt")
 
-    diffusion_scheduler = ConditionalGaussianDiffusion(unet_model=diff_unet, timesteps=1000).to(device)
+        if not os.path.exists(checkpoint_path):
+            pts = [f for f in os.listdir(target_model_dir) if f.endswith(".pt")] if os.path.exists(target_model_dir) else []
+            if pts:
+                checkpoint_path = os.path.join(target_model_dir, sorted(pts)[-1])
+
+        b_type = os.environ.get("BOTTLENECK_TYPE", DEFAULT_BOTTLENECK_TYPE)
+        l_dim = int(os.environ.get("LATENT_DIM", 512))
+        mel_vae = MelVAE(base_channels=64, bottleneck_type=b_type, latent_dim=l_dim).to(device)
+        octave_vae = OctaveVAE(base_channels=64, bottleneck_type=b_type, latent_dim=l_dim).to(device)
+
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        mel_vae.load_state_dict(checkpoint['mel_vae_state_dict'])
+        octave_vae.load_state_dict(checkpoint['octave_vae_state_dict'])
+        mel_vae.eval()
+        octave_vae.eval()
+
+        if VERBOSE and rank == 0:
+            print(f"✅ Loaded Dual-VAE checkpoint from: {checkpoint_path}", flush=True)
+
+    else:
+        # Default: Diffusion Model
+        target_model_dir = os.path.join(target_work_dir, "diff_model")
+        checkpoint_path = os.path.join(target_model_dir, f"unet_epoch_{TARGET_EPOCH - 1}.pt")
+
+        if not os.path.exists(checkpoint_path):
+            pts = [f for f in os.listdir(target_model_dir) if f.endswith(".pt")] if os.path.exists(target_model_dir) else []
+            if pts: 
+                checkpoint_path = os.path.join(target_model_dir, sorted(pts)[-1])
+
+        diff_unet = SpectrogramUNet(base_channels=64, emb_dim=256).to(device)
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        diff_unet.load_state_dict(checkpoint['model_state_dict'])
+        diff_unet.eval()
+
+        diffusion_scheduler = ConditionalGaussianDiffusion(unet_model=diff_unet, timesteps=1000).to(device)
+
+        if VERBOSE and rank == 0:
+            print(f"✅ Loaded Diffusion Model checkpoint from: {checkpoint_path}", flush=True)
 
     # 🎯 FIX MULTI-GPU: Garantisce che tutti i moduli interni di CLAP siano su questo device
     clap_model.clap.to(device)
@@ -141,23 +174,32 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             
-            # Step 2: CLAP Inference
+            # Step 2: Inference generativa e CLAP
             with torch.no_grad():
                 if use_specs:
                     if INJECT_OCTAVE:
-                        # 0. Orient octave representation calculated at 52.1 kHz [B, T_blocks, F_octave]
                         octave_spec = specs_gpu.permute(0, 2, 1)
 
-                        # 1. 2D Bilinear Resampling to U-Net grid (F: 64, T: 1152) with CLAP bn0 normalization
-                        x_cond = convert_octave_to_msclap_mel(octave_spec, target_mels=64, target_time=1152)
+                        if GENERATIVE_BACKBONE == "vae":
+                            # 1. PCHIP Spline GPU interpolation verso 32esime d'ottava (320 bande)
+                            x_oct_pchip = hyperresolve_octave_pchip_gpu(
+                                octave_spec, n_octave=n_octave, target_bands=320, target_time=1152, sample_rate=sr
+                            )
+                            # 2. Inversione istantanea cross-domain: OctaveEncoder -> MelDecoder
+                            mu_oct, _ = octave_vae.encoder(x_oct_pchip)
+                            mel_reconstructed = mel_vae.decoder(mu_oct)
 
-                        # 2. Conditioning resolution tensor
-                        frac_tensor = torch.full((batch_tensor.shape[0],), fill_value=float(n_octave), device=device)
+                        else:
+                            # 1. 2D Bilinear Resampling to U-Net grid (F: 64, T: 1152) with CLAP bn0 normalization
+                            x_cond = convert_octave_to_msclap_mel(octave_spec, target_mels=64, target_time=1152)
 
-                        # 3. DDIM Sampling conditioned on octave guide [B, 1, 64, 1152]
-                        mel_reconstructed = diffusion_scheduler.sample_ddim(x_cond, fraction_id=frac_tensor, ddim_steps=100)
+                            # 2. Conditioning resolution tensor
+                            frac_tensor = torch.full((batch_tensor.shape[0],), fill_value=float(n_octave), device=device)
 
-                        # 4. Deterministic CLAP sliding-window feature extraction & L2 hypersphere normalization
+                            # 3. DDIM Sampling conditioned on octave guide [B, 1, 64, 1152]
+                            mel_reconstructed = diffusion_scheduler.sample_ddim(x_cond, fraction_id=frac_tensor, ddim_steps=100)
+
+                        # Deterministic CLAP sliding-window feature extraction & L2 hypersphere normalization
                         embeddings = extract_clap_embedding_from_reconstructed_mel(
                             mel_reconstructed=mel_reconstructed,
                             clap_model=clap_model,

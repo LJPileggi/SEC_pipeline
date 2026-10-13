@@ -26,8 +26,13 @@ CLAP_SCRATCH_WEIGHTS=$(parse_path "CLAP_WEIGHTS")
 ROBERTA_PATH=$(parse_path "ROBERTA_PATH")
 DATASEC_GLOBAL=$(parse_path "DATASEC_GLOBAL")
 
-# 🎯 PARSING NUOVA VARIABILE DIFF_MODELS
+# 🎯 PARSING MODELLI GENERATIVI (DIFFUSION E VAE)
 DIFF_MODELS_PATH=$(parse_path "DIFF_MODELS")
+VAE_MODELS_PATH=$(parse_path "VAE_MODELS")
+
+# 🎯 PARSING BACKBONE GENERATIVO (Default: diffusion)
+PARSED_BACKBONE=$(grep "GENERATIVE_BACKBONE" "$DIRECTIVES_FILE" | cut -d'|' -f2 | xargs)
+GENERATIVE_BACKBONE=${PARSED_BACKBONE:-vae}
 
 SLURM_ACCOUNT=$(grep "SLURM_ACCOUNT" "$DIRECTIVES_FILE" | cut -d'|' -f2 | xargs)
 SLURM_PARTITION=$(grep "SLURM_PARTITION" "$DIRECTIVES_FILE" | cut -d'|' -f2 | xargs)
@@ -36,7 +41,7 @@ SLURM_TIME=$(grep "SLURM_TIME" "$DIRECTIVES_FILE" | cut -d'|' -f2 | xargs)
 # --- 2. TASK SUBMISSION FUNCTION ---
 submit_and_wait_task() {
     local c_file=$1; local fmt=$2; local oct=$3; local inj=$4
-    local j_name="emb_${fmt}_oct${oct}"
+    local j_name="emb_${fmt}_oct${oct}_${GENERATIVE_BACKBONE}"
     local script="submit_${j_name}.sh"
 
     local target_folder="${oct}_octave"
@@ -60,14 +65,14 @@ submit_and_wait_task() {
 
 # 🎯 PATH DEFINITION (Absolute resolution) 
 export TEMP_DIR="/leonardo_scratch/large/userexternal/$CURRENT_USER/tmp_job_\$SLURM_JOB_ID"
-export TARGET_EPOCH=500
 TARGET_GLOBAL="$FINAL_DEST"
 
 # 🛠️ DIRECTORY SETUP (Mirroring run_embedding_pipeline.sh) 
 mkdir -p "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$fmt"
 mkdir -p "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$fmt/$target_folder"
 mkdir -p "\$TEMP_DIR/work_dir/weights"
-mkdir -p "\$TEMP_DIR/work_dir/diff_model"  # 🎯 CREAZIONE CARTELLA MODELLI DIFFUSIONE
+mkdir -p "\$TEMP_DIR/work_dir/diff_model"
+mkdir -p "\$TEMP_DIR/work_dir/vae_model"
 mkdir -p "\$TEMP_DIR/roberta-base"
 mkdir -p "\$TEMP_DIR/numba_cache"
 
@@ -96,12 +101,25 @@ echo "📦 Staging data..."
 cp "$CLAP_SCRATCH_WEIGHTS" "\$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth" || exit 1
 cp -r "$ROBERTA_PATH/." "\$TEMP_DIR/roberta-base/" || exit 1
 
-# 🎯 STAGE-IN PESI MODELLO DI DIFFUSIONE
-if [ -d "$DIFF_MODELS_PATH" ]; then
-    echo "📦 Staging diffusion model weights from $DIFF_MODELS_PATH..."
-    cp "$DIFF_MODELS_PATH/unet_epoch_\$(( TARGET_EPOCH - 1 )).pt" "\$TEMP_DIR/work_dir/diff_model/" || exit 1
+# 🎯 STAGE-IN CONDIZIONATO DEI MODELLI GENERATIVI (DIFFUSION / VAE)
+if [ "$GENERATIVE_BACKBONE" = "vae" ]; then
+    export TARGET_EPOCH=100
+    if [ -d "$VAE_MODELS_PATH" ]; then
+        echo "📦 Staging Dual-VAE model weights from $VAE_MODELS_PATH..."
+        LATEST_VAE=\$(ls -v "$VAE_MODELS_PATH"/dual_vae_epoch_*.pt 2>/dev/null | tail -n 1)
+        [ -f "\$LATEST_VAE" ] && cp "\$LATEST_VAE" "\$TEMP_DIR/work_dir/vae_model/" || exit 1
+    else
+        echo "⚠️ Warning: VAE models path '$VAE_MODELS_PATH' not found!"
+    fi
 else
-    echo "⚠️ Warning: Diffusion models path '$DIFF_MODELS_PATH' not found!"
+    export TARGET_EPOCH=500
+    if [ -d "$DIFF_MODELS_PATH" ]; then
+        echo "📦 Staging diffusion model weights from $DIFF_MODELS_PATH..."
+        cp "$DIFF_MODELS_PATH/unet_epoch_\$(( TARGET_EPOCH - 1 )).pt" "\$TEMP_DIR/work_dir/diff_model/" 2>/dev/null || \\
+        cp "\$(ls -v "$DIFF_MODELS_PATH"/unet_epoch_*.pt 2>/dev/null | tail -n 1)" "\$TEMP_DIR/work_dir/diff_model/" || exit 1
+    else
+        echo "⚠️ Warning: Diffusion models path '$DIFF_MODELS_PATH' not found!"
+    fi
 fi
 
 # Sync existing progress from global to local NVMe 
@@ -141,7 +159,8 @@ export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
 export HF_HUB_OFFLINE=1
 export CLAP_TEXT_ENCODER_PATH="/tmp_data/roberta-base"
 export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/weights/CLAP_weights_2023.pth"
-export DIFF_MODELS="/tmp_data/work_dir/diff_model"  # 🎯 ESPORTAZIONE VARIABILE DIFF_MODELS
+export DIFF_MODELS="/tmp_data/work_dir/diff_model"
+export GENERATIVE_BACKBONE="$GENERATIVE_BACKBONE"
 export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
 export PYTHONUNBUFFERED=1
 export PYTORCH_ALLOC_CONF=expandable_segments:True
@@ -150,7 +169,7 @@ export MASTER_PORT=\$(expr 20000 + \${SLURM_JOB_ID} % 10000)
 # Set to "True" to bypass internal CLAP Mel extraction
 export INJECT_OCTAVE="${inj}"
 
-echo "🚀 Starting Parallel Embedding Pipeline..."
+echo "🚀 Starting Parallel Embedding Pipeline ($GENERATIVE_BACKBONE)..."
 srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \\
     singularity exec --nv --no-home --bind "/leonardo_scratch:/leonardo_scratch" --bind "\$TEMP_DIR:/tmp_data" \\
     --bind "\$(pwd):/app" --pwd "/app" "$SIF_FILE" \\
@@ -176,10 +195,10 @@ sed -n '/^[^#]/p' "$DIRECTIVES_FILE" | grep "|" | while IFS='|' read -r raw_cfg 
         inj="False"
     fi
 
-    [[ "$cfg" == *"SIF_FILE"* || "$cfg" == *"CLAP_WEIGHTS"* || "$cfg" == *"ROBERTA_PATH"* || "$cfg" == *"SLURM_"* || "$cfg" == *"SCHEDULING_MODE"* || "$cfg" == *"DATASEC_GLOBAL"* || "$cfg" == *"DIFF_MODELS"* ]] && continue
+    [[ "$cfg" == *"SIF_FILE"* || "$cfg" == *"CLAP_WEIGHTS"* || "$cfg" == *"ROBERTA_PATH"* || "$cfg" == *"SLURM_"* || "$cfg" == *"SCHEDULING_MODE"* || "$cfg" == *"DATASEC_GLOBAL"* || "$cfg" == *"DIFF_MODELS"* || "$cfg" == *"VAE_MODELS"* || "$cfg" == *"GENERATIVE_BACKBONE"* ]] && continue
     [ -z "$cfg" ] || [ -z "$fmt" ] || [ -z "$oct" ] && continue
 
-    echo "➡️ Processing: $cfg | Format: $fmt | Octave: $oct | Inject Octave: $inj"
+    echo "➡️ Processing: $cfg | Format: $fmt | Octave: $oct | Inject Octave: $inj | Backbone: $GENERATIVE_BACKBONE"
     submit_and_wait_task "$cfg" "$fmt" "$oct" "$inj"
     echo "✅ Task finished."
 done

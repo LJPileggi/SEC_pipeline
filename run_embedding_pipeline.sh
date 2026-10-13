@@ -2,8 +2,9 @@
 # run_embedding_pipeline.sh
 
 if [ "$#" -lt 5 ]; then
-    echo "Usage: $0 <config_file> <audio_format> <n_octave> <inject_octave> <mode> [world_size]"
+    echo "Usage: $0 <config_file> <audio_format> <n_octave> <inject_octave> <mode> [world_size] [generative_backbone]"
     echo "Modes: slurm, local"
+    echo "Backbones: diffusion (default), vae"
     exit 1
 fi
 
@@ -13,6 +14,7 @@ N_OCTAVE=$3
 INJECT_OCTAVE_CMD=$4
 MODE=$5
 WORLD_SIZE=${6:-4}
+GENERATIVE_BACKBONE=${7:-vae}
 
 # Se N_OCTAVE è 0, forziamo l'iniezione a False a livello logico
 if [ "$N_OCTAVE" -eq 0 ]; then
@@ -21,9 +23,11 @@ fi
 
 SIF_FILE="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.containers/clap_pipeline.sif"
 CLAP_SCRATCH_WEIGHTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/CLAP_weights_2023.pth"
+CLAP_BN0_CONSTANTS="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/clap_bn0_constants.npz"
 ROBERTA_PATH="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/roberta-base"
 DATASEC_GLOBAL="/leonardo_scratch/large/userexternal/$USER/dataSEC"
 DIFFUSION_MODELS_PATH="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.models/diff_model"
+VAE_MODELS_PATH="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.models/vae_model"
 
 # 🎯 SHARED POST-PROCESSING LOGIC
 # This helper creates the Python wrapper used for log merging
@@ -50,7 +54,7 @@ INNER_EOF
 # SLURM MODE
 # ------------------------------------------------------------------------------
 run_slurm() {
-    local j_name="prod_${AUDIO_FORMAT}_oct${N_OCTAVE}"
+    local j_name="prod_${AUDIO_FORMAT}_oct${N_OCTAVE}_${GENERATIVE_BACKBONE}"
     local script="submit_${j_name}.sh"
     local target_folder="${N_OCTAVE}_octave"
     if [ "$N_OCTAVE" -ne 0 ] && [ "$INJECT_OCTAVE_CMD" = "False" ]; then
@@ -72,13 +76,13 @@ run_slurm() {
 #SBATCH --output=%x_%j.out
 
 export TEMP_DIR="/leonardo_scratch/large/userexternal/\$USER/tmp_job_\$SLURM_JOB_ID"
-export TARGET_EPOCH=500
 TARGET_GLOBAL="$FINAL_DEST"
 
 mkdir -p "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT"
 mkdir -p "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/$target_folder"
 mkdir -p "\$TEMP_DIR/work_dir/weights"
 mkdir -p "\$TEMP_DIR/work_dir/diff_model"
+mkdir -p "\$TEMP_DIR/work_dir/vae_model"
 mkdir -p "\$TEMP_DIR/roberta-base"
 mkdir -p "\$TEMP_DIR/numba_cache"
 
@@ -104,10 +108,26 @@ trap 'finalize_and_cleanup' SIGTERM SIGINT
 
 echo "📦 Stage-in..."
 cp "$CLAP_SCRATCH_WEIGHTS" "\$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth"
+[ -f "$CLAP_BN0_CONSTANTS" ] && cp "$CLAP_BN0_CONSTANTS" "\$TEMP_DIR/work_dir/weights/clap_bn0_constants.npz"
 cp -r "$ROBERTA_PATH/." "\$TEMP_DIR/roberta-base/"
 [ -d "\$TARGET_GLOBAL" ] && cp -r "\$TARGET_GLOBAL/." "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/$target_folder/"
 cp "$DATASEC_GLOBAL/RAW_DATASET/raw_$AUDIO_FORMAT"/*.h5 "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT/" 2>/dev/null
-[ -d "$DIFFUSION_MODELS_PATH" ] && cp "$DIFFUSION_MODELS_PATH/unet_epoch_\$(( TARGET_EPOCH - 1 )).pt" "\$TEMP_DIR/work_dir/diff_model/"
+
+if [ "$GENERATIVE_BACKBONE" = "vae" ]; then
+    export TARGET_EPOCH=100
+    if [ -d "$VAE_MODELS_PATH" ]; then
+        echo "📦 Staging Dual-VAE model weights..."
+        LATEST_VAE=\$(ls -v "$VAE_MODELS_PATH"/dual_vae_epoch_*.pt 2>/dev/null | tail -n 1)
+        [ -f "\$LATEST_VAE" ] && cp "\$LATEST_VAE" "\$TEMP_DIR/work_dir/vae_model/"
+    fi
+else
+    export TARGET_EPOCH=500
+    if [ -d "$DIFFUSION_MODELS_PATH" ]; then
+        echo "📦 Staging Diffusion model weights..."
+        cp "$DIFFUSION_MODELS_PATH/unet_epoch_\$(( TARGET_EPOCH - 1 )).pt" "\$TEMP_DIR/work_dir/diff_model/" 2>/dev/null || \\
+        cp "\$(ls -v "$DIFFUSION_MODELS_PATH"/unet_epoch_*.pt 2>/dev/null | tail -n 1)" "\$TEMP_DIR/work_dir/diff_model/" 2>/dev/null
+    fi
+fi
 
 # Create wrapper inside the heredoc
 cat << 'INNER_EOF' > "\$TEMP_DIR/work_dir/join_logs_wrapper.py"
@@ -130,7 +150,9 @@ export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
 export HF_HUB_OFFLINE=1
 export CLAP_TEXT_ENCODER_PATH="/tmp_data/roberta-base"
 export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/weights/CLAP_weights_2023.pth"
+export LOCAL_CLAP_BN0_CONSTANTS_PATH="/tmp_data/work_dir/weights/clap_bn0_constants.npz"
 export DIFF_MODELS="/tmp_data/work_dir/diff_model"
+export GENERATIVE_BACKBONE="$GENERATIVE_BACKBONE"
 export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
 export PYTHONUNBUFFERED=1
 export PYTORCH_ALLOC_CONF=expandable_segments:True
@@ -154,11 +176,10 @@ EOF
 # LOCAL MODE
 # ------------------------------------------------------------------------------
 run_local() {
-    echo "🖥️  Starting Local Interactive Mode..."
+    echo "🖥️  Starting Local Interactive Mode ($GENERATIVE_BACKBONE)..."
     
     # Use a local temporary directory
     TEMP_DIR="/tmp/job_local_$(date +%s)"
-    TARGET_GLOBAL="$DATASEC_GLOBAL/PREPROCESSED_DATASET/$AUDIO_FORMAT/${N_OCTAVE}_octave"
 
     local target_folder="${N_OCTAVE}_octave"
     if [ "$N_OCTAVE" -ne 0 ] && [ "$INJECT_OCTAVE_CMD" = "False" ]; then
@@ -171,6 +192,8 @@ run_local() {
     mkdir -p "$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/$target_folder"
     [ -d "$TARGET_GLOBAL" ] && cp -r "$TARGET_GLOBAL/." "$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/$target_folder/"
     mkdir -p "$TEMP_DIR/work_dir/weights"
+    mkdir -p "$TEMP_DIR/work_dir/diff_model"
+    mkdir -p "$TEMP_DIR/work_dir/vae_model"
     mkdir -p "$TEMP_DIR/roberta-base"
     mkdir -p "$TEMP_DIR/numba_cache"
 
@@ -195,9 +218,20 @@ run_local() {
 
     echo "📦 Staging-in data..."
     cp "$CLAP_SCRATCH_WEIGHTS" "$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth"
+    [ -f "$CLAP_BN0_CONSTANTS" ] && cp "$CLAP_BN0_CONSTANTS" "$TEMP_DIR/work_dir/weights/clap_bn0_constants.npz"
     cp -r "$ROBERTA_PATH/." "$TEMP_DIR/roberta-base/"
     [ -d "$TARGET_GLOBAL" ] && cp -r "$TARGET_GLOBAL/." "$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/$target_folder/"
     cp "$DATASEC_GLOBAL/RAW_DATASET/raw_$AUDIO_FORMAT"/*.h5 "$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT/" 2>/dev/null
+
+    if [ "$GENERATIVE_BACKBONE" = "vae" ]; then
+        export TARGET_EPOCH=100
+        LATEST_VAE=$(ls -v "$VAE_MODELS_PATH"/dual_vae_epoch_*.pt 2>/dev/null | tail -n 1)
+        [ -f "$LATEST_VAE" ] && cp "$LATEST_VAE" "$TEMP_DIR/work_dir/vae_model/"
+    else
+        export TARGET_EPOCH=500
+        cp "$DIFFUSION_MODELS_PATH/unet_epoch_$(( TARGET_EPOCH - 1 )).pt" "$TEMP_DIR/work_dir/diff_model/" 2>/dev/null || \
+        cp "$(ls -v "$DIFFUSION_MODELS_PATH"/unet_epoch_*.pt 2>/dev/null | tail -n 1)" "$TEMP_DIR/work_dir/diff_model/" 2>/dev/null
+    fi
     
     create_log_wrapper "$TEMP_DIR/work_dir/join_logs_wrapper.py"
 
@@ -205,6 +239,8 @@ run_local() {
     export HF_HUB_OFFLINE=1
     export CLAP_TEXT_ENCODER_PATH="/tmp_data/roberta-base"
     export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/weights/CLAP_weights_2023.pth"
+    export LOCAL_CLAP_BN0_CONSTANTS_PATH="/tmp_data/work_dir/weights/clap_bn0_constants.npz"
+    export GENERATIVE_BACKBONE="$GENERATIVE_BACKBONE"
     export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
     export PYTHONUNBUFFERED=1
     export PYTORCH_ALLOC_CONF=expandable_segments:True
