@@ -18,7 +18,7 @@ if src_root not in sys.path:
 
 from utils import setup_environ_vars, setup_distributed_environment, cleanup_distributed_environment, get_config_from_yaml
 from filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
-from filterbank_vae.pipeline.spectral import OnlineSpectrogramPipeline, SpectralConvergenceLoss
+from filterbank_vae.pipeline.spectral import OnlineSpectrogramPipeline, AcousticStructuralLoss
 from filterbank_vae.models.vae import MelVAE, OctaveVAE, DEFAULT_BOTTLENECK_TYPE
 
 DEFAULT_EPOCHS = 100
@@ -171,17 +171,16 @@ def main():
                 recon_mel, mu_mel, logvar_mel, z_mel = mel_vae(x_mel_target)
                 recon_oct, mu_oct, logvar_oct, z_oct = octave_vae(x_octave_pchip)
 
-                # 1. Native Reconstruction Losses (L1)
-                loss_rec_mel = F.l1_loss(recon_mel, x_mel_target)
+                # 1. Reconstruction Loss Mel (L1 + Derivate Temporali per gli impulsi)
+                loss_rec_mel = acoustic_loss_fn(recon_mel, x_mel_target)
+                # Ricostruzione filterbank pura a 320 bande
                 loss_rec_oct = F.l1_loss(recon_oct, x_octave_pchip)
-                if use_spectral_loss:
-                    loss_rec_mel = loss_rec_mel + 0.1 * spec_loss_fn(recon_mel, x_mel_target)
 
-                # 2. KL Divergence
+                # 2. KL Divergence con warmup
                 kl_mel = compute_kl_divergence(mu_mel, logvar_mel)
                 kl_oct = compute_kl_divergence(mu_oct, logvar_oct)
 
-                # 3. InfoNCE Contrastive Loss sui latenti
+                # 3. InfoNCE Contrastive Loss (Con Bottleneck 2D, pooling globale spaziale)
                 if bottleneck_type == "1d":
                     z_cont_mel = mu_mel
                     z_cont_oct = mu_oct
@@ -191,11 +190,9 @@ def main():
 
                 loss_contrastive = contrastive_fn(z_cont_mel, z_cont_oct, world_size=world_size)
 
-                # 4. Cross-Domain Reconstruction Loss: decodifica Mel da z_oct
+                # 4. Cross-Domain Reconstruction: decodifica Mel partendo dal latente dell'ottava
                 cross_mel_recon = mel_vae.module.decoder(z_oct)
-                loss_cross = F.l1_loss(cross_mel_recon, x_mel_target)
-                if use_spectral_loss:
-                    loss_cross = loss_cross + 0.1 * spec_loss_fn(cross_mel_recon, x_mel_target)
+                loss_cross = acoustic_loss_fn(cross_mel_recon, x_mel_target)
 
                 total_loss = (loss_rec_mel + loss_rec_oct) + \
                              kl_weight * (kl_mel + kl_oct) + \

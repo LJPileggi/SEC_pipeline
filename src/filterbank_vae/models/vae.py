@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 # Configurazione globale di default per la tipologia di bottleneck: "1d" oppure "2d"
-DEFAULT_BOTTLENECK_TYPE = "1d"
+DEFAULT_BOTTLENECK_TYPE = "2d"
 
 
 class AttentionBlock(nn.Module):

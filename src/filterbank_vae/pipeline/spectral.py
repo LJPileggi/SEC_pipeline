@@ -32,17 +32,32 @@ msclap.CLAPWrapper.hf_hub_download = universal_path_redirect
 
 from src.models import spectrogram_n_octaveband_generator_gpu, hyperresolve_octave_pchip_gpu, CLAP_initializer
 
-class SpectralConvergenceLoss(nn.Module):
+class AcousticStructuralLoss(nn.Module):
     """
-    Relative Frobenius norm error between predicted and target spectrograms.
+    Loss Acustica Strutturale per VAE:
+    Penalizza sia l'errore puntuale (L1) sia l'appiattimento dei transienti
+    temporali (gradiente temporale) e delle formanti frequenziali (gradiente spettrale).
     """
-    def __init__(self):
+    def __init__(self, alpha=1.0, beta=0.5):
         super().__init__()
+        self.alpha = alpha  # Peso transienti temporali (derivata su T)
+        self.beta = beta    # Peso contrasto armonico (derivata su F)
 
     def forward(self, x_pred, x_target):
-        diff_norm = torch.norm(x_target - x_pred, p='fro')
-        target_norm = torch.norm(x_target, p='fro') + 1e-8
-        return diff_norm / target_norm
+        # 1. Errore L1 assoluto
+        l_recon = F.l1_loss(x_pred, x_target)
+
+        # 2. Gradiente temporale finito (asse 3, T=1152) -> Forza la nitidezza degli impulsi
+        diff_t_pred = x_pred[..., 1:] - x_pred[..., :-1]
+        diff_t_target = x_target[..., 1:] - x_target[..., :-1]
+        l_transient = F.l1_loss(diff_t_pred, diff_t_target)
+
+        # 3. Gradiente frequenziale finito (asse 2, F=64) -> Preserva le armoniche
+        diff_f_pred = x_pred[..., 1:, :] - x_pred[..., :-1, :]
+        diff_f_target = x_target[..., 1:, :] - x_target[..., :-1, :]
+        l_texture = F.l1_loss(diff_f_pred, diff_f_target)
+
+        return l_recon + self.alpha * l_transient + self.beta * l_texture
 
 class OnlineSpectrogramPipeline(nn.Module):
     """
