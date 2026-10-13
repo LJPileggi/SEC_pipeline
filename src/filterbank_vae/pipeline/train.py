@@ -18,7 +18,7 @@ if src_root not in sys.path:
 
 from utils import setup_environ_vars, setup_distributed_environment, cleanup_distributed_environment, get_config_from_yaml
 from filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
-from filterbank_diffusion.pipeline.spectral import OnlineSpectrogramPipeline, SpectralConvergenceLoss
+from filterbank_vae.pipeline.spectral import OnlineSpectrogramPipeline, SpectralConvergenceLoss
 from filterbank_vae.models.vae import MelVAE, OctaveVAE, DEFAULT_BOTTLENECK_TYPE
 
 DEFAULT_EPOCHS = 100
@@ -32,24 +32,20 @@ def parse_args():
     parser.add_argument("--epochs", type=int, default=int(os.environ.get("NUM_EPOCHS", DEFAULT_EPOCHS)))
     parser.add_argument("--bottleneck_type", type=str, default=BOTTLENECK_TYPE, choices=["1d", "2d"])
     parser.add_argument("--latent_dim", type=int, default=LATENT_DIM)
+    parser.add_argument("--use_spectral_loss", action="store_true", default=False,
+                        help="Se True, aggiunge SpectralConvergenceLoss a L1")
     return parser.parse_args()
 
 class InfoNCELoss(nn.Module):
-    """
-    Contrastive Loss InfoNCE per allineare le rappresentazioni latenti tra i domini.
-    Supporta gather cross-GPU per massimizzare il pool di negativi.
-    """
     def __init__(self, temperature=0.07):
         super().__init__()
         self.temperature = temperature
 
     def forward(self, z_a, z_b, world_size=1):
-        # Normalizzazione L2
         z_a = F.normalize(z_a, p=2, dim=-1)
         z_b = F.normalize(z_b, p=2, dim=-1)
 
         if world_size > 1 and dist.is_initialized():
-            # Gather dei latenti da tutti i rank
             gather_a = [torch.zeros_like(z_a) for _ in range(world_size)]
             gather_b = [torch.zeros_like(z_b) for _ in range(world_size)]
             dist.all_gather(gather_a, z_a)
@@ -60,11 +56,9 @@ class InfoNCELoss(nn.Module):
             all_a = z_a
             all_b = z_b
 
-        # Matrice di similarità coseno: [Local_B, Global_B]
         sim_ab = torch.matmul(z_a, all_b.T) / self.temperature
         sim_ba = torch.matmul(z_b, all_a.T) / self.temperature
 
-        # Target: l'indice del corrispondente positivo
         rank = dist.get_rank() if dist.is_initialized() else 0
         local_bs = z_a.size(0)
         labels = torch.arange(local_bs, device=z_a.device) + (rank * local_bs)
@@ -74,7 +68,6 @@ class InfoNCELoss(nn.Module):
         return 0.5 * (loss_a + loss_b)
 
 def compute_kl_divergence(mu, logvar):
-    # D_KL(N(mu, sigma) || N(0, I))
     return -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=-1).mean()
 
 def main():
@@ -84,10 +77,11 @@ def main():
     end_epoch = start_epoch + num_epochs
     bottleneck_type = args.bottleneck_type
     latent_dim = args.latent_dim
+    use_spectral_loss = args.use_spectral_loss
 
     rank, world_size = setup_environ_vars(slurm=True)
     device = setup_distributed_environment(rank, world_size, slurm=True)
-    
+
     classes_list, _, _, _, sampling_rate, _, _, seed, _, _, _ = get_config_from_yaml("config0.yaml")
 
     local_seed = seed + rank
@@ -101,15 +95,13 @@ def main():
 
     raw_dataset_root = os.path.join(os.environ.get("BASEDIR", "/tmp"), "dataSEC", "RAW_DATASET", "raw_wav")
     dataset = DistributedAudioRAWDataset(base_dir=raw_dataset_root, target_samples_per_class=500)
-    
+
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=seed)
     dataloader = DataLoader(dataset, batch_size=LOCAL_BATCH_SIZE, sampler=sampler, num_workers=8, pin_memory=True, drop_last=True)
 
-    # 1. Inizializzazione dei due rami VAE
     mel_vae = MelVAE(base_channels=64, bottleneck_type=bottleneck_type, latent_dim=latent_dim).to(device)
     octave_vae = OctaveVAE(base_channels=64, bottleneck_type=bottleneck_type, latent_dim=latent_dim).to(device)
 
-    # Ottimizzatore congiunto
     trainable_params = list(mel_vae.parameters()) + list(octave_vae.parameters())
     optimizer = torch.optim.AdamW(trainable_params, lr=1e-4, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=end_epoch, eta_min=1e-6)
@@ -118,7 +110,6 @@ def main():
     target_model_dir = base_model_dir if base_model_dir.startswith("/") else os.path.join(src_root, base_model_dir)
     os.makedirs(target_model_dir, exist_ok=True)
 
-    # 2. Resumption Checkpoint
     if start_epoch > 0:
         prev_epoch = start_epoch - 1
         ckpt_candidate = os.path.join(target_model_dir, f"dual_vae_epoch_{prev_epoch}.pt")
@@ -138,11 +129,10 @@ def main():
                 print(f"❌ [CRITICAL] Checkpoint non trovato: {ckpt_candidate}", flush=True)
             sys.exit(1)
 
-    # 3. Wrapping DDP
     mel_vae = nn.parallel.DistributedDataParallel(mel_vae, device_ids=[rank], output_device=rank, find_unused_parameters=False)
     octave_vae = nn.parallel.DistributedDataParallel(octave_vae, device_ids=[rank], output_device=rank, find_unused_parameters=False)
 
-    spec_loss_fn = SpectralConvergenceLoss().to(device)
+    spec_loss_fn = SpectralConvergenceLoss().to(device) if use_spectral_loss else None
     contrastive_fn = InfoNCELoss(temperature=0.07).to(device)
 
     total_steps = len(dataloader)
@@ -150,70 +140,63 @@ def main():
 
     if rank == 0:
         print("==========================================================", flush=True)
-        print(f"🏁 Dual-VAE Distributed Training Initialized (DDP, GPUs: {world_size})", flush=True)
+        print(f"🏁 Dual-VAE Training Initialized (DDP, GPUs: {world_size})", flush=True)
         print(f"   • Bottleneck: {bottleneck_type.upper()} ({latent_dim} dims)", flush=True)
+        print(f"   • Recon Loss: Native L1 (SpectralConvergence: {use_spectral_loss})", flush=True)
         print(f"   • Range epoche: [{start_epoch} -> {end_epoch - 1}] ({num_epochs} epoche)", flush=True)
-        print(f"   • Steps per Epoch: {total_steps} (Print ogni 10%)", flush=True)
         print("==========================================================\n", flush=True)
 
     for epoch in range(start_epoch, end_epoch):
         mel_vae.train()
         octave_vae.train()
         sampler.set_epoch(epoch)
-        
+
         epoch_loss = 0.0
         running_loss = 0.0
         epoch_start_time = time.time()
         step_start_time = time.time()
 
-        # Annealing progressivo per il coefficiente KL (warmup su 20 epoche)
         kl_weight = min(1e-3, (epoch + 1) / 20.0 * 1e-3)
 
         for step, (raw_audio, _) in enumerate(dataloader):
             raw_audio = raw_audio.to(device, non_blocking=True)
-            
-            # Frazione d'ottava randomica per allenare l'iper-risoluzione
             fraction_id = np.random.choice([1, 3, 6, 12, 16, 24, 32])
-            
+
             optimizer.zero_grad(set_to_none=True)
 
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                # Generazione online dei due spettrogrammi
                 # x_mel_target: [B, 1, 64, 1152], x_octave_pchip: [B, 1, 320, 1152]
                 x_mel_target, x_octave_pchip = spectral_pipeline(raw_audio, format_id=1, fraction_id=fraction_id, device=device)
-                
-                # Forward pass Ramo Mel
+
                 recon_mel, mu_mel, logvar_mel, z_mel = mel_vae(x_mel_target)
-                
-                # Forward pass Ramo Octave PCHIP
                 recon_oct, mu_oct, logvar_oct, z_oct = octave_vae(x_octave_pchip)
 
-                # 1. Reconstruction Losses (L1 + Spectral Convergence)
-                loss_rec_mel = F.l1_loss(recon_mel, x_mel_target) + 0.1 * spec_loss_fn(recon_mel, x_mel_target)
+                # 1. Native Reconstruction Losses (L1)
+                loss_rec_mel = F.l1_loss(recon_mel, x_mel_target)
                 loss_rec_oct = F.l1_loss(recon_oct, x_octave_pchip)
+                if use_spectral_loss:
+                    loss_rec_mel = loss_rec_mel + 0.1 * spec_loss_fn(recon_mel, x_mel_target)
 
-                # 2. KL Divergence Losses
+                # 2. KL Divergence
                 kl_mel = compute_kl_divergence(mu_mel, logvar_mel)
                 kl_oct = compute_kl_divergence(mu_oct, logvar_oct)
 
-                # 3. Contrastive Alignment Loss (InfoNCE sui vettori medi latenti mu)
+                # 3. InfoNCE Contrastive Loss sui latenti
                 if bottleneck_type == "1d":
                     z_cont_mel = mu_mel
                     z_cont_oct = mu_oct
                 else:
-                    # Se 2D, pooling globale sui canali per il confronto contrastivo
                     z_cont_mel = F.adaptive_avg_pool2d(mu_mel, (1, 1)).flatten(1)
                     z_cont_oct = F.adaptive_avg_pool2d(mu_oct, (1, 1)).flatten(1)
 
                 loss_contrastive = contrastive_fn(z_cont_mel, z_cont_oct, world_size=world_size)
 
-                # 4. Cross-Domain Reconstruction Loss (Cruciale: Decodifica Mel da latente Octave!)
-                # Verifica che la proiezione della filterbank sia decodificabile nel mel target
-                with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                    cross_mel_recon = mel_vae.module.decoder(z_oct)
-                    loss_cross = F.l1_loss(cross_mel_recon, x_mel_target) + 0.1 * spec_loss_fn(cross_mel_recon, x_mel_target)
+                # 4. Cross-Domain Reconstruction Loss: decodifica Mel da z_oct
+                cross_mel_recon = mel_vae.module.decoder(z_oct)
+                loss_cross = F.l1_loss(cross_mel_recon, x_mel_target)
+                if use_spectral_loss:
+                    loss_cross = loss_cross + 0.1 * spec_loss_fn(cross_mel_recon, x_mel_target)
 
-                # Loss Complessiva
                 total_loss = (loss_rec_mel + loss_rec_oct) + \
                              kl_weight * (kl_mel + kl_oct) + \
                              0.2 * loss_contrastive + \
@@ -250,7 +233,6 @@ def main():
             total_epoch_time = time.time() - epoch_start_time
             print(f"📢 Epoch {epoch:03d} terminata in {total_epoch_time:.1f}s ({total_epoch_time/60:.2f} min). Media Loss: {avg_loss:.5f}\n", flush=True)
 
-            # Salvataggio checkpoint ogni 5 epoche o all'ultima
             if (epoch + 1) % 5 == 0 or epoch == (end_epoch - 1):
                 checkpoint_path = os.path.join(target_model_dir, f"dual_vae_epoch_{epoch}.pt")
                 torch.save({
