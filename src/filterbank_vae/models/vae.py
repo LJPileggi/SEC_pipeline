@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# Configurazione globale di default per la tipologia di bottleneck: "1d" oppure "2d"
+# Configurazione globale di default per la tipologia di bottleneck: "2d" (preserva la topologia temporale)
 DEFAULT_BOTTLENECK_TYPE = "2d"
 
 

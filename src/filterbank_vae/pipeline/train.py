@@ -32,8 +32,6 @@ def parse_args():
     parser.add_argument("--epochs", type=int, default=int(os.environ.get("NUM_EPOCHS", DEFAULT_EPOCHS)))
     parser.add_argument("--bottleneck_type", type=str, default=BOTTLENECK_TYPE, choices=["1d", "2d"])
     parser.add_argument("--latent_dim", type=int, default=LATENT_DIM)
-    parser.add_argument("--use_spectral_loss", action="store_true", default=False,
-                        help="Se True, aggiunge AcousticStructuralLoss a L1")
     return parser.parse_args()
 
 class InfoNCELoss(nn.Module):
@@ -77,7 +75,6 @@ def main():
     end_epoch = start_epoch + num_epochs
     bottleneck_type = args.bottleneck_type
     latent_dim = args.latent_dim
-    use_spectral_loss = args.use_spectral_loss
 
     rank, world_size = setup_environ_vars(slurm=True)
     device = setup_distributed_environment(rank, world_size, slurm=True)
@@ -132,7 +129,8 @@ def main():
     mel_vae = nn.parallel.DistributedDataParallel(mel_vae, device_ids=[rank], output_device=rank, find_unused_parameters=False)
     octave_vae = nn.parallel.DistributedDataParallel(octave_vae, device_ids=[rank], output_device=rank, find_unused_parameters=False)
 
-    acoustic_loss_fn = AcousticStructuralLoss().to(device) if use_spectral_loss else None
+    # Istanziazione esplicita e diretta della Loss per i transienti impulsivi
+    acoustic_loss_fn = AcousticStructuralLoss(alpha=1.0, beta=0.5).to(device)
     contrastive_fn = InfoNCELoss(temperature=0.07).to(device)
 
     total_steps = len(dataloader)
@@ -142,7 +140,7 @@ def main():
         print("==========================================================", flush=True)
         print(f"🏁 Dual-VAE Training Initialized (DDP, GPUs: {world_size})", flush=True)
         print(f"   • Bottleneck: {bottleneck_type.upper()} ({latent_dim} dims)", flush=True)
-        print(f"   • Recon Loss: Native L1 (SpectralConvergence: {use_spectral_loss})", flush=True)
+        print("   • Loss: AcousticStructuralLoss (alpha=1.0 transient, beta=0.5 texture)", flush=True)
         print(f"   • Range epoche: [{start_epoch} -> {end_epoch - 1}] ({num_epochs} epoche)", flush=True)
         print("==========================================================\n", flush=True)
 
