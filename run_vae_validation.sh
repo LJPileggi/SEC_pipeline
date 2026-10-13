@@ -45,6 +45,7 @@ export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/weights/CLAP_weights_2023.pth
 export LOCAL_CLAP_BN0_CONSTANTS_PATH="/tmp_data/work_dir/weights/clap_bn0_constants.npz"
 export BOTTLENECK_TYPE="1d"
 export LATENT_DIM=512
+export NUM_EPOCHS=50
 
 export INJECT_OCTAVE="True"
 export VERBOSE="False"

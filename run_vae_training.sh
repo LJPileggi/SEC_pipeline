@@ -12,7 +12,7 @@
 #SBATCH --error=%x_%j.err
 
 START_EPOCH=${1:-0}
-NUM_EPOCHS=${2:-100}
+NUM_EPOCHS=${2:-50}
 BOTTLENECK_TYPE=${3:-"1d"}
 
 PROJECT_DIR="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline"

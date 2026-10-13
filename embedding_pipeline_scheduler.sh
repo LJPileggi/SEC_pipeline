@@ -103,7 +103,7 @@ cp -r "$ROBERTA_PATH/." "\$TEMP_DIR/roberta-base/" || exit 1
 
 # 🎯 STAGE-IN CONDIZIONATO DEI MODELLI GENERATIVI (DIFFUSION / VAE)
 if [ "$GENERATIVE_BACKBONE" = "vae" ]; then
-    export TARGET_EPOCH=100
+    export TARGET_EPOCH=50
     if [ -d "$VAE_MODELS_PATH" ]; then
         echo "📦 Staging Dual-VAE model weights from $VAE_MODELS_PATH..."
         LATEST_VAE=\$(ls -v "$VAE_MODELS_PATH"/dual_vae_epoch_*.pt 2>/dev/null | tail -n 1)
