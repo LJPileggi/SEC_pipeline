@@ -68,7 +68,7 @@ run_slurm() {
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=8
-#SBATCH --time=08:00:00
+#SBATCH --time=02:00:00
 #SBATCH --mem=128G
 #SBATCH --gres=gpu:4
 #SBATCH -p boost_usr_prod
@@ -114,7 +114,7 @@ cp -r "$ROBERTA_PATH/." "\$TEMP_DIR/roberta-base/"
 cp "$DATASEC_GLOBAL/RAW_DATASET/raw_$AUDIO_FORMAT"/*.h5 "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT/" 2>/dev/null
 
 if [ "$GENERATIVE_BACKBONE" = "vae" ]; then
-    export TARGET_EPOCH=50
+    export TARGET_EPOCH=115
     if [ -d "$VAE_MODELS_PATH" ]; then
         echo "📦 Staging Dual-VAE model weights..."
         LATEST_VAE=\$(ls -v "$VAE_MODELS_PATH"/dual_vae_epoch_*.pt 2>/dev/null | tail -n 1)
