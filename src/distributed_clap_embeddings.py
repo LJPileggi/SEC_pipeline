@@ -22,7 +22,7 @@ from .utils import *
 from .dirs_config import *
 from .filterbank_diffusion.models.unet import SpectrogramUNet
 from .filterbank_diffusion.models.diffusion import ConditionalGaussianDiffusion
-from .filterbank_vae.models.vae import MelVAE, OctaveVAE, DEFAULT_BOTTLENECK_TYPE
+from .filterbank_vae.models.vae import MelVQVAE, OctaveVQVAE, DEFAULT_BOTTLENECK_TYPE
 
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
@@ -39,7 +39,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     """
     Processes a specific audio class by extracting fixed-length audio segments, generating 
     CLAP embeddings and octave spectrograms in a batched, GPU-accelerated pipeline.
-    Supports both the Residual Diffusion Model and the Dual-VAE Cross-Domain translation.
+    Supports both the Residual Diffusion Model and the Dual VQ-VAE Cross-Domain translation.
     """
     root_source, root_target = config['dirs']['root_source'], config['dirs']['root_target']
     target_class_dir = os.path.join(root_target, f'{cut_secs}_secs', class_to_process)
@@ -108,19 +108,21 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
             if pts:
                 checkpoint_path = os.path.join(target_model_dir, sorted(pts)[-1])
 
-        b_type = os.environ.get("BOTTLENECK_TYPE", DEFAULT_BOTTLENECK_TYPE)
-        l_dim = int(os.environ.get("LATENT_DIM", 512))
-        mel_vae = MelVAE(base_channels=64, bottleneck_type=b_type, latent_dim=l_dim).to(device)
-        octave_vae = OctaveVAE(base_channels=64, bottleneck_type=b_type, latent_dim=l_dim).to(device)
-
         checkpoint = torch.load(checkpoint_path, map_location=device)
+        l_dim = int(checkpoint.get("latent_dim", os.environ.get("LATENT_DIM", 256)))
+        n_embed = int(checkpoint.get("num_embeddings", os.environ.get("NUM_EMBEDDINGS", 1024)))
+
+        # Inizializzazione VQ-VAE con quantizzatore a codebook discreto condiviso
+        mel_vae = MelVQVAE(base_channels=64, latent_dim=l_dim, num_embeddings=n_embed).to(device)
+        octave_vae = OctaveVQVAE(base_channels=64, latent_dim=l_dim, num_embeddings=n_embed, shared_quantizer=mel_vae.quantizer).to(device)
+
         mel_vae.load_state_dict(checkpoint['mel_vae_state_dict'])
         octave_vae.load_state_dict(checkpoint['octave_vae_state_dict'])
         mel_vae.eval()
         octave_vae.eval()
 
         if VERBOSE and rank == 0:
-            print(f"✅ Loaded Dual-VAE checkpoint from: {checkpoint_path}", flush=True)
+            print(f"✅ Loaded Dual VQ-VAE checkpoint from: {checkpoint_path} (Codebook: {n_embed} tokens, {l_dim} dims)", flush=True)
 
     else:
         # Default: Diffusion Model
@@ -142,7 +144,6 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
         if VERBOSE and rank == 0:
             print(f"✅ Loaded Diffusion Model checkpoint from: {checkpoint_path}", flush=True)
 
-    # 🎯 FIX MULTI-GPU: Garantisce che tutti i moduli interni di CLAP siano su questo device
     clap_model.clap.to(device)
 
     def flush_batch():
@@ -165,7 +166,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
             noise = (torch.rand(raw_batch.shape, generator=g, device=device) * 2 - 1) * means
             batch_tensor = (1 - noise_perc) * raw_batch + noise_perc * noise
             
-            # Step 1: Generate octave-band spectrograms on GPU
+            # Step 1: Spettrogrammi a bande d'ottava su GPU
             specs_gpu = spectrogram_n_octaveband_generator_gpu(
                 batch_tensor, sr, n_octave, center_freqs=center_freqs, ref=ref, device=device
             )
@@ -174,32 +175,33 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             
-            # Step 2: Inference generativa e CLAP
+            # Step 2: Generazione e ricostruzione Mel per CLAP
             with torch.no_grad():
                 if use_specs:
                     if INJECT_OCTAVE:
                         octave_spec = specs_gpu.permute(0, 2, 1)
 
                         if GENERATIVE_BACKBONE == "vae":
-                            # 1. PCHIP Spline GPU interpolation verso 32esime d'ottava (320 bande)
+                            # 1. PCHIP Spline GPU verso 320 bande d'ottava
                             x_oct_pchip = hyperresolve_octave_pchip_gpu(
                                 octave_spec, n_octave=n_octave, target_bands=320, target_time=1152, sample_rate=sr
                             )
-                            # 2. Inversione istantanea cross-domain: OctaveEncoder -> MelDecoder
-                            mu_oct, _ = octave_vae.encoder(x_oct_pchip)
-                            mel_reconstructed = mel_vae.decoder(mu_oct)
+                            # 2. Inversione discreta VQ-VAE: Encoder -> Proiezione Codebook -> Decoder
+                            z_e_oct = octave_vae.encoder(x_oct_pchip)
+                            z_q_oct, _, _ = octave_vae.quantizer(z_e_oct)
+                            mel_reconstructed = mel_vae.decoder(z_q_oct)
 
                         else:
-                            # 1. 2D Bilinear Resampling to U-Net grid (F: 64, T: 1152) with CLAP bn0 normalization
+                            # 1. Resampling bilineare a griglia U-Net (64x1152) con normalizzazione CLAP bn0
                             x_cond = convert_octave_to_msclap_mel(octave_spec, target_mels=64, target_time=1152)
 
-                            # 2. Conditioning resolution tensor
+                            # 2. Tensore di condizionamento risoluzione
                             frac_tensor = torch.full((batch_tensor.shape[0],), fill_value=float(n_octave), device=device)
 
-                            # 3. DDIM Sampling conditioned on octave guide [B, 1, 64, 1152]
+                            # 3. DDIM Sampling su guida d'ottava
                             mel_reconstructed = diffusion_scheduler.sample_ddim(x_cond, fraction_id=frac_tensor, ddim_steps=100)
 
-                        # Deterministic CLAP sliding-window feature extraction & L2 hypersphere normalization
+                        # Estrazione deterministica sliding-window ed embedding CLAP
                         embeddings = extract_clap_embedding_from_reconstructed_mel(
                             mel_reconstructed=mel_reconstructed,
                             clap_model=clap_model,

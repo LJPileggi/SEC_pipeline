@@ -15,10 +15,11 @@ if src_root not in sys.path:
 from utils import get_config_from_yaml
 from filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
 from filterbank_vae.pipeline.spectral import OnlineSpectrogramPipeline
-from filterbank_vae.models.vae import MelVAE, OctaveVAE, DEFAULT_BOTTLENECK_TYPE
+from filterbank_vae.models.vae import MelVQVAE, OctaveVQVAE, DEFAULT_BOTTLENECK_TYPE
 
 BOTTLENECK_TYPE = os.environ.get("BOTTLENECK_TYPE", DEFAULT_BOTTLENECK_TYPE)
-LATENT_DIM = int(os.environ.get("LATENT_DIM", 512))
+LATENT_DIM = int(os.environ.get("LATENT_DIM", 256))
+NUM_EMBEDDINGS = int(os.environ.get("NUM_EMBEDDINGS", 1024))
 
 def plot_triplet(pristine, cond, recon, class_name, sample_idx, fraction, save_path):
     fig, axes = plt.subplots(4, 1, figsize=(10, 8), sharex=True)
@@ -38,9 +39,9 @@ def plot_triplet(pristine, cond, recon, class_name, sample_idx, fraction, save_p
     axes[1].set_ylabel("Octave Bins (320)", fontsize=8)
     fig.colorbar(im1, ax=axes[1], fraction=0.015, pad=0.01)
     
-    # 3. Dual-VAE Reconstruction [64, 1152]
+    # 3. Dual VQ-VAE Reconstruction [64, 1152]
     im2 = axes[2].imshow(recon, origin='lower', aspect='auto', cmap='magma', vmin=vmin, vmax=vmax)
-    axes[2].set_title(f"Dual-VAE Restored Mel (Bottleneck: {BOTTLENECK_TYPE.upper()})", fontsize=10)
+    axes[2].set_title("Dual VQ-VAE Restored Mel (Discrete Codebook Quantization)", fontsize=10)
     axes[2].set_ylabel("Mel Bins (64)", fontsize=8)
     fig.colorbar(im2, ax=axes[2], fraction=0.015, pad=0.01)
 
@@ -57,12 +58,10 @@ def plot_triplet(pristine, cond, recon, class_name, sample_idx, fraction, save_p
     plt.close()
 
 def resolve_checkpoint_path():
-    # 1. Se passata direttamente una variabile esplicita valida
     ckpt_env = os.environ.get("CHECKPOINT_PATH", "")
     if ckpt_env and os.path.exists(ckpt_env):
         return ckpt_env
 
-    # 2. Directory di ricerca in ordine di priorità
     candidate_dirs = [
         os.environ.get("MODEL_CHECKPOINT_DIR", ""),
         os.environ.get("MODELS_GLOBAL", ""),
@@ -72,14 +71,12 @@ def resolve_checkpoint_path():
     for d in candidate_dirs:
         if not d or not os.path.exists(d):
             continue
-        # Se era specificato un path in CHECKPOINT_PATH ma il path assoluto differiva
         if ckpt_env:
             filename = os.path.basename(ckpt_env)
             candidate_file = os.path.join(d, filename)
             if os.path.exists(candidate_file):
                 return candidate_file
         
-        # Altrimenti prende l'ultimo per versione
         pts = sorted([f for f in os.listdir(d) if f.startswith("dual_vae_epoch_") and f.endswith(".pt")])
         if pts:
             return os.path.join(d, pts[-1])
@@ -98,18 +95,17 @@ def main():
     
     checkpoint_path = resolve_checkpoint_path()
     if checkpoint_path is None or not os.path.exists(checkpoint_path):
-        print(f"❌ Nessun checkpoint Dual-VAE trovato. Verificare percorsi.")
+        print("❌ Nessun checkpoint Dual VQ-VAE trovato. Verificare percorsi.")
         sys.exit(1)
         
     print(f"✅ Checkpoint caricato: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location=device)
     
-    # Allineamento dinamico al bottleneck_type salvato nel checkpoint
-    active_bottleneck = checkpoint.get("bottleneck_type", BOTTLENECK_TYPE)
     active_latent_dim = checkpoint.get("latent_dim", LATENT_DIM)
+    active_num_embeddings = checkpoint.get("num_embeddings", NUM_EMBEDDINGS)
     
-    mel_vae = MelVAE(base_channels=64, bottleneck_type=active_bottleneck, latent_dim=active_latent_dim).to(device)
-    octave_vae = OctaveVAE(base_channels=64, bottleneck_type=active_bottleneck, latent_dim=active_latent_dim).to(device)
+    mel_vae = MelVQVAE(base_channels=64, latent_dim=active_latent_dim, num_embeddings=active_num_embeddings).to(device)
+    octave_vae = OctaveVQVAE(base_channels=64, latent_dim=active_latent_dim, num_embeddings=active_num_embeddings, shared_quantizer=mel_vae.quantizer).to(device)
     
     mel_vae.load_state_dict(checkpoint['mel_vae_state_dict'])
     octave_vae.load_state_dict(checkpoint['octave_vae_state_dict'])
@@ -123,9 +119,6 @@ def main():
     arrays_dir = os.path.join(output_dir, "arrays_npz")
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(arrays_dir, exist_ok=True)
-    
-    print(f"🎨 Salvataggio immagini JPG in: {output_dir}")
-    print(f"💾 Salvataggio array NPZ compressi in: {arrays_dir}")
 
     class_collected = {c: [] for c in classes_list}
     for i in range(len(test_dataset)):
@@ -146,9 +139,11 @@ def main():
                 
                 x_0_pristine, x_oct_pchip = spectral_pipeline(audio_batch, format_id=1, fraction_id=target_fraction, device=device)
                 
-                # Cross-Domain Reconstruction: OctaveEncoder -> MelDecoder
-                mu_oct, _ = octave_vae.encoder(x_oct_pchip)
-                x_reconstructed = mel_vae.decoder(mu_oct)
+                # Cross-Domain VQ-VAE Translation:
+                # OctaveEncoder -> Proiezione discreta codebook -> MelDecoder
+                z_e_oct = octave_vae.encoder(x_oct_pchip)
+                z_q_oct, _, _ = octave_vae.quantizer(z_e_oct)
+                x_reconstructed = mel_vae.decoder(z_q_oct)
                 
                 pristine_np = np.nan_to_num(x_0_pristine.squeeze().cpu().numpy(), nan=0.0).astype(np.float32)
                 cond_np = np.nan_to_num(x_oct_pchip.squeeze().cpu().numpy(), nan=0.0).astype(np.float32)

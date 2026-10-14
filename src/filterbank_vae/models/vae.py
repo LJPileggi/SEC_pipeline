@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# Configurazione globale di default per la tipologia di bottleneck: "2d" (preserva la topologia temporale)
 DEFAULT_BOTTLENECK_TYPE = "2d"
 
 
@@ -19,10 +18,8 @@ class AttentionBlock(nn.Module):
         self.mha = nn.MultiheadAttention(embed_dim=channels, num_heads=num_heads, batch_first=True)
 
     def forward(self, x):
-        # x: [B, C, H, W]
         B, C, H, W = x.shape
         h = self.norm(x)
-        # Reshape in sequenza di token: [B, H*W, C]
         tokens = h.permute(0, 2, 3, 1).reshape(B, H * W, C)
         attn_out, _ = self.mha(tokens, tokens, tokens)
         attn_out = attn_out.reshape(B, H, W, C).permute(0, 3, 1, 2)
@@ -51,49 +48,110 @@ class ResBlock(nn.Module):
         return self.shortcut(x) + h
 
 
+class VectorQuantizerEMA(nn.Module):
+    """
+    Vector Quantizer discreto con aggiornamento EMA (Exponential Moving Average) del codebook.
+    Elimina il campionamento gaussiano sfocato e memorizza pattern impulsivi precisi.
+    """
+    def __init__(self, num_embeddings=1024, embedding_dim=256, commitment_cost=0.25, decay=0.99, epsilon=1e-5):
+        super().__init__()
+        self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
+        self.commitment_cost = commitment_cost
+        self.decay = decay
+        self.epsilon = epsilon
+
+        # Codebook bufferizzato (non aggiornato da autograd ma da EMA)
+        embedding = torch.randn(embedding_dim, num_embeddings)
+        self.register_buffer("embedding", embedding)
+        self.register_buffer("ema_cluster_size", torch.zeros(num_embeddings))
+        self.register_buffer("ema_w", embedding.clone())
+
+    def forward(self, inputs):
+        # inputs: [B, C, H, W]
+        # Permuta in [B, H, W, C] -> [B*H*W, C]
+        inputs_permuted = inputs.permute(0, 2, 3, 1).contiguous()
+        flat_input = inputs_permuted.view(-1, self.embedding_dim)
+
+        # Distanze euclidee rispetto ai prototipi del codebook
+        # ||a - b||^2 = ||a||^2 + ||b||^2 - 2 a.b
+        distances = (
+            torch.sum(flat_input ** 2, dim=1, keepdim=True)
+            + torch.sum(self.embedding ** 2, dim=0, keepdim=True)
+            - 2 * torch.matmul(flat_input, self.embedding)
+        )
+
+        # Selezione dell'indice al prototipo discreto più vicino
+        encoding_indices = torch.argmin(distances, dim=1).unsqueeze(1)
+        encodings = torch.zeros(encoding_indices.shape[0], self.num_embeddings, device=inputs.device)
+        encodings.scatter_(1, encoding_indices, 1)
+
+        # Quantizzazione discreta
+        quantized = torch.matmul(encodings, self.embedding.t()).view(inputs_permuted.shape)
+
+        # Aggiornamento EMA durante il training
+        if self.training:
+            cluster_size = torch.sum(encodings, dim=0)
+            self.ema_cluster_size.data.mul_(self.decay).add_(cluster_size, alpha=1 - self.decay)
+
+            dw = torch.matmul(flat_input.t(), encodings)
+            self.ema_w.data.mul_(self.decay).add_(dw, alpha=1 - self.decay)
+
+            n = torch.sum(self.ema_cluster_size)
+            smoothed_cluster_size = (
+                (self.ema_cluster_size + self.epsilon) / (n + self.num_embeddings * self.epsilon) * n
+            )
+            normalized_w = self.ema_w / smoothed_cluster_size.unsqueeze(0)
+            self.embedding.data.copy_(normalized_w)
+
+        # Loss di impegno (Commitment Loss) per forzare l'encoder ad avvicinarsi ai prototipi
+        e_latent_loss = F.mse_loss(inputs_permuted, quantized.detach())
+        loss = self.commitment_cost * e_latent_loss
+
+        # Straight-through estimator per consentire la retropropagazione attraverso la quantizzazione
+        quantized = inputs_permuted + (quantized - inputs_permuted).detach()
+        quantized = quantized.permute(0, 3, 1, 2).contiguous()
+
+        return quantized, loss, encoding_indices.view(inputs.shape[0], inputs.shape[2], inputs.shape[3])
+
+    def quantize_code(self, encoding_indices):
+        # Lookup deterministico da indici discreti a tensore latente quantizzato
+        # encoding_indices: [B, H, W]
+        B, H, W = encoding_indices.shape
+        flat_indices = encoding_indices.view(-1, 1)
+        encodings = torch.zeros(flat_indices.shape[0], self.num_embeddings, device=encoding_indices.device)
+        encodings.scatter_(1, flat_indices, 1)
+        quantized = torch.matmul(encodings, self.embedding.t()).view(B, H, W, self.embedding_dim)
+        return quantized.permute(0, 3, 1, 2).contiguous()
+
+
 # ==============================================================================
-# 1. RAMO MEL VAE (Input: [B, 1, 64, 1152])
+# 1. RAMO MEL VQ-VAE (Input: [B, 1, 64, 1152])
 # ==============================================================================
 
 class MelEncoder(nn.Module):
     """
     Encoder per Mel Spectrograms:
-    4 stadi di dimezzamento:
     64x1152 -> 32x576 -> 16x288 -> 8x144 -> 4x72
     """
-    def __init__(self, in_channels=1, base_channels=64, bottleneck_type=DEFAULT_BOTTLENECK_TYPE, latent_dim=512):
+    def __init__(self, in_channels=1, base_channels=64, latent_dim=256):
         super().__init__()
-        self.bottleneck_type = bottleneck_type
-        self.latent_dim = latent_dim
-
         self.init_conv = nn.Conv2d(in_channels, base_channels, kernel_size=3, padding=1)
 
-        # Stadio 1: 64x1152 -> 32x576 (C: 64)
         self.res1 = ResBlock(base_channels, base_channels)
         self.down1 = nn.Conv2d(base_channels, base_channels * 2, kernel_size=3, stride=2, padding=1)
 
-        # Stadio 2: 32x576 -> 16x288 (C: 128)
         self.res2 = ResBlock(base_channels * 2, base_channels * 2)
         self.down2 = nn.Conv2d(base_channels * 2, base_channels * 4, kernel_size=3, stride=2, padding=1)
 
-        # Stadio 3: 16x288 -> 8x144 (C: 256)
         self.res3 = ResBlock(base_channels * 4, base_channels * 4)
         self.down3 = nn.Conv2d(base_channels * 4, base_channels * 4, kernel_size=3, stride=2, padding=1)
 
-        # Stadio 4: 8x144 -> 4x72 (C: 256)
         self.res4 = ResBlock(base_channels * 4, base_channels * 4)
         self.down4 = nn.Conv2d(base_channels * 4, base_channels * 4, kernel_size=3, stride=2, padding=1)
 
-        # Attenzione globale al termine del downsampling
         self.attn = AttentionBlock(base_channels * 4, num_heads=4)
-
-        if self.bottleneck_type == "1d":
-            self.pool = nn.AdaptiveAvgPool2d((1, 1))
-            self.fc_mu = nn.Linear(base_channels * 4, latent_dim)
-            self.fc_logvar = nn.Linear(base_channels * 4, latent_dim)
-        else: # "2d"
-            self.conv_mu = nn.Conv2d(base_channels * 4, latent_dim, kernel_size=1)
-            self.conv_logvar = nn.Conv2d(base_channels * 4, latent_dim, kernel_size=1)
+        self.proj = nn.Conv2d(base_channels * 4, latent_dim, kernel_size=1)
 
     def forward(self, x):
         h = self.init_conv(x)
@@ -102,105 +160,70 @@ class MelEncoder(nn.Module):
         h = self.down3(self.res3(h))
         h = self.down4(self.res4(h))
         h = self.attn(h)
-
-        if self.bottleneck_type == "1d":
-            flat = self.pool(h).flatten(1)
-            mu = self.fc_mu(flat)
-            logvar = self.fc_logvar(flat)
-        else:
-            mu = self.conv_mu(h)
-            logvar = self.conv_logvar(h)
-        return mu, logvar
+        return self.proj(h)
 
 
 class MelDecoder(nn.Module):
     """
     Decoder per Mel Spectrograms:
-    4 stadi di raddoppio speculari:
     4x72 -> 8x144 -> 16x288 -> 32x576 -> 64x1152
     """
-    def __init__(self, out_channels=1, base_channels=64, bottleneck_type=DEFAULT_BOTTLENECK_TYPE, latent_dim=512):
+    def __init__(self, out_channels=1, base_channels=64, latent_dim=256):
         super().__init__()
-        self.bottleneck_type = bottleneck_type
-        self.latent_dim = latent_dim
-
-        if self.bottleneck_type == "1d":
-            self.fc_in = nn.Linear(latent_dim, base_channels * 4 * 4 * 72)
-        else:
-            self.conv_in = nn.Conv2d(latent_dim, base_channels * 4, kernel_size=1)
-
+        self.proj_in = nn.Conv2d(latent_dim, base_channels * 4, kernel_size=1)
         self.attn = AttentionBlock(base_channels * 4, num_heads=4)
 
-        # 4x72 -> 8x144
         self.up1 = nn.ConvTranspose2d(base_channels * 4, base_channels * 4, kernel_size=4, stride=2, padding=1)
         self.res1 = ResBlock(base_channels * 4, base_channels * 4)
 
-        # 8x144 -> 16x288
         self.up2 = nn.ConvTranspose2d(base_channels * 4, base_channels * 2, kernel_size=4, stride=2, padding=1)
         self.res2 = ResBlock(base_channels * 2, base_channels * 2)
 
-        # 16x288 -> 32x576
         self.up3 = nn.ConvTranspose2d(base_channels * 2, base_channels, kernel_size=4, stride=2, padding=1)
         self.res3 = ResBlock(base_channels, base_channels)
 
-        # 32x576 -> 64x1152
         self.up4 = nn.ConvTranspose2d(base_channels, base_channels, kernel_size=4, stride=2, padding=1)
         self.res4 = ResBlock(base_channels, base_channels)
 
         self.out_conv = nn.Conv2d(base_channels, out_channels, kernel_size=3, padding=1)
 
     def forward(self, z):
-        if self.bottleneck_type == "1d":
-            h = self.fc_in(z).view(-1, 256, 4, 72)
-        else:
-            h = self.conv_in(z)
-
+        h = self.proj_in(z)
         h = self.attn(h)
         h = self.res1(self.up1(h))
         h = self.res2(self.up2(h))
         h = self.res3(self.up3(h))
         h = self.res4(self.up4(h))
-        out = self.out_conv(h)
-        return out
+        return self.out_conv(h)
 
 
-class MelVAE(nn.Module):
-    def __init__(self, base_channels=64, bottleneck_type=DEFAULT_BOTTLENECK_TYPE, latent_dim=512):
+class MelVQVAE(nn.Module):
+    def __init__(self, base_channels=64, latent_dim=256, num_embeddings=1024):
         super().__init__()
-        self.encoder = MelEncoder(in_channels=1, base_channels=base_channels, bottleneck_type=bottleneck_type, latent_dim=latent_dim)
-        self.decoder = MelDecoder(out_channels=1, base_channels=base_channels, bottleneck_type=bottleneck_type, latent_dim=latent_dim)
-        self.bottleneck_type = bottleneck_type
-
-    def reparameterize(self, mu, logvar):
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return mu + eps * std
+        self.encoder = MelEncoder(in_channels=1, base_channels=base_channels, latent_dim=latent_dim)
+        self.quantizer = VectorQuantizerEMA(num_embeddings=num_embeddings, embedding_dim=latent_dim)
+        self.decoder = MelDecoder(out_channels=1, base_channels=base_channels, latent_dim=latent_dim)
 
     def forward(self, x):
-        mu, logvar = self.encoder(x)
-        z = self.reparameterize(mu, logvar)
-        recon = self.decoder(z)
-        return recon, mu, logvar, z
+        z_e = self.encoder(x)
+        z_q, vq_loss, indices = self.quantizer(z_e)
+        recon = self.decoder(z_q)
+        return recon, vq_loss, z_e, z_q, indices
 
 
 # ==============================================================================
-# 2. RAMO OCTAVE VAE (Input: [B, 1, 320, 1152] via PCHIP GPU)
+# 2. RAMO OCTAVE VQ-VAE (Input: [B, 1, 320, 1152] via PCHIP GPU)
 # ==============================================================================
 
 class OctaveEncoder(nn.Module):
     """
-    Encoder per Spettrogrammi d'ottava (Input: [B, 1, F_oct, 1152]):
-    Porta le feature a [B, 256, 4, 72] in modo matematicamente garantito.
+    Encoder per Spettrogrammi d'ottava (Input: [B, 1, 320, 1152]):
+    Porta le feature continue a [B, 256, 4, 72] per interfacciarsi con il codebook.
     """
-    def __init__(self, in_channels=1, base_channels=64, bottleneck_type=DEFAULT_BOTTLENECK_TYPE, latent_dim=512):
+    def __init__(self, in_channels=1, base_channels=64, latent_dim=256):
         super().__init__()
-        self.bottleneck_type = bottleneck_type
-        self.latent_dim = latent_dim
-
         self.init_conv = nn.Conv2d(in_channels, base_channels, kernel_size=3, padding=1)
 
-        # 4 stadi di dimezzamento tempo e frequenza (stride 2x2)
-        # Tempo: 1152 -> 576 -> 288 -> 144 -> 72
         self.res1 = ResBlock(base_channels, base_channels)
         self.down1 = nn.Conv2d(base_channels, base_channels * 2, kernel_size=3, stride=2, padding=1)
 
@@ -213,24 +236,14 @@ class OctaveEncoder(nn.Module):
         self.res4 = ResBlock(base_channels * 4, base_channels * 4)
         self.down4 = nn.Conv2d(base_channels * 4, base_channels * 4, kernel_size=3, stride=2, padding=1)
 
-        # A questo punto il tempo è esattamente a 72.
-        # Riduciamo ulteriormente la frequenza mantenendo fisso il tempo:
         self.res5 = ResBlock(base_channels * 4, base_channels * 4)
         self.down5 = nn.Conv2d(base_channels * 4, base_channels * 4, kernel_size=3, stride=(2, 1), padding=1)
 
-        # Adaptive pooling che garantisce AL 100% che la griglia finale sia [B, C, 4, 72]
         self.align_pool = nn.AdaptiveAvgPool2d((4, 72))
         self.res_final = ResBlock(base_channels * 4, base_channels * 4)
 
         self.attn = AttentionBlock(base_channels * 4, num_heads=4)
-
-        if self.bottleneck_type == "1d":
-            self.pool = nn.AdaptiveAvgPool2d((1, 1))
-            self.fc_mu = nn.Linear(base_channels * 4, latent_dim)
-            self.fc_logvar = nn.Linear(base_channels * 4, latent_dim)
-        else:
-            self.conv_mu = nn.Conv2d(base_channels * 4, latent_dim, kernel_size=1)
-            self.conv_logvar = nn.Conv2d(base_channels * 4, latent_dim, kernel_size=1)
+        self.proj = nn.Conv2d(base_channels * 4, latent_dim, kernel_size=1)
 
     def forward(self, x):
         h = self.init_conv(x)
@@ -241,64 +254,41 @@ class OctaveEncoder(nn.Module):
         h = self.down5(self.res5(h))
         h = self.res_final(self.align_pool(h))
         h = self.attn(h)
-
-        if self.bottleneck_type == "1d":
-            flat = self.pool(h).flatten(1)
-            mu = self.fc_mu(flat)
-            logvar = self.fc_logvar(flat)
-        else:
-            mu = self.conv_mu(h)
-            logvar = self.conv_logvar(h)
-        return mu, logvar
+        return self.proj(h)
 
 
 class OctaveDecoder(nn.Module):
     """
     Decoder per Spettrogrammi d'ottava (Ricostruisce [B, 1, 320, 1152]):
-    Parte da [B, 256, 4, 72] e fa upsample verso 320x1152.
+    Parte dai token discreti [B, 256, 4, 72] ed esegue l'upsample verso 320x1152.
     """
-    def __init__(self, out_channels=1, base_channels=64, bottleneck_type=DEFAULT_BOTTLENECK_TYPE, latent_dim=512, target_freq=320, target_time=1152):
+    def __init__(self, out_channels=1, base_channels=64, latent_dim=256, target_freq=320, target_time=1152):
         super().__init__()
-        self.bottleneck_type = bottleneck_type
-        self.latent_dim = latent_dim
         self.target_freq = target_freq
         self.target_time = target_time
 
-        if self.bottleneck_type == "1d":
-            self.fc_in = nn.Linear(latent_dim, base_channels * 4 * 4 * 72)
-        else:
-            self.conv_in = nn.Conv2d(latent_dim, base_channels * 4, kernel_size=1)
-
+        self.proj_in = nn.Conv2d(latent_dim, base_channels * 4, kernel_size=1)
         self.attn = AttentionBlock(base_channels * 4, num_heads=4)
 
-        # 4x72 -> 8x72
         self.up5 = nn.ConvTranspose2d(base_channels * 4, base_channels * 4, kernel_size=(4, 3), stride=(2, 1), padding=(1, 1))
         self.res5 = ResBlock(base_channels * 4, base_channels * 4)
 
-        # 8x72 -> 16x144
         self.up4 = nn.ConvTranspose2d(base_channels * 4, base_channels * 4, kernel_size=4, stride=2, padding=1)
         self.res4 = ResBlock(base_channels * 4, base_channels * 4)
 
-        # 16x144 -> 32x288
         self.up3 = nn.ConvTranspose2d(base_channels * 4, base_channels * 4, kernel_size=4, stride=2, padding=1)
         self.res3 = ResBlock(base_channels * 4, base_channels * 4)
 
-        # 32x288 -> 64x576
         self.up2 = nn.ConvTranspose2d(base_channels * 4, base_channels * 2, kernel_size=4, stride=2, padding=1)
         self.res2 = ResBlock(base_channels * 2, base_channels * 2)
 
-        # 64x576 -> 128x1152
         self.up1 = nn.ConvTranspose2d(base_channels * 2, base_channels, kernel_size=4, stride=2, padding=1)
         self.res1 = ResBlock(base_channels, base_channels)
 
         self.out_conv = nn.Conv2d(base_channels, out_channels, kernel_size=3, padding=1)
 
     def forward(self, z):
-        if self.bottleneck_type == "1d":
-            h = self.fc_in(z).view(-1, 256, 4, 72)
-        else:
-            h = self.conv_in(z)
-
+        h = self.proj_in(z)
         h = self.attn(h)
         h = self.res5(self.up5(h))
         h = self.res4(self.up4(h))
@@ -307,26 +297,32 @@ class OctaveDecoder(nn.Module):
         h = self.res1(self.up1(h))
         out = self.out_conv(h)
 
-        # Interpolazione finale esatta verso target_freq (320) x target_time (1152)
         if out.shape[-2:] != (self.target_freq, self.target_time):
             out = F.interpolate(out, size=(self.target_freq, self.target_time), mode='bilinear', align_corners=False)
         return out
 
 
-class OctaveVAE(nn.Module):
-    def __init__(self, base_channels=64, bottleneck_type=DEFAULT_BOTTLENECK_TYPE, latent_dim=512):
+class OctaveVQVAE(nn.Module):
+    """
+    Ramo Octave: utilizza lo stesso quantizzatore o un quantizzatore speculare
+    allineato allo stesso dizionario del Mel.
+    """
+    def __init__(self, base_channels=64, latent_dim=256, num_embeddings=1024, shared_quantizer=None):
         super().__init__()
-        self.encoder = OctaveEncoder(in_channels=1, base_channels=base_channels, bottleneck_type=bottleneck_type, latent_dim=latent_dim)
-        self.decoder = OctaveDecoder(out_channels=1, base_channels=base_channels, bottleneck_type=bottleneck_type, latent_dim=latent_dim)
-        self.bottleneck_type = bottleneck_type
-
-    def reparameterize(self, mu, logvar):
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return mu + eps * std
+        self.encoder = OctaveEncoder(in_channels=1, base_channels=base_channels, latent_dim=latent_dim)
+        if shared_quantizer is not None:
+            self.quantizer = shared_quantizer
+        else:
+            self.quantizer = VectorQuantizerEMA(num_embeddings=num_embeddings, embedding_dim=latent_dim)
+        self.decoder = OctaveDecoder(out_channels=1, base_channels=base_channels, latent_dim=latent_dim)
 
     def forward(self, x):
-        mu, logvar = self.encoder(x)
-        z = self.reparameterize(mu, logvar)
-        recon = self.decoder(z)
-        return recon, mu, logvar, z
+        z_e = self.encoder(x)
+        z_q, vq_loss, indices = self.quantizer(z_e)
+        recon = self.decoder(z_q)
+        return recon, vq_loss, z_e, z_q, indices
+
+
+# Alias retrocompatibili per non rompere import o script di validazione
+MelVAE = MelVQVAE
+OctaveVAE = OctaveVQVAE
