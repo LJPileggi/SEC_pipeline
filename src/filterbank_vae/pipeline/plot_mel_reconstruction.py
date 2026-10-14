@@ -14,37 +14,33 @@ if src_root not in sys.path:
 
 from utils import get_config_from_yaml
 from filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
-from filterbank_diffusion.pipeline.spectral import OnlineSpectrogramPipeline
+from filterbank_vae.pipeline.spectral import OnlineSpectrogramPipeline
 from filterbank_vae.models.vae import MelVAE, OctaveVAE, DEFAULT_BOTTLENECK_TYPE
 
 BOTTLENECK_TYPE = os.environ.get("BOTTLENECK_TYPE", DEFAULT_BOTTLENECK_TYPE)
 LATENT_DIM = int(os.environ.get("LATENT_DIM", 512))
 
 def plot_triplet(pristine, cond, recon, class_name, sample_idx, fraction, save_path):
-    """
-    Plot diagnostico a 4 pannelli ottimizzato per peso (<120 KB):
-    Pristine Mel, Input Filterbank PCHIP, Ricostruzione VAE, Errore Assoluto.
-    """
     fig, axes = plt.subplots(4, 1, figsize=(10, 8), sharex=True)
     
     vmin = float(min(pristine.min(), recon.min()))
     vmax = float(max(pristine.max(), recon.max()))
     
-    # 1. Pristine Ground Truth Mel [64, 1152]
+    # 1. Pristine Mel [64, 1152]
     im0 = axes[0].imshow(pristine, origin='lower', aspect='auto', cmap='magma', vmin=vmin, vmax=vmax)
     axes[0].set_title(f"Class: {class_name} | #{sample_idx} - Pristine Mel ($X_0$)", fontsize=10, fontweight='bold')
     axes[0].set_ylabel("Mel Bins (64)", fontsize=8)
     fig.colorbar(im0, ax=axes[0], fraction=0.015, pad=0.01)
     
-    # 2. Input Condition Filterbank PCHIP [320, 1152]
+    # 2. Input Filterbank PCHIP [320, 1152]
     im1 = axes[1].imshow(cond, origin='lower', aspect='auto', cmap='magma')
     axes[1].set_title(f"Input Degraded Filterbank 1/{fraction} Octave (PCHIP 320 Bands)", fontsize=10)
     axes[1].set_ylabel("Octave Bins (320)", fontsize=8)
     fig.colorbar(im1, ax=axes[1], fraction=0.015, pad=0.01)
     
-    # 3. Dual-VAE Cross-Domain Reconstruction [64, 1152]
+    # 3. Dual-VAE Reconstruction [64, 1152]
     im2 = axes[2].imshow(recon, origin='lower', aspect='auto', cmap='magma', vmin=vmin, vmax=vmax)
-    axes[2].set_title("Dual-VAE Cross-Restoration (Decoded from Octave Bottleneck)", fontsize=10)
+    axes[2].set_title(f"Dual-VAE Restored Mel (Bottleneck: {BOTTLENECK_TYPE.upper()})", fontsize=10)
     axes[2].set_ylabel("Mel Bins (64)", fontsize=8)
     fig.colorbar(im2, ax=axes[2], fraction=0.015, pad=0.01)
 
@@ -60,6 +56,36 @@ def plot_triplet(pristine, cond, recon, class_name, sample_idx, fraction, save_p
     plt.savefig(save_path, dpi=85, format="jpg", pil_kwargs={"quality": 80})
     plt.close()
 
+def resolve_checkpoint_path():
+    # 1. Se passata direttamente una variabile esplicita valida
+    ckpt_env = os.environ.get("CHECKPOINT_PATH", "")
+    if ckpt_env and os.path.exists(ckpt_env):
+        return ckpt_env
+
+    # 2. Directory di ricerca in ordine di priorità
+    candidate_dirs = [
+        os.environ.get("MODEL_CHECKPOINT_DIR", ""),
+        os.environ.get("MODELS_GLOBAL", ""),
+        os.path.join(src_root, ".models", "vae_model")
+    ]
+
+    for d in candidate_dirs:
+        if not d or not os.path.exists(d):
+            continue
+        # Se era specificato un path in CHECKPOINT_PATH ma il path assoluto differiva
+        if ckpt_env:
+            filename = os.path.basename(ckpt_env)
+            candidate_file = os.path.join(d, filename)
+            if os.path.exists(candidate_file):
+                return candidate_file
+        
+        # Altrimenti prende l'ultimo per versione
+        pts = sorted([f for f in os.listdir(d) if f.startswith("dual_vae_epoch_") and f.endswith(".pt")])
+        if pts:
+            return os.path.join(d, pts[-1])
+
+    return None
+
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     classes_list, _, _, _, sampling_rate, _, _, _, _, _, _ = get_config_from_yaml("config0.yaml")
@@ -70,27 +96,25 @@ def main():
     weights_path = os.environ.get("LOCAL_CLAP_WEIGHTS_PATH", ".clap_weights/CLAP_weights_2023.pth")
     spectral_pipeline = OnlineSpectrogramPipeline(weights_path=weights_path, sample_rate=sampling_rate, device=device).to(device)
     
-    mel_vae = MelVAE(base_channels=64, bottleneck_type=BOTTLENECK_TYPE, latent_dim=LATENT_DIM).to(device)
-    octave_vae = OctaveVAE(base_channels=64, bottleneck_type=BOTTLENECK_TYPE, latent_dim=LATENT_DIM).to(device)
-    
-    target_model_dir = os.environ.get("MODELS_GLOBAL", os.path.join(src_root, ".models", "vae_model"))
-    checkpoint_env = os.environ.get("CHECKPOINT_PATH", "")
-    
-    if checkpoint_env and os.path.exists(checkpoint_env):
-        checkpoint_path = checkpoint_env
-    else:
-        pts = sorted([f for f in os.listdir(target_model_dir) if f.endswith(".pt")]) if os.path.exists(target_model_dir) else []
-        if not pts:
-            print(f"❌ Nessun checkpoint trovato in {target_model_dir}. Uscita.")
-            return
-        checkpoint_path = os.path.join(target_model_dir, pts[-1])
+    checkpoint_path = resolve_checkpoint_path()
+    if checkpoint_path is None or not os.path.exists(checkpoint_path):
+        print(f"❌ Nessun checkpoint Dual-VAE trovato. Verificare percorsi.")
+        sys.exit(1)
         
+    print(f"✅ Checkpoint caricato: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location=device)
+    
+    # Allineamento dinamico al bottleneck_type salvato nel checkpoint
+    active_bottleneck = checkpoint.get("bottleneck_type", BOTTLENECK_TYPE)
+    active_latent_dim = checkpoint.get("latent_dim", LATENT_DIM)
+    
+    mel_vae = MelVAE(base_channels=64, bottleneck_type=active_bottleneck, latent_dim=active_latent_dim).to(device)
+    octave_vae = OctaveVAE(base_channels=64, bottleneck_type=active_bottleneck, latent_dim=active_latent_dim).to(device)
+    
     mel_vae.load_state_dict(checkpoint['mel_vae_state_dict'])
     octave_vae.load_state_dict(checkpoint['octave_vae_state_dict'])
     mel_vae.eval()
     octave_vae.eval()
-    print(f"✅ Checkpoint caricato per plot: {checkpoint_path}")
     
     raw_dataset_root = os.path.join(os.environ.get("BASEDIR", "/tmp"), "dataSEC", "RAW_DATASET", "raw_wav")
     test_dataset = DistributedAudioRAWDataset(base_dir=raw_dataset_root, split="test", target_samples_per_class=samples_per_class)
@@ -132,11 +156,9 @@ def main():
                 
                 base_name = f"{c_name}_sample_{s_idx+1}"
                 
-                # 1. Salvataggio JPG compresso (<120 KB)
                 img_path = os.path.join(output_dir, f"{base_name}.jpg")
                 plot_triplet(pristine_np, cond_np, recon_np, c_name, s_idx+1, target_fraction, img_path)
                 
-                # 2. Salvataggio NPZ
                 npz_path = os.path.join(arrays_dir, f"{base_name}.npz")
                 np.savez_compressed(
                     npz_path,
@@ -145,7 +167,6 @@ def main():
                     recon=recon_np
                 )
                 
-                # 3. Metriche diagnostiche
                 abs_diff = np.abs(pristine_np - recon_np)
                 stat_entry = {
                     "sample": s_idx + 1,
