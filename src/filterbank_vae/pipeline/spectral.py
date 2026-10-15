@@ -32,39 +32,55 @@ msclap.CLAPWrapper.hf_hub_download = universal_path_redirect
 
 from src.models import spectrogram_n_octaveband_generator_gpu, hyperresolve_octave_pchip_gpu, CLAP_initializer
 
+
 class AcousticStructuralLoss(nn.Module):
     """
-    Loss Acustica Strutturale per VAE:
-    Penalizza sia l'errore puntuale (L1) sia l'appiattimento dei transienti
-    temporali (gradiente temporale) e delle formanti frequenziali (gradiente spettrale).
+    Loss Acustica Strutturale Multi-Scale:
+    Penalizza l'errore puntuale L1 e i gradienti temporali/frequenziali
+    a piena risoluzione e su scale ridotte (2x, 4x) per impedire lo smoothing dei picchi.
     """
     def __init__(self, alpha=1.0, beta=0.5):
         super().__init__()
-        self.alpha = alpha  # Peso transienti temporali (derivata su T)
-        self.beta = beta    # Peso contrasto armonico (derivata su F)
+        self.alpha = alpha
+        self.beta = beta
 
     def forward(self, x_pred, x_target):
-        # 1. Errore L1 assoluto
+        # 1. Errore L1 a piena scala
         l_recon = F.l1_loss(x_pred, x_target)
 
-        # 2. Gradiente temporale finito (asse 3, T=1152) -> Forza la nitidezza degli impulsi
+        # 2. Gradienti temporali e frequenziali a risoluzione piena
         diff_t_pred = x_pred[..., 1:] - x_pred[..., :-1]
         diff_t_target = x_target[..., 1:] - x_target[..., :-1]
         l_transient = F.l1_loss(diff_t_pred, diff_t_target)
 
-        # 3. Gradiente frequenziale finito (asse 2, F=64) -> Preserva le armoniche
         diff_f_pred = x_pred[..., 1:, :] - x_pred[..., :-1, :]
         diff_f_target = x_target[..., 1:, :] - x_target[..., :-1, :]
         l_texture = F.l1_loss(diff_f_pred, diff_f_target)
 
-        return l_recon + self.alpha * l_transient + self.beta * l_texture
+        # 3. Componente Multi-Scale (pooling 2x e 4x): forza la coerenza d'inviluppo e previene il taglio dei picchi
+        x_pred_s2 = F.avg_pool2d(x_pred, kernel_size=(2, 2))
+        x_target_s2 = F.avg_pool2d(x_target, kernel_size=(2, 2))
+        l_ms_s2 = F.l1_loss(x_pred_s2, x_target_s2)
+
+        x_pred_s4 = F.avg_pool2d(x_pred, kernel_size=(4, 4))
+        x_target_s4 = F.avg_pool2d(x_target, kernel_size=(4, 4))
+        l_ms_s4 = F.l1_loss(x_pred_s4, x_target_s4)
+
+        return l_recon + self.alpha * l_transient + self.beta * l_texture + 0.5 * (l_ms_s2 + l_ms_s4)
+
+
+def feature_matching_loss(feats_real, feats_fake):
+    """
+    Feature Matching Loss sulle attivazioni del Discriminatore:
+    sostituisce al 100% LPIPS/VGG in PyTorch nativo senza pesi esterni.
+    """
+    loss = 0.0
+    for f_r, f_f in zip(feats_real, feats_fake):
+        loss += F.l1_loss(f_f, f_r.detach())
+    return loss / len(feats_real)
+
 
 class OnlineSpectrogramPipeline(nn.Module):
-    """
-    Pipeline unificata per il Dual-VAE:
-    - x_0_pristine: Mel Spectrogram nativo normalizzato post-bn0 [B, 1, 64, 1152]
-    - x_octave_pchip: Filterbank iper-risolta PCHIP [B, 1, 320, 1152]
-    """
     def __init__(self, weights_path, sample_rate=52100, device='cuda'):
         super().__init__()
         self.sample_rate = sample_rate
@@ -82,7 +98,6 @@ class OnlineSpectrogramPipeline(nn.Module):
         audio_signal = raw_audio_batch.to(torch.float32).to(device)
         audio_signal = torch.nan_to_num(audio_signal, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # 1. Simulazione codec lossy (se format_id == 1)
         if format_id == 1:
             fft_data = torch.fft.rfft(audio_signal, dim=-1)
             nyquist = self.sample_rate / 2.0
@@ -94,7 +109,6 @@ class OnlineSpectrogramPipeline(nn.Module):
         audio_signal = torch.nan_to_num(audio_signal, nan=0.0, posinf=0.0, neginf=0.0)
         audio_signal = torch.clamp(audio_signal, min=-10.0, max=10.0)
 
-        # 2. Estrazione Mel nativo post-bn0 [B, 1, 64, 1140]
         with torch.no_grad():
             x_stft = self.htsat.spectrogram_extractor(audio_signal)
             x_native_logmel = self.htsat.logmel_extractor(x_stft)
@@ -102,7 +116,6 @@ class OnlineSpectrogramPipeline(nn.Module):
 
         x_target_native = x_native_norm.permute(0, 1, 3, 2).contiguous()
 
-        # Allineamento temporale a 1152 frame (pad costante sui 12 frame finali)
         target_time = 1152
         if x_target_native.shape[-1] < target_time:
             pad_amount = target_time - x_target_native.shape[-1]
@@ -110,7 +123,6 @@ class OnlineSpectrogramPipeline(nn.Module):
         else:
             x_0_pristine = x_target_native[:, :, :, :target_time]
 
-        # 3. Generazione spettrogramma d'ottava su GPU
         with torch.cuda.amp.autocast(enabled=False):
             audio_signal_fp32 = audio_signal.float()
             octave_spec = spectrogram_n_octaveband_generator_gpu(
@@ -122,10 +134,8 @@ class OnlineSpectrogramPipeline(nn.Module):
                 device=device
             )
 
-        # octave_spec: [B, T_blocks, F_octave]
         octave_spec = octave_spec.permute(0, 2, 1)
 
-        # 4. Iperrisoluzione analitica PCHIP verso 320 bande [B, 1, 320, 1152]
         x_octave_pchip = hyperresolve_octave_pchip_gpu(
             octave_spec,
             n_octave=fraction_id,

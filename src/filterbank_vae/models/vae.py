@@ -50,8 +50,7 @@ class ResBlock(nn.Module):
 
 class VectorQuantizerEMA(nn.Module):
     """
-    Vector Quantizer discreto con aggiornamento EMA (Exponential Moving Average) del codebook.
-    Elimina il campionamento gaussiano sfocato e memorizza pattern impulsivi precisi.
+    Vector Quantizer discreto con aggiornamento EMA del codebook e diagnostica integrata.
     """
     def __init__(self, num_embeddings=1024, embedding_dim=256, commitment_cost=0.25, decay=0.99, epsilon=1e-5):
         super().__init__()
@@ -61,35 +60,27 @@ class VectorQuantizerEMA(nn.Module):
         self.decay = decay
         self.epsilon = epsilon
 
-        # Codebook bufferizzato (non aggiornato da autograd ma da EMA)
         embedding = torch.randn(embedding_dim, num_embeddings)
         self.register_buffer("embedding", embedding)
         self.register_buffer("ema_cluster_size", torch.zeros(num_embeddings))
         self.register_buffer("ema_w", embedding.clone())
 
     def forward(self, inputs):
-        # inputs: [B, C, H, W]
-        # Permuta in [B, H, W, C] -> [B*H*W, C]
         inputs_permuted = inputs.permute(0, 2, 3, 1).contiguous()
         flat_input = inputs_permuted.view(-1, self.embedding_dim)
 
-        # Distanze euclidee rispetto ai prototipi del codebook
-        # ||a - b||^2 = ||a||^2 + ||b||^2 - 2 a.b
         distances = (
             torch.sum(flat_input ** 2, dim=1, keepdim=True)
             + torch.sum(self.embedding ** 2, dim=0, keepdim=True)
             - 2 * torch.matmul(flat_input, self.embedding)
         )
 
-        # Selezione dell'indice al prototipo discreto più vicino
         encoding_indices = torch.argmin(distances, dim=1).unsqueeze(1)
         encodings = torch.zeros(encoding_indices.shape[0], self.num_embeddings, device=inputs.device)
         encodings.scatter_(1, encoding_indices, 1)
 
-        # Quantizzazione discreta
         quantized = torch.matmul(encodings, self.embedding.t()).view(inputs_permuted.shape)
 
-        # Aggiornamento EMA durante il training
         if self.training:
             cluster_size = torch.sum(encodings, dim=0)
             self.ema_cluster_size.data.mul_(self.decay).add_(cluster_size, alpha=1 - self.decay)
@@ -104,19 +95,15 @@ class VectorQuantizerEMA(nn.Module):
             normalized_w = self.ema_w / smoothed_cluster_size.unsqueeze(0)
             self.embedding.data.copy_(normalized_w)
 
-        # Loss di impegno (Commitment Loss) per forzare l'encoder ad avvicinarsi ai prototipi
         e_latent_loss = F.mse_loss(inputs_permuted, quantized.detach())
         loss = self.commitment_cost * e_latent_loss
 
-        # Straight-through estimator per consentire la retropropagazione attraverso la quantizzazione
         quantized = inputs_permuted + (quantized - inputs_permuted).detach()
         quantized = quantized.permute(0, 3, 1, 2).contiguous()
 
         return quantized, loss, encoding_indices.view(inputs.shape[0], inputs.shape[2], inputs.shape[3])
 
     def quantize_code(self, encoding_indices):
-        # Lookup deterministico da indici discreti a tensore latente quantizzato
-        # encoding_indices: [B, H, W]
         B, H, W = encoding_indices.shape
         flat_indices = encoding_indices.view(-1, 1)
         encodings = torch.zeros(flat_indices.shape[0], self.num_embeddings, device=encoding_indices.device)
@@ -130,10 +117,6 @@ class VectorQuantizerEMA(nn.Module):
 # ==============================================================================
 
 class MelEncoder(nn.Module):
-    """
-    Encoder per Mel Spectrograms:
-    64x1152 -> 32x576 -> 16x288 -> 8x144 -> 4x72
-    """
     def __init__(self, in_channels=1, base_channels=64, latent_dim=256):
         super().__init__()
         self.init_conv = nn.Conv2d(in_channels, base_channels, kernel_size=3, padding=1)
@@ -164,10 +147,6 @@ class MelEncoder(nn.Module):
 
 
 class MelDecoder(nn.Module):
-    """
-    Decoder per Mel Spectrograms:
-    4x72 -> 8x144 -> 16x288 -> 32x576 -> 64x1152
-    """
     def __init__(self, out_channels=1, base_channels=64, latent_dim=256):
         super().__init__()
         self.proj_in = nn.Conv2d(latent_dim, base_channels * 4, kernel_size=1)
@@ -216,10 +195,6 @@ class MelVQVAE(nn.Module):
 # ==============================================================================
 
 class OctaveEncoder(nn.Module):
-    """
-    Encoder per Spettrogrammi d'ottava (Input: [B, 1, 320, 1152]):
-    Porta le feature continue a [B, 256, 4, 72] per interfacciarsi con il codebook.
-    """
     def __init__(self, in_channels=1, base_channels=64, latent_dim=256):
         super().__init__()
         self.init_conv = nn.Conv2d(in_channels, base_channels, kernel_size=3, padding=1)
@@ -258,10 +233,6 @@ class OctaveEncoder(nn.Module):
 
 
 class OctaveDecoder(nn.Module):
-    """
-    Decoder per Spettrogrammi d'ottava (Ricostruisce [B, 1, 320, 1152]):
-    Parte dai token discreti [B, 256, 4, 72] ed esegue l'upsample verso 320x1152.
-    """
     def __init__(self, out_channels=1, base_channels=64, latent_dim=256, target_freq=320, target_time=1152):
         super().__init__()
         self.target_freq = target_freq
@@ -303,10 +274,6 @@ class OctaveDecoder(nn.Module):
 
 
 class OctaveVQVAE(nn.Module):
-    """
-    Ramo Octave: utilizza lo stesso quantizzatore o un quantizzatore speculare
-    allineato allo stesso dizionario del Mel.
-    """
     def __init__(self, base_channels=64, latent_dim=256, num_embeddings=1024, shared_quantizer=None):
         super().__init__()
         self.encoder = OctaveEncoder(in_channels=1, base_channels=base_channels, latent_dim=latent_dim)
@@ -323,6 +290,44 @@ class OctaveVQVAE(nn.Module):
         return recon, vq_loss, z_e, z_q, indices
 
 
-# Alias retrocompatibili per non rompere import o script di validazione
+# ==============================================================================
+# 3. DISCRIMINATORE PATCHGAN CON FEATURE EXTRACTION (PyTorch Puro)
+# ==============================================================================
+
+class DiscriminatorWithFeatures(nn.Module):
+    """
+    Discriminatore convoluzionale a Patch con estrazione di feature intermedie
+    per il Feature Matching e la penalizzazione delle medie sbiadite.
+    """
+    def __init__(self, in_channels=1, ndf=64):
+        super().__init__()
+        self.block1 = nn.Sequential(
+            nn.Conv2d(in_channels, ndf, kernel_size=4, stride=2, padding=1),
+            nn.LeakyReLU(0.2, inplace=True)
+        )
+        self.block2 = nn.Sequential(
+            nn.Conv2d(ndf, ndf * 2, kernel_size=4, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(ndf * 2),
+            nn.LeakyReLU(0.2, inplace=True)
+        )
+        self.block3 = nn.Sequential(
+            nn.Conv2d(ndf * 2, ndf * 4, kernel_size=4, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(ndf * 4),
+            nn.LeakyReLU(0.2, inplace=True)
+        )
+        self.out_conv = nn.Conv2d(ndf * 4, 1, kernel_size=4, stride=1, padding=1)
+
+    def forward(self, x):
+        features = []
+        h = self.block1(x)
+        features.append(h)
+        h = self.block2(h)
+        features.append(h)
+        h = self.block3(h)
+        features.append(h)
+        out = self.out_conv(h)
+        return out, features
+
+
 MelVAE = MelVQVAE
 OctaveVAE = OctaveVQVAE
