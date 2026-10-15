@@ -88,18 +88,22 @@ class VectorQuantizerEMA(nn.Module):
         quantized = torch.matmul(encodings, self.embedding.t()).view(inputs_permuted.shape)
 
         if self.training:
-            cluster_size = torch.sum(encodings, dim=0)
+            target_dtype = self.ema_w.dtype
+            flat_input_fp32 = flat_input.to(dtype=target_dtype)
+            encodings_fp32 = encodings.to(dtype=target_dtype)
+
+            cluster_size = torch.sum(encodings_fp32, dim=0)
             self.ema_cluster_size.data.mul_(self.decay).add_(cluster_size, alpha=1 - self.decay)
 
-            dw = torch.matmul(flat_input.t(), encodings)
+            dw = torch.matmul(flat_input_fp32.t(), encodings_fp32)
             self.ema_w.data.mul_(self.decay).add_(dw, alpha=1 - self.decay)
 
-            # Riassegnazione dei codici morti (restart con campioni attuali)
+            # Riassegnazione dei codici morti (restart garantito in Float32)
             dead_codes = self.ema_cluster_size < self.threshold_dead
             if dead_codes.any():
                 n_dead = dead_codes.sum().item()
-                rand_indices = torch.randint(0, flat_input.size(0), (n_dead,), device=inputs.device)
-                sampled_latents = flat_input[rand_indices].t()
+                rand_indices = torch.randint(0, flat_input_fp32.size(0), (n_dead,), device=inputs.device)
+                sampled_latents = flat_input_fp32[rand_indices].t()
                 self.ema_w.data[:, dead_codes] = sampled_latents
                 self.ema_cluster_size.data[dead_codes] = self.threshold_dead
 
