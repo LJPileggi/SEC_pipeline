@@ -217,6 +217,10 @@ def main():
                 loss_fm_total = torch.tensor(0.0, device=device)
 
                 if use_discriminator:
+                    # Non vogliamo gradienti verso i parametri di D durante il passo di G
+                    for p in discriminator.parameters():
+                        p.requires_grad = False
+
                     pred_fake_mel, feats_fake_mel = discriminator(recon_mel)
                     pred_fake_cross, feats_fake_cross = discriminator(cross_mel_recon)
                     
@@ -227,7 +231,6 @@ def main():
                     loss_fm_cross = feature_matching_loss(feats_real_mel, feats_fake_cross)
                     loss_fm_total = 0.5 * (loss_fm_mel + loss_fm_cross)
 
-                    # Hinge Loss Generatore: massimizza il realismo
                     loss_adv_mel = -torch.mean(pred_fake_mel)
                     loss_adv_cross = -torch.mean(pred_fake_cross)
                     loss_adv_total = 0.5 * (loss_adv_mel + loss_adv_cross)
@@ -245,6 +248,10 @@ def main():
             # ------------------------------------------------------------------
             loss_d_total = torch.tensor(0.0, device=device)
             if use_discriminator:
+                # Riattiviamo i gradienti di D
+                for p in discriminator.parameters():
+                    p.requires_grad = True
+
                 optimizer_d.zero_grad(set_to_none=True)
 
                 with torch.cuda.amp.autocast(dtype=torch.bfloat16):
@@ -252,7 +259,6 @@ def main():
                     pred_fake_mel, _ = discriminator(recon_mel.detach())
                     pred_fake_cross, _ = discriminator(cross_mel_recon.detach())
 
-                    # Hinge Loss per stabilità empirica
                     loss_d_real = torch.mean(F.relu(1.0 - pred_real))
                     loss_d_fake = 0.5 * (torch.mean(F.relu(1.0 + pred_fake_mel)) + torch.mean(F.relu(1.0 + pred_fake_cross)))
                     loss_d_total = 0.5 * (loss_d_real + loss_d_fake)

@@ -291,29 +291,30 @@ class OctaveVQVAE(nn.Module):
 
 
 # ==============================================================================
-# 3. DISCRIMINATORE PATCHGAN CON FEATURE EXTRACTION (PyTorch Puro)
+# 3. DISCRIMINATORE PATCHGAN CON FEATURE EXTRACTION (PyTorch Puro, Anti-Inplace)
 # ==============================================================================
 
 class DiscriminatorWithFeatures(nn.Module):
     """
-    Discriminatore convoluzionale a Patch con estrazione di feature intermedie
-    per il Feature Matching e la penalizzazione delle medie sbiadite.
+    Discriminatore convoluzionale a Patch privo di BatchNorm e di operazioni in-place.
+    Usa GroupNorm per evitare il tracciamento di running_mean che mandava in crash autograd.
     """
     def __init__(self, in_channels=1, ndf=64):
         super().__init__()
+        # inplace=False tassativo per non sporcare i tensori salvati per il backward
         self.block1 = nn.Sequential(
             nn.Conv2d(in_channels, ndf, kernel_size=4, stride=2, padding=1),
-            nn.LeakyReLU(0.2, inplace=True)
+            nn.LeakyReLU(0.2, inplace=False)
         )
         self.block2 = nn.Sequential(
             nn.Conv2d(ndf, ndf * 2, kernel_size=4, stride=2, padding=1, bias=False),
-            nn.BatchNorm2d(ndf * 2),
-            nn.LeakyReLU(0.2, inplace=True)
+            nn.GroupNorm(num_groups=min(32, (ndf * 2) // 4), num_channels=ndf * 2),
+            nn.LeakyReLU(0.2, inplace=False)
         )
         self.block3 = nn.Sequential(
             nn.Conv2d(ndf * 2, ndf * 4, kernel_size=4, stride=2, padding=1, bias=False),
-            nn.BatchNorm2d(ndf * 4),
-            nn.LeakyReLU(0.2, inplace=True)
+            nn.GroupNorm(num_groups=min(32, (ndf * 4) // 4), num_channels=ndf * 4),
+            nn.LeakyReLU(0.2, inplace=False)
         )
         self.out_conv = nn.Conv2d(ndf * 4, 1, kernel_size=4, stride=1, padding=1)
 
