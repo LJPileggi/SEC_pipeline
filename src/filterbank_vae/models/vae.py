@@ -49,30 +49,36 @@ class ResBlock(nn.Module):
 
 
 class VectorQuantizerEMA(nn.Module):
-    """
-    Vector Quantizer discreto con aggiornamento EMA del codebook e diagnostica integrata.
-    """
-    def __init__(self, num_embeddings=1024, embedding_dim=256, commitment_cost=0.25, decay=0.99, epsilon=1e-5):
+    def __init__(self, num_embeddings=1024, embedding_dim=256, commitment_cost=0.25, decay=0.99, epsilon=1e-5, threshold_dead=1.0):
         super().__init__()
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
         self.commitment_cost = commitment_cost
         self.decay = decay
         self.epsilon = epsilon
+        self.threshold_dead = threshold_dead
 
+        # Inizializzazione normalizzata
         embedding = torch.randn(embedding_dim, num_embeddings)
+        embedding = F.normalize(embedding, p=2, dim=0)
         self.register_buffer("embedding", embedding)
-        self.register_buffer("ema_cluster_size", torch.zeros(num_embeddings))
+        self.register_buffer("ema_cluster_size", torch.ones(num_embeddings))
         self.register_buffer("ema_w", embedding.clone())
 
     def forward(self, inputs):
+        # inputs: [B, C, H, W] -> [B, H, W, C]
         inputs_permuted = inputs.permute(0, 2, 3, 1).contiguous()
         flat_input = inputs_permuted.view(-1, self.embedding_dim)
 
+        # 1. Normalizzazione L2 dei vettori per evitare divergenze di scala
+        flat_input_norm = F.normalize(flat_input, p=2, dim=-1)
+        embedding_norm = F.normalize(self.embedding, p=2, dim=0)
+
+        # Distanza euclidea su ipersfera
         distances = (
-            torch.sum(flat_input ** 2, dim=1, keepdim=True)
-            + torch.sum(self.embedding ** 2, dim=0, keepdim=True)
-            - 2 * torch.matmul(flat_input, self.embedding)
+            torch.sum(flat_input_norm ** 2, dim=1, keepdim=True)
+            + torch.sum(embedding_norm ** 2, dim=0, keepdim=True)
+            - 2 * torch.matmul(flat_input_norm, embedding_norm)
         )
 
         encoding_indices = torch.argmin(distances, dim=1).unsqueeze(1)
@@ -87,6 +93,15 @@ class VectorQuantizerEMA(nn.Module):
 
             dw = torch.matmul(flat_input.t(), encodings)
             self.ema_w.data.mul_(self.decay).add_(dw, alpha=1 - self.decay)
+
+            # Riassegnazione dei codici morti (restart con campioni attuali)
+            dead_codes = self.ema_cluster_size < self.threshold_dead
+            if dead_codes.any():
+                n_dead = dead_codes.sum().item()
+                rand_indices = torch.randint(0, flat_input.size(0), (n_dead,), device=inputs.device)
+                sampled_latents = flat_input[rand_indices].t()
+                self.ema_w.data[:, dead_codes] = sampled_latents
+                self.ema_cluster_size.data[dead_codes] = self.threshold_dead
 
             n = torch.sum(self.ema_cluster_size)
             smoothed_cluster_size = (
