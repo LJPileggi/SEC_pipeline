@@ -83,8 +83,9 @@ class OnlineSpectrogramPipeline(nn.Module):
             param.requires_grad = False
 
     def forward(self, raw_audio_batch, format_id, fraction_id, device='cuda'):
-        with torch.inference_mode():
-            audio_signal = raw_audio_batch.to(torch.float32).to(device)
+        # 🎯 Disattiviamo autocast per il generatore di filterbank (torchaudio.lfilter esige Float32)
+        with torch.inference_mode(), torch.cuda.amp.autocast(enabled=False):
+            audio_signal = raw_audio_batch.to(device=device, dtype=torch.float32)
             audio_signal = torch.nan_to_num(audio_signal, nan=0.0, posinf=0.0, neginf=0.0)
 
             if format_id == 1:
@@ -99,7 +100,7 @@ class OnlineSpectrogramPipeline(nn.Module):
             audio_signal = torch.nan_to_num(audio_signal, nan=0.0, posinf=0.0, neginf=0.0)
             audio_signal = torch.clamp(audio_signal, min=-10.0, max=10.0)
 
-            # Mel Pristine
+            # Mel Pristine via HTSAT extractor
             x_stft = self.htsat.spectrogram_extractor(audio_signal)
             x_native_logmel = self.htsat.logmel_extractor(x_stft)
             x_native_norm = self.htsat.bn0(x_native_logmel.transpose(1, 3)).transpose(1, 3)
@@ -116,7 +117,7 @@ class OnlineSpectrogramPipeline(nn.Module):
                 x_0_pristine = x_target_native[:, :, :, :target_time]
             del x_target_native
 
-            # Octave Filterbank GPU
+            # Octave Filterbank GPU (Rigorosamente Float32 per torchaudio.lfilter)
             audio_signal_fp32 = audio_signal.float()
             octave_spec = spectrogram_n_octaveband_generator_gpu(
                 wav_batch=audio_signal_fp32,

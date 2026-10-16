@@ -193,12 +193,13 @@ def main():
             raw_audio = raw_audio.to(device, non_blocking=True)
             fraction_id = np.random.choice([1, 3, 6, 12, 16, 24, 32])
 
+            # 🎯 Generazione spettrogrammi FUORI da autocast (garantisce Float32 nativo su torchaudio)
+            x_mel_target, x_octave_pchip = spectral_pipeline(raw_audio, format_id=1, fraction_id=fraction_id, device=device)
+
             # ------------------------------------------------------------------
-            # 1. PASSO GENERATORE
+            # 1. PASSO GENERATORE (Sotto autocast bfloat16 per i modelli neurali)
             # ------------------------------------------------------------------
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                x_mel_target, x_octave_pchip = spectral_pipeline(raw_audio, format_id=1, fraction_id=fraction_id, device=device)
-
                 recon_mel, vq_loss_mel, z_e_mel, z_q_mel, indices_mel = mel_vae(x_mel_target)
                 recon_oct, vq_loss_oct, z_e_oct, z_q_oct, indices_oct = octave_vae(x_octave_pchip)
 
