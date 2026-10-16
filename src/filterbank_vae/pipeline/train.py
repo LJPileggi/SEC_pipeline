@@ -25,7 +25,7 @@ DEFAULT_EPOCHS = 100
 LOCAL_BATCH_SIZE = 16
 LATENT_DIM = 256
 NUM_EMBEDDINGS = 1024
-DISC_START_EPOCH = int(os.environ.get("DISC_START_EPOCH", 5))  # Warmup: VQ-VAE impara la base prima che parta la GAN
+DISC_START_EPOCH = int(os.environ.get("DISC_START_EPOCH", 5))  # Warmup: VQ-VAE apprende la base prima che si attivi la GAN
 DISC_WEIGHT = float(os.environ.get("DISC_WEIGHT", 0.1))
 
 def parse_args():
@@ -70,7 +70,7 @@ class InfoNCELoss(nn.Module):
 
 def compute_codebook_diagnostics(indices, num_embeddings):
     """
-    Calcola l'utilizzo univoco e la Perplexity del codebook nel batch.
+    Calcola l'utilizzo univoco e la Perplexity del codebook all'interno del batch.
     """
     flat = indices.flatten()
     unique_count = torch.unique(flat).numel()
@@ -150,7 +150,15 @@ def main():
 
     mel_vae = nn.parallel.DistributedDataParallel(mel_vae, device_ids=[rank], output_device=rank, find_unused_parameters=False)
     octave_vae = nn.parallel.DistributedDataParallel(octave_vae, device_ids=[rank], output_device=rank, find_unused_parameters=False)
-    discriminator = nn.parallel.DistributedDataParallel(discriminator, device_ids=[rank], output_device=rank, find_unused_parameters=False)
+    
+    # DDP per il Discriminatore con tolleranza per parametri inutilizzati e disattivazione broadcast buffer
+    discriminator = nn.parallel.DistributedDataParallel(
+        discriminator, 
+        device_ids=[rank], 
+        output_device=rank, 
+        find_unused_parameters=True,
+        broadcast_buffers=False
+    )
 
     acoustic_loss_fn = AcousticStructuralLoss(alpha=1.0, beta=0.5).to(device)
     contrastive_fn = InfoNCELoss(temperature=0.07).to(device)
@@ -217,10 +225,7 @@ def main():
                 loss_fm_total = torch.tensor(0.0, device=device)
 
                 if use_discriminator:
-                    # Non vogliamo gradienti verso i parametri di D durante il passo di G
-                    for p in discriminator.parameters():
-                        p.requires_grad = False
-
+                    # Passaggio attraverso il discriminatore per il generatore
                     pred_fake_mel, feats_fake_mel = discriminator(recon_mel)
                     pred_fake_cross, feats_fake_cross = discriminator(cross_mel_recon)
                     
@@ -231,6 +236,7 @@ def main():
                     loss_fm_cross = feature_matching_loss(feats_real_mel, feats_fake_cross)
                     loss_fm_total = 0.5 * (loss_fm_mel + loss_fm_cross)
 
+                    # Hinge Loss Generatore per penalizzare l'appiattimento
                     loss_adv_mel = -torch.mean(pred_fake_mel)
                     loss_adv_cross = -torch.mean(pred_fake_cross)
                     loss_adv_total = 0.5 * (loss_adv_mel + loss_adv_cross)
@@ -248,10 +254,6 @@ def main():
             # ------------------------------------------------------------------
             loss_d_total = torch.tensor(0.0, device=device)
             if use_discriminator:
-                # Riattiviamo i gradienti di D
-                for p in discriminator.parameters():
-                    p.requires_grad = True
-
                 optimizer_d.zero_grad(set_to_none=True)
 
                 with torch.cuda.amp.autocast(dtype=torch.bfloat16):
@@ -268,7 +270,7 @@ def main():
                 optimizer_d.step()
 
             # ------------------------------------------------------------------
-            # 3. STATISTICHE & LOGGING
+            # 3. LOGGING E MONITORAGGIO
             # ------------------------------------------------------------------
             current_loss_g = loss_g_total.item()
             if math.isnan(current_loss_g) or math.isinf(current_loss_g):
