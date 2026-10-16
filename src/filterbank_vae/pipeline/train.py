@@ -1,5 +1,9 @@
 import os
 import sys
+
+# Previene la frammentazione CUDA all'avvio
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 import time
 import math
 import argparse
@@ -21,11 +25,12 @@ from filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
 from filterbank_vae.pipeline.spectral import OnlineSpectrogramPipeline, AcousticStructuralLoss, feature_matching_loss
 from filterbank_vae.models.vae import MelVQVAE, OctaveVQVAE, DiscriminatorWithFeatures, DEFAULT_BOTTLENECK_TYPE
 
-DEFAULT_EPOCHS = 100
-LOCAL_BATCH_SIZE = 16
+DEFAULT_EPOCHS = 50
+LOCAL_BATCH_SIZE = 8          # 🎯 FIX OOM: Batch dimezzato per non sforare nei picchi fraction_id=32
+ACCUMULATION_STEPS = 2        # 🎯 Gradient Accumulation per mantenere batch effettivo a 16
 LATENT_DIM = 256
 NUM_EMBEDDINGS = 1024
-DISC_START_EPOCH = int(os.environ.get("DISC_START_EPOCH", 5))  # Warmup: VQ-VAE apprende la base prima che si attivi la GAN
+DISC_START_EPOCH = int(os.environ.get("DISC_START_EPOCH", 5))
 DISC_WEIGHT = float(os.environ.get("DISC_WEIGHT", 0.1))
 
 def parse_args():
@@ -69,9 +74,6 @@ class InfoNCELoss(nn.Module):
         return 0.5 * (loss_a + loss_b)
 
 def compute_codebook_diagnostics(indices, num_embeddings):
-    """
-    Calcola l'utilizzo univoco e la Perplexity del codebook all'interno del batch.
-    """
     flat = indices.flatten()
     unique_count = torch.unique(flat).numel()
     pct_usage = (unique_count / num_embeddings) * 100.0
@@ -107,13 +109,10 @@ def main():
     dataset = DistributedAudioRAWDataset(base_dir=raw_dataset_root, target_samples_per_class=500)
 
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=seed)
-    dataloader = DataLoader(dataset, batch_size=LOCAL_BATCH_SIZE, sampler=sampler, num_workers=8, pin_memory=True, drop_last=True)
+    dataloader = DataLoader(dataset, batch_size=LOCAL_BATCH_SIZE, sampler=sampler, num_workers=4, pin_memory=True, drop_last=True)
 
-    # 1. Modelli Generatori
     mel_vae = MelVQVAE(base_channels=64, latent_dim=latent_dim, num_embeddings=num_embeddings).to(device)
     octave_vae = OctaveVQVAE(base_channels=64, latent_dim=latent_dim, num_embeddings=num_embeddings, shared_quantizer=mel_vae.quantizer).to(device)
-
-    # 2. Discriminatore PatchGAN
     discriminator = DiscriminatorWithFeatures(in_channels=1, ndf=64).to(device)
 
     gen_params = list(mel_vae.parameters()) + list(octave_vae.parameters())
@@ -127,6 +126,7 @@ def main():
     target_model_dir = base_model_dir if base_model_dir.startswith("/") else os.path.join(src_root, base_model_dir)
     os.makedirs(target_model_dir, exist_ok=True)
 
+    # Logica di resumption per ripartire dall'epoca 4
     if start_epoch > 0:
         prev_epoch = start_epoch - 1
         ckpt_candidate = os.path.join(target_model_dir, f"dual_vae_epoch_{prev_epoch}.pt")
@@ -150,8 +150,6 @@ def main():
 
     mel_vae = nn.parallel.DistributedDataParallel(mel_vae, device_ids=[rank], output_device=rank, find_unused_parameters=False)
     octave_vae = nn.parallel.DistributedDataParallel(octave_vae, device_ids=[rank], output_device=rank, find_unused_parameters=False)
-    
-    # DDP per il Discriminatore con tolleranza per parametri inutilizzati e disattivazione broadcast buffer
     discriminator = nn.parallel.DistributedDataParallel(
         discriminator, 
         device_ids=[rank], 
@@ -169,11 +167,14 @@ def main():
     if rank == 0:
         print("==========================================================", flush=True)
         print(f"🏁 Dual VQ-GAN Training Initialized (DDP, GPUs: {world_size})", flush=True)
-        print(f"   • Codebook: {num_embeddings} tokens | Latent Dim: {latent_dim}", flush=True)
+        print(f"   • Batch: {LOCAL_BATCH_SIZE} (x{ACCUMULATION_STEPS} accum = {LOCAL_BATCH_SIZE * ACCUMULATION_STEPS} effettivo)", flush=True)
+        print(f"   • Memory Protection: expandable_segments=True", flush=True)
         print(f"   • Adversarial Warm-up: Inizio Discriminatore da Epoca {DISC_START_EPOCH}", flush=True)
-        print(f"   • Discriminator Weight: {DISC_WEIGHT} | Feature Matching Attivo", flush=True)
         print(f"   • Range epoche: [{start_epoch} -> {end_epoch - 1}] ({num_epochs} epoche)", flush=True)
         print("==========================================================\n", flush=True)
+
+    optimizer_g.zero_grad(set_to_none=True)
+    optimizer_d.zero_grad(set_to_none=True)
 
     for epoch in range(start_epoch, end_epoch):
         mel_vae.train()
@@ -193,10 +194,8 @@ def main():
             fraction_id = np.random.choice([1, 3, 6, 12, 16, 24, 32])
 
             # ------------------------------------------------------------------
-            # 1. PASSO GENERATORE (Dual VQ-VAE)
+            # 1. PASSO GENERATORE
             # ------------------------------------------------------------------
-            optimizer_g.zero_grad(set_to_none=True)
-
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
                 x_mel_target, x_octave_pchip = spectral_pipeline(raw_audio, format_id=1, fraction_id=fraction_id, device=device)
 
@@ -225,7 +224,6 @@ def main():
                 loss_fm_total = torch.tensor(0.0, device=device)
 
                 if use_discriminator:
-                    # Passaggio attraverso il discriminatore per il generatore
                     pred_fake_mel, feats_fake_mel = discriminator(recon_mel)
                     pred_fake_cross, feats_fake_cross = discriminator(cross_mel_recon)
                     
@@ -236,7 +234,6 @@ def main():
                     loss_fm_cross = feature_matching_loss(feats_real_mel, feats_fake_cross)
                     loss_fm_total = 0.5 * (loss_fm_mel + loss_fm_cross)
 
-                    # Hinge Loss Generatore per penalizzare l'appiattimento
                     loss_adv_mel = -torch.mean(pred_fake_mel)
                     loss_adv_cross = -torch.mean(pred_fake_cross)
                     loss_adv_total = 0.5 * (loss_adv_mel + loss_adv_cross)
@@ -245,17 +242,15 @@ def main():
                 else:
                     loss_g_total = loss_g_base
 
-            loss_g_total.backward()
-            torch.nn.utils.clip_grad_norm_(gen_params, max_norm=1.0)
-            optimizer_g.step()
+                loss_g_scaled = loss_g_total / ACCUMULATION_STEPS
+
+            loss_g_scaled.backward()
 
             # ------------------------------------------------------------------
-            # 2. PASSO DISCRIMINATORE PATCHGAN
+            # 2. PASSO DISCRIMINATORE
             # ------------------------------------------------------------------
             loss_d_total = torch.tensor(0.0, device=device)
             if use_discriminator:
-                optimizer_d.zero_grad(set_to_none=True)
-
                 with torch.cuda.amp.autocast(dtype=torch.bfloat16):
                     pred_real, _ = discriminator(x_mel_target)
                     pred_fake_mel, _ = discriminator(recon_mel.detach())
@@ -264,14 +259,21 @@ def main():
                     loss_d_real = torch.mean(F.relu(1.0 - pred_real))
                     loss_d_fake = 0.5 * (torch.mean(F.relu(1.0 + pred_fake_mel)) + torch.mean(F.relu(1.0 + pred_fake_cross)))
                     loss_d_total = 0.5 * (loss_d_real + loss_d_fake)
+                    loss_d_scaled = loss_d_total / ACCUMULATION_STEPS
 
-                loss_d_total.backward()
-                torch.nn.utils.clip_grad_norm_(discriminator.parameters(), max_norm=1.0)
-                optimizer_d.step()
+                loss_d_scaled.backward()
 
-            # ------------------------------------------------------------------
-            # 3. LOGGING E MONITORAGGIO
-            # ------------------------------------------------------------------
+            # Step ottimizzatori ogni ACCUMULATION_STEPS iterazioni
+            if (step + 1) % ACCUMULATION_STEPS == 0 or (step + 1) == total_steps:
+                torch.nn.utils.clip_grad_norm_(gen_params, max_norm=1.0)
+                optimizer_g.step()
+                optimizer_g.zero_grad(set_to_none=True)
+
+                if use_discriminator:
+                    torch.nn.utils.clip_grad_norm_(discriminator.parameters(), max_norm=1.0)
+                    optimizer_d.step()
+                    optimizer_d.zero_grad(set_to_none=True)
+
             current_loss_g = loss_g_total.item()
             if math.isnan(current_loss_g) or math.isinf(current_loss_g):
                 if rank == 0:
