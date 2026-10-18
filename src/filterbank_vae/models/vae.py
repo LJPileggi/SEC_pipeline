@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-DEFAULT_BOTTLENECK_TYPE = "2d"
+DEFAULT_BOTTLENECK_TYPE = "rvq_2d"
 
 
 class AttentionBlock(nn.Module):
@@ -26,6 +26,34 @@ class AttentionBlock(nn.Module):
         return x + attn_out
 
 
+class CrossAttentionBlock(nn.Module):
+    """
+    Cross-Attention tra spazio ottava (Query) e spazio Mel (Key, Value).
+    Permette a OctaveEncoder di allineare geometricamente le feature a bassa risoluzione
+    con il riferimento Mel prima dell'ingresso nel quantizzatore.
+    """
+    def __init__(self, channels=256, num_heads=4):
+        super().__init__()
+        self.channels = channels
+        self.norm_q = nn.GroupNorm(num_groups=min(32, channels // 4), num_channels=channels)
+        self.norm_kv = nn.GroupNorm(num_groups=min(32, channels // 4), num_channels=channels)
+        self.mha = nn.MultiheadAttention(embed_dim=channels, num_heads=num_heads, batch_first=True)
+        self.proj_out = nn.Sequential(
+            nn.GroupNorm(num_groups=min(32, channels // 4), num_channels=channels),
+            nn.SiLU(),
+            nn.Conv2d(channels, channels, kernel_size=1)
+        )
+
+    def forward(self, q_feat, kv_feat):
+        B, C, H, W = q_feat.shape
+        q = self.norm_q(q_feat).permute(0, 2, 3, 1).reshape(B, H * W, C)
+        kv = self.norm_kv(kv_feat).permute(0, 2, 3, 1).reshape(B, H * W, C)
+
+        attn_out, _ = self.mha(query=q, key=kv, value=kv)
+        attn_out = attn_out.reshape(B, H, W, C).permute(0, 3, 1, 2)
+        return q_feat + self.proj_out(attn_out)
+
+
 class ResBlock(nn.Module):
     """
     Blocco residuo convoluzionale con GroupNorm e SiLU.
@@ -36,7 +64,7 @@ class ResBlock(nn.Module):
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
         self.norm2 = nn.GroupNorm(num_groups=min(32, out_channels // 4), num_channels=out_channels)
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
-        
+
         if in_channels != out_channels:
             self.shortcut = nn.Conv2d(in_channels, out_channels, kernel_size=1)
         else:
@@ -58,7 +86,6 @@ class VectorQuantizerEMA(nn.Module):
         self.epsilon = epsilon
         self.threshold_dead = threshold_dead
 
-        # Inizializzazione normalizzata
         embedding = torch.randn(embedding_dim, num_embeddings)
         embedding = F.normalize(embedding, p=2, dim=0)
         self.register_buffer("embedding", embedding)
@@ -66,15 +93,12 @@ class VectorQuantizerEMA(nn.Module):
         self.register_buffer("ema_w", embedding.clone())
 
     def forward(self, inputs):
-        # inputs: [B, C, H, W] -> [B, H, W, C]
         inputs_permuted = inputs.permute(0, 2, 3, 1).contiguous()
         flat_input = inputs_permuted.view(-1, self.embedding_dim)
 
-        # 1. Normalizzazione L2 dei vettori per evitare divergenze di scala
         flat_input_norm = F.normalize(flat_input, p=2, dim=-1)
         embedding_norm = F.normalize(self.embedding, p=2, dim=0)
 
-        # Distanza euclidea su ipersfera
         distances = (
             torch.sum(flat_input_norm ** 2, dim=1, keepdim=True)
             + torch.sum(embedding_norm ** 2, dim=0, keepdim=True)
@@ -98,7 +122,6 @@ class VectorQuantizerEMA(nn.Module):
             dw = torch.matmul(flat_input_fp32.t(), encodings_fp32)
             self.ema_w.data.mul_(self.decay).add_(dw, alpha=1 - self.decay)
 
-            # Riassegnazione dei codici morti (restart garantito in Float32)
             dead_codes = self.ema_cluster_size < self.threshold_dead
             if dead_codes.any():
                 n_dead = dead_codes.sum().item()
@@ -129,6 +152,53 @@ class VectorQuantizerEMA(nn.Module):
         encodings.scatter_(1, flat_indices, 1)
         quantized = torch.matmul(encodings, self.embedding.t()).view(B, H, W, self.embedding_dim)
         return quantized.permute(0, 3, 1, 2).contiguous()
+
+
+class ResidualVectorQuantizerEMA(nn.Module):
+    """
+    Residual Vector Quantizer a stadi multipli (RVQ).
+    Decompone la quantizzazione continua in cascata, migliorando drasticamente la fedeltà
+    e consentendo una corretta convergenza sia per la tessitura stazionaria che per i transienti.
+    """
+    def __init__(self, num_quantizers=4, num_embeddings=1024, embedding_dim=256, commitment_cost=0.25, decay=0.99):
+        super().__init__()
+        self.num_quantizers = num_quantizers
+        self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
+        self.layers = nn.ModuleList([
+            VectorQuantizerEMA(
+                num_embeddings=num_embeddings,
+                embedding_dim=embedding_dim,
+                commitment_cost=commitment_cost,
+                decay=decay
+            )
+            for _ in range(num_quantizers)
+        ])
+
+    def forward(self, inputs):
+        residual = inputs
+        quantized_out = torch.zeros_like(inputs)
+        total_loss = torch.tensor(0.0, device=inputs.device, dtype=inputs.dtype)
+        all_indices = []
+
+        for layer in self.layers:
+            q_stage, loss_stage, indices_stage = layer(residual)
+            residual = residual - q_stage
+            quantized_out = quantized_out + q_stage
+            total_loss = total_loss + loss_stage
+            all_indices.append(indices_stage)
+
+        # Output shape indici: [B, num_quantizers, H, W]
+        indices = torch.stack(all_indices, dim=1)
+        return quantized_out, total_loss, indices
+
+    def quantize_code(self, encoding_indices):
+        # encoding_indices: [B, num_quantizers, H, W]
+        quantized_out = 0.0
+        for i, layer in enumerate(self.layers):
+            stage_indices = encoding_indices[:, i, :, :]
+            quantized_out = quantized_out + layer.quantize_code(stage_indices)
+        return quantized_out
 
 
 # ==============================================================================
@@ -196,10 +266,14 @@ class MelDecoder(nn.Module):
 
 
 class MelVQVAE(nn.Module):
-    def __init__(self, base_channels=64, latent_dim=256, num_embeddings=1024):
+    def __init__(self, base_channels=64, latent_dim=256, num_embeddings=1024, num_quantizers=4):
         super().__init__()
         self.encoder = MelEncoder(in_channels=1, base_channels=base_channels, latent_dim=latent_dim)
-        self.quantizer = VectorQuantizerEMA(num_embeddings=num_embeddings, embedding_dim=latent_dim)
+        self.quantizer = ResidualVectorQuantizerEMA(
+            num_quantizers=num_quantizers,
+            num_embeddings=num_embeddings,
+            embedding_dim=latent_dim
+        )
         self.decoder = MelDecoder(out_channels=1, base_channels=base_channels, latent_dim=latent_dim)
 
     def forward(self, x):
@@ -293,34 +367,41 @@ class OctaveDecoder(nn.Module):
 
 
 class OctaveVQVAE(nn.Module):
-    def __init__(self, base_channels=64, latent_dim=256, num_embeddings=1024, shared_quantizer=None):
+    def __init__(self, base_channels=64, latent_dim=256, num_embeddings=1024, num_quantizers=4, shared_quantizer=None):
         super().__init__()
         self.encoder = OctaveEncoder(in_channels=1, base_channels=base_channels, latent_dim=latent_dim)
+        self.cross_attn = CrossAttentionBlock(channels=latent_dim, num_heads=4)
         if shared_quantizer is not None:
             self.quantizer = shared_quantizer
         else:
-            self.quantizer = VectorQuantizerEMA(num_embeddings=num_embeddings, embedding_dim=latent_dim)
+            self.quantizer = ResidualVectorQuantizerEMA(
+                num_quantizers=num_quantizers,
+                num_embeddings=num_embeddings,
+                embedding_dim=latent_dim
+            )
         self.decoder = OctaveDecoder(out_channels=1, base_channels=base_channels, latent_dim=latent_dim)
 
-    def forward(self, x):
+    def forward(self, x, z_mel_ref=None):
+        """
+        Se fornito `z_mel_ref` (feature continue dell'encoder Mel), applica la
+        Cross-Attention per allineare geometricamente la rappresentazione dell'ottava
+        prima della quantizzazione.
+        """
         z_e = self.encoder(x)
+        if z_mel_ref is not None:
+            z_e = self.cross_attn(z_e, z_mel_ref)
         z_q, vq_loss, indices = self.quantizer(z_e)
         recon = self.decoder(z_q)
         return recon, vq_loss, z_e, z_q, indices
 
 
 # ==============================================================================
-# 3. DISCRIMINATORE PATCHGAN CON FEATURE EXTRACTION (PyTorch Puro, Anti-Inplace)
+# 3. DISCRIMINATORE PATCHGAN CON FEATURE EXTRACTION
 # ==============================================================================
 
 class DiscriminatorWithFeatures(nn.Module):
-    """
-    Discriminatore convoluzionale a Patch privo di BatchNorm e di operazioni in-place.
-    Usa GroupNorm per evitare il tracciamento di running_mean che mandava in crash autograd.
-    """
     def __init__(self, in_channels=1, ndf=64):
         super().__init__()
-        # inplace=False tassativo per non sporcare i tensori salvati per il backward
         self.block1 = nn.Sequential(
             nn.Conv2d(in_channels, ndf, kernel_size=4, stride=2, padding=1),
             nn.LeakyReLU(0.2, inplace=False)
