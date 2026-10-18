@@ -21,11 +21,12 @@ BOTTLENECK_TYPE = os.environ.get("BOTTLENECK_TYPE", DEFAULT_BOTTLENECK_TYPE)
 LATENT_DIM = int(os.environ.get("LATENT_DIM", 256))
 NUM_EMBEDDINGS = int(os.environ.get("NUM_EMBEDDINGS", 1024))
 
-def plot_triplet(pristine, cond, recon, class_name, sample_idx, fraction, save_path):
+def plot_quartet(pristine, cond, recon_cross, recon_intra, class_name, sample_idx, fraction, save_path):
     fig, axes = plt.subplots(4, 1, figsize=(10, 8), sharex=True)
     
-    vmin = float(min(pristine.min(), recon.min()))
-    vmax = float(max(pristine.max(), recon.max()))
+    # Range dinamico condiviso per tutti i Mel spettrogrammi
+    vmin = float(min(pristine.min(), recon_cross.min(), recon_intra.min()))
+    vmax = float(max(pristine.max(), recon_cross.max(), recon_intra.max()))
     
     # 1. Pristine Mel [64, 1152]
     im0 = axes[0].imshow(pristine, origin='lower', aspect='auto', cmap='magma', vmin=vmin, vmax=vmax)
@@ -39,16 +40,15 @@ def plot_triplet(pristine, cond, recon, class_name, sample_idx, fraction, save_p
     axes[1].set_ylabel("Octave Bins (320)", fontsize=8)
     fig.colorbar(im1, ax=axes[1], fraction=0.015, pad=0.01)
     
-    # 3. Dual VQ-VAE Reconstruction [64, 1152]
-    im2 = axes[2].imshow(recon, origin='lower', aspect='auto', cmap='magma', vmin=vmin, vmax=vmax)
-    axes[2].set_title("Dual VQ-VAE Restored Mel (Discrete Codebook Quantization)", fontsize=10)
+    # 3. Cross-Domain Restored Mel (Octave -> Mel) [64, 1152]
+    im2 = axes[2].imshow(recon_cross, origin='lower', aspect='auto', cmap='magma', vmin=vmin, vmax=vmax)
+    axes[2].set_title("Cross-Domain Restored Mel (OctaveEncoder -> Codebook -> MelDecoder)", fontsize=10)
     axes[2].set_ylabel("Mel Bins (64)", fontsize=8)
     fig.colorbar(im2, ax=axes[2], fraction=0.015, pad=0.01)
 
-    # 4. Errore Assoluto Residuo [64, 1152]
-    diff = np.abs(pristine - recon)
-    im3 = axes[3].imshow(diff, origin='lower', aspect='auto', cmap='viridis')
-    axes[3].set_title(f"Absolute Residual Error $|X_0 - \\hat{{X}}_0|$ (MAE: {diff.mean():.4f})", fontsize=10)
+    # 4. Pure Mel Autoencoding (Intra-Domain: Mel -> Mel) [64, 1152]
+    im3 = axes[3].imshow(recon_intra, origin='lower', aspect='auto', cmap='magma', vmin=vmin, vmax=vmax)
+    axes[3].set_title("Pure Mel Autoencoding (MelEncoder -> Codebook -> MelDecoder)", fontsize=10)
     axes[3].set_xlabel("Time Frames (1152)", fontsize=9)
     axes[3].set_ylabel("Mel Bins (64)", fontsize=8)
     fig.colorbar(im3, ax=axes[3], fraction=0.015, pad=0.01)
@@ -98,7 +98,6 @@ def main():
         print("❌ Nessun checkpoint Dual VQ-VAE trovato. Verificare percorsi.")
         sys.exit(1)
         
-    print(f"✅ Checkpoint caricato: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location=device)
     
     active_latent_dim = checkpoint.get("latent_dim", LATENT_DIM)
@@ -107,10 +106,14 @@ def main():
     mel_vae = MelVQVAE(base_channels=64, latent_dim=active_latent_dim, num_embeddings=active_num_embeddings).to(device)
     octave_vae = OctaveVQVAE(base_channels=64, latent_dim=active_latent_dim, num_embeddings=active_num_embeddings, shared_quantizer=mel_vae.quantizer).to(device)
     
-    mel_vae.load_state_dict(checkpoint['mel_vae_state_dict'])
-    octave_vae.load_state_dict(checkpoint['octave_vae_state_dict'])
+    mel_state = {k.replace('module.', ''): v for k, v in checkpoint['mel_vae_state_dict'].items()}
+    octave_state = {k.replace('module.', ''): v for k, v in checkpoint['octave_vae_state_dict'].items()}
+    
+    mel_vae.load_state_dict(mel_state)
+    octave_vae.load_state_dict(octave_state)
     mel_vae.eval()
     octave_vae.eval()
+    print(f"✅ Checkpoint caricato: {checkpoint_path} (Latent Dim: {active_latent_dim}, Codebook: {active_num_embeddings})")
     
     raw_dataset_root = os.path.join(os.environ.get("BASEDIR", "/tmp"), "dataSEC", "RAW_DATASET", "raw_wav")
     test_dataset = DistributedAudioRAWDataset(base_dir=raw_dataset_root, split="test", target_samples_per_class=samples_per_class)
@@ -139,40 +142,45 @@ def main():
                 
                 x_0_pristine, x_oct_pchip = spectral_pipeline(audio_batch, format_id=1, fraction_id=target_fraction, device=device)
                 
-                # Cross-Domain VQ-VAE Translation:
-                # OctaveEncoder -> Proiezione discreta codebook -> MelDecoder
+                # 1. Ricostruzione pura Mel (Intra-Domain)
+                recon_intra, _, _, _, indices_mel = mel_vae(x_0_pristine)
+                
+                # 2. Traduzione Cross-Domain (Octave -> Mel)
                 z_e_oct = octave_vae.encoder(x_oct_pchip)
-                z_q_oct, _, _ = octave_vae.quantizer(z_e_oct)
-                x_reconstructed = mel_vae.decoder(z_q_oct)
+                z_q_oct, _, indices_oct = octave_vae.quantizer(z_e_oct)
+                recon_cross = mel_vae.decoder(z_q_oct)
                 
                 pristine_np = np.nan_to_num(x_0_pristine.squeeze().cpu().numpy(), nan=0.0).astype(np.float32)
                 cond_np = np.nan_to_num(x_oct_pchip.squeeze().cpu().numpy(), nan=0.0).astype(np.float32)
-                recon_np = np.nan_to_num(x_reconstructed.squeeze().cpu().numpy(), nan=0.0).astype(np.float32)
+                recon_cross_np = np.nan_to_num(recon_cross.squeeze().cpu().numpy(), nan=0.0).astype(np.float32)
+                recon_intra_np = np.nan_to_num(recon_intra.squeeze().cpu().numpy(), nan=0.0).astype(np.float32)
                 
                 base_name = f"{c_name}_sample_{s_idx+1}"
                 
                 img_path = os.path.join(output_dir, f"{base_name}.jpg")
-                plot_triplet(pristine_np, cond_np, recon_np, c_name, s_idx+1, target_fraction, img_path)
+                plot_quartet(pristine_np, cond_np, recon_cross_np, recon_intra_np, c_name, s_idx+1, target_fraction, img_path)
                 
                 npz_path = os.path.join(arrays_dir, f"{base_name}.npz")
                 np.savez_compressed(
                     npz_path,
                     pristine=pristine_np,
                     cond=cond_np,
-                    recon=recon_np
+                    recon=recon_cross_np,
+                    recon_intra=recon_intra_np
                 )
                 
-                abs_diff = np.abs(pristine_np - recon_np)
+                mae_cross = float(np.abs(pristine_np - recon_cross_np).mean())
+                mae_intra = float(np.abs(pristine_np - recon_intra_np).mean())
+                token_match = float((indices_mel == indices_oct).float().mean().item() * 100.0)
+                
                 stat_entry = {
                     "sample": s_idx + 1,
-                    "mae": float(abs_diff.mean()),
-                    "max_error": float(abs_diff.max()),
-                    "pristine_mean": float(pristine_np.mean()),
-                    "pristine_std": float(pristine_np.std()),
-                    "pristine_min_max": [float(pristine_np.min()), float(pristine_np.max())],
-                    "recon_mean": float(recon_np.mean()),
-                    "recon_std": float(recon_np.std()),
-                    "recon_min_max": [float(recon_np.min()), float(recon_np.max())]
+                    "mae_cross": mae_cross,
+                    "mae_intra": mae_intra,
+                    "token_accuracy_pct": token_match,
+                    "pristine_peak": float(pristine_np.max()),
+                    "recon_cross_peak": float(recon_cross_np.max()),
+                    "recon_intra_peak": float(recon_intra_np.max())
                 }
                 summary_metrics[c_name].append(stat_entry)
 
@@ -181,8 +189,8 @@ def main():
         json.dump(summary_metrics, f, indent=2)
 
     test_dataset.close()
-    print(f"\n🎉 Tutti i plot salvati in: {output_dir}")
-    print(f"📊 Riepilogo statistico salvato in: {summary_path}")
+    print(f"\n🎉 Tutti i plot aggiornati salvati in: {output_dir}")
+    print(f"📊 Riepilogo diagnostico salvato in: {summary_path}")
 
 if __name__ == "__main__":
     main()
