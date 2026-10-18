@@ -31,7 +31,6 @@ def calculate_metrics(p_tensor, q_tensor):
     diff = p_clean - q_clean
     frob = torch.norm(diff, p='fro').item()
 
-    # Rapporto di picco (verifica l'appiattimento dei massimi locali)
     max_p = torch.max(p_clean).item()
     max_q = torch.max(q_clean).item()
     peak_ratio = (max_q / (max_p + 1e-8)) if max_p > 0 else 1.0
@@ -65,7 +64,6 @@ def main():
     weights_path = os.environ.get("LOCAL_CLAP_WEIGHTS_PATH", ".clap_weights/CLAP_weights_2023.pth")
     spectral_pipeline = OnlineSpectrogramPipeline(weights_path=weights_path, sample_rate=sampling_rate, device=device).to(device)
 
-    # Inizializzazione modelli VQ-VAE con Shared Quantizer
     mel_vae = MelVQVAE(base_channels=64, latent_dim=LATENT_DIM, num_embeddings=NUM_EMBEDDINGS).to(device)
     octave_vae = OctaveVQVAE(base_channels=64, latent_dim=LATENT_DIM, num_embeddings=NUM_EMBEDDINGS, shared_quantizer=mel_vae.quantizer).to(device)
 
@@ -85,7 +83,6 @@ def main():
 
     checkpoint = torch.load(checkpoint_path, map_location=device)
     
-    # Rimozione eventuale prefisso DDP 'module.'
     mel_state = {k.replace('module.', ''): v for k, v in checkpoint['mel_vae_state_dict'].items()}
     octave_state = {k.replace('module.', ''): v for k, v in checkpoint['octave_vae_state_dict'].items()}
     
@@ -111,33 +108,30 @@ def main():
             for step, (raw_audio, class_labels) in enumerate(test_dataloader):
                 raw_audio = raw_audio.to(device, non_blocking=True)
 
-                # Generazione online spettrogrammi
                 x_0_pristine, x_oct_pchip = spectral_pipeline(raw_audio, format_id=1, fraction_id=fraction, device=device)
 
-                # -------------------------------------------------------------
-                # 1. TEST INTRA-DOMINIO: Ricostruzione diretta del Mel
-                # -------------------------------------------------------------
-                recon_mel_intra, _, _, _, indices_mel = mel_vae(x_0_pristine)
+                # 1. Intra Mel
+                recon_mel_intra, _, z_e_mel, z_q_mel, indices_mel = mel_vae(x_0_pristine)
 
-                # -------------------------------------------------------------
-                # 2. TEST CROSS-DOMINIO: Traduzione dall'Ottava al Mel
-                # -------------------------------------------------------------
-                recon_oct, _, z_e_oct, z_q_oct, indices_oct = octave_vae(x_oct_pchip)
+                # 2. Intra Octave
+                recon_oct_intra, _, z_e_oct, z_q_oct, indices_oct = octave_vae(x_oct_pchip)
+
+                # 3. Cross Mel (Octave -> Mel)
                 recon_mel_cross = mel_vae.decoder(z_q_oct)
 
-                # -------------------------------------------------------------
-                # 3. METRICHE COMPARATIVE
-                # -------------------------------------------------------------
+                # 4. Statistiche Latenti (B, C, H, W)
+                cos_sim_map = F.cosine_similarity(z_e_mel, z_e_oct, dim=1)  # [B, 4, 72]
+                l2_dist_map = torch.norm(z_q_mel - z_q_oct, p=2, dim=1)    # [B, 4, 72]
+
                 bs = x_0_pristine.shape[0]
                 for b in range(bs):
-                    # Metriche su ricostruzione pura Mel
-                    mae_intra, frob_intra, peak_intra, kl_intra = calculate_metrics(x_0_pristine[b], recon_mel_intra[b])
-                    
-                    # Metriche su traduzione da Octave
+                    mae_intra_mel, frob_intra_mel, peak_intra_mel, kl_intra_mel = calculate_metrics(x_0_pristine[b], recon_mel_intra[b])
+                    mae_intra_oct, frob_intra_oct, peak_intra_oct, kl_intra_oct = calculate_metrics(x_oct_pchip[b], recon_oct_intra[b])
                     mae_cross, frob_cross, peak_cross, kl_cross = calculate_metrics(x_0_pristine[b], recon_mel_cross[b])
                     
-                    # Concordanza discreta dei token (quanto l'Octave Encoder azzecca i token del Mel)
                     tok_match = (indices_mel[b] == indices_oct[b]).float().mean().item() * 100.0
+                    cos_sim_val = cos_sim_map[b].mean().item()
+                    l2_dist_val = l2_dist_map[b].mean().item()
 
                     c_idx = class_labels[b].item()
                     c_name = classes_list[c_idx] if c_idx < len(classes_list) else "Unknown"
@@ -146,43 +140,42 @@ def main():
                         'class': c_name,
                         'octave_fraction': fraction,
                         'token_accuracy_pct': tok_match,
-                        'mae_intra_mel': mae_intra,
+                        'cosine_sim_ze': cos_sim_val,
+                        'l2_dist_zq': l2_dist_val,
+                        'mae_intra_mel': mae_intra_mel,
+                        'mae_intra_octave': mae_intra_oct,
                         'mae_cross_oct': mae_cross,
-                        'frob_intra_mel': frob_intra,
-                        'frob_cross_oct': frob_cross,
-                        'peak_ratio_intra': peak_intra,
+                        'peak_ratio_intra_mel': peak_intra_mel,
+                        'peak_ratio_intra_oct': peak_intra_oct,
                         'peak_ratio_cross': peak_cross,
-                        'kl_intra': kl_intra,
                         'kl_cross': kl_cross
                     })
 
     df = pd.DataFrame(records)
     df.to_csv(os.path.join(output_dir, "detailed_diagnostic_records.csv"), index=False)
 
-    # Aggregazione per frazione d'ottava
     summary_fraction = df.groupby('octave_fraction')[
-        ['token_accuracy_pct', 'mae_intra_mel', 'mae_cross_oct', 'peak_ratio_intra', 'peak_ratio_cross']
+        ['token_accuracy_pct', 'cosine_sim_ze', 'l2_dist_zq', 'mae_intra_mel', 'mae_intra_octave', 'mae_cross_oct', 'peak_ratio_cross']
     ].mean().reset_index()
 
-    # Aggregazione per classe
     summary_class = df.groupby('class')[
-        ['token_accuracy_pct', 'mae_intra_mel', 'mae_cross_oct', 'peak_ratio_intra', 'peak_ratio_cross']
+        ['token_accuracy_pct', 'cosine_sim_ze', 'l2_dist_zq', 'mae_intra_mel', 'mae_intra_octave', 'mae_cross_oct', 'peak_ratio_cross']
     ].mean().reset_index()
 
     summary_fraction.to_csv(os.path.join(output_dir, "summary_per_fraction.csv"), index=False)
     summary_class.to_csv(os.path.join(output_dir, "summary_per_class.csv"), index=False)
 
-    print("\n" + "=" * 80)
+    print("\n" + "=" * 95)
     print("📊 RISULTATI DIAGNOSTICI PER FRAZIONE D'OTTAVA (MEDIE)")
-    print("=" * 80)
+    print("=" * 95)
     print(summary_fraction.to_string(index=False))
 
-    print("\n" + "=" * 80)
+    print("\n" + "=" * 95)
     print("🎯 RISULTATI DIAGNOSTICI PER CLASSE (MEDIE)")
-    print("=" * 80)
+    print("=" * 95)
     print(summary_class.to_string(index=False))
-    print("=" * 80)
-    print(f"📁 Report completi salvati in: {output_dir}\n")
+    print("=" * 95)
+    print(f"📁 Report salvati in: {output_dir}\n")
 
     test_dataset.close()
 
