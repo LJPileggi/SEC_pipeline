@@ -13,7 +13,7 @@
 
 START_EPOCH=${1:-0}
 NUM_EPOCHS=${2:-50}
-BOTTLENECK_TYPE=${3:-"1d"}
+BOTTLENECK_TYPE=${3:-"2d"}
 
 PROJECT_DIR="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline"
 TEMP_DIR="/leonardo_scratch/large/userexternal/$USER/tmp_train_vae_$SLURM_JOB_ID"
