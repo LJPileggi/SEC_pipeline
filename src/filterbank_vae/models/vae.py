@@ -64,12 +64,12 @@ class VectorQuantizerEMA(nn.Module):
         self.register_buffer("ema_cluster_size", torch.ones(num_embeddings))
         self.register_buffer("ema_w", embedding.clone())
 
-    def get_logits(self, inputs, temperature=0.1):
-        """Restituisce le cosine similarities / logits per distillazione supervisionata."""
+    def get_logits(self, inputs, temperature=1.0):
+        """Restituisce i logits / cosine similarities normalizzate gestendo l'autocast."""
         inputs_permuted = inputs.permute(0, 2, 3, 1).contiguous()
         flat_input = inputs_permuted.view(-1, self.embedding_dim)
         flat_input_norm = F.normalize(flat_input, p=2, dim=-1)
-        embedding_norm = F.normalize(self.embedding, p=2, dim=0)
+        embedding_norm = F.normalize(self.embedding.to(dtype=flat_input.dtype), p=2, dim=0)
         logits = torch.matmul(flat_input_norm, embedding_norm) / temperature
         return logits
 
@@ -78,9 +78,8 @@ class VectorQuantizerEMA(nn.Module):
         flat_input = inputs_permuted.view(-1, self.embedding_dim)
 
         flat_input_norm = F.normalize(flat_input, p=2, dim=-1)
-        embedding_norm = F.normalize(self.embedding, p=2, dim=0)
+        embedding_norm = F.normalize(self.embedding.to(dtype=flat_input.dtype), p=2, dim=0)
 
-        # Distanza euclidea su ipersfera unitaria
         distances = (
             torch.sum(flat_input_norm ** 2, dim=1, keepdim=True)
             + torch.sum(embedding_norm ** 2, dim=0, keepdim=True)
@@ -88,10 +87,10 @@ class VectorQuantizerEMA(nn.Module):
         )
 
         encoding_indices = torch.argmin(distances, dim=1).unsqueeze(1)
-        encodings = torch.zeros(encoding_indices.shape[0], self.num_embeddings, device=inputs.device)
+        encodings = torch.zeros(encoding_indices.shape[0], self.num_embeddings, device=inputs.device, dtype=flat_input.dtype)
         encodings.scatter_(1, encoding_indices, 1)
 
-        quantized = torch.matmul(encodings, self.embedding.t()).view(inputs_permuted.shape)
+        quantized = torch.matmul(encodings, self.embedding.to(dtype=flat_input.dtype).t()).view(inputs_permuted.shape)
 
         # L'aggiornamento EMA del vocabolario avviene SOLO se update_ema=True (ramo Mel)
         if self.training and update_ema:
@@ -357,9 +356,7 @@ class OctaveVQVAE(nn.Module):
         self.decoder = OctaveDecoder(out_channels=1, base_channels=base_channels, latent_dim=latent_dim)
 
     def forward(self, x):
-        """Inferenza pura autonoma: non richiede il Mel di riferimento."""
         z_e = self.encoder(x)
-        # 🎯 update_ema=False: non corrompe i cluster del Mel
         z_q, vq_loss, indices = self.quantizer(z_e, update_ema=False)
         recon = self.decoder(z_q)
         return recon, vq_loss, z_e, z_q, indices

@@ -50,17 +50,6 @@ def compute_cosine_alignment_loss(z_e_oct, z_e_mel):
     cos_sim = F.cosine_similarity(z_e_oct, z_e_mel, dim=1)  # [B, H, W]
     return torch.mean(1.0 - cos_sim)
 
-def compute_token_distillation_loss(octave_vae_module, z_e_oct, target_stage0_indices):
-    """
-    Calcola la Cross-Entropy forzando OctaveEncoder a predire esattamente
-    gli indici di codebook scelti da MelEncoder sullo stadio principale (Stage 0).
-    """
-    # Utilizza il primo layer di quantizzazione condiviso
-    stage0_quantizer = octave_vae_module.quantizer.layers[0]
-    logits = stage0_quantizer.get_logits(z_e_oct, temperature=0.1)  # [B*H*W, num_embeddings]
-    targets = target_stage0_indices.reshape(-1)                     # [B*H*W]
-    return F.cross_entropy(logits, targets)
-
 def compute_codebook_diagnostics(indices, num_embeddings):
     first_level = indices[:, 0, :, :].flatten()
     unique_count = torch.unique(first_level).numel()
@@ -149,8 +138,18 @@ def main():
                 print(f"❌ [CRITICAL] Checkpoint non trovato: {ckpt_candidate}", flush=True)
             sys.exit(1)
 
-    mel_vae = nn.parallel.DistributedDataParallel(mel_vae, device_ids=[rank], output_device=rank, find_unused_parameters=False)
-    octave_vae = nn.parallel.DistributedDataParallel(octave_vae, device_ids=[rank], output_device=rank, find_unused_parameters=False)
+    mel_vae = nn.parallel.DistributedDataParallel(
+        mel_vae,
+        device_ids=[rank],
+        output_device=rank,
+        find_unused_parameters=True
+    )
+    octave_vae = nn.parallel.DistributedDataParallel(
+        octave_vae,
+        device_ids=[rank],
+        output_device=rank,
+        find_unused_parameters=True
+    )
     discriminator = nn.parallel.DistributedDataParallel(
         discriminator,
         device_ids=[rank],
@@ -168,7 +167,8 @@ def main():
         print("==========================================================", flush=True)
         print(f"🏁 Dual RVQ-GAN Training Initialized (DDP, GPUs: {world_size})", flush=True)
         print(f"   • RVQ Stages: {num_quantizers} | Embeddings per stage: {num_embeddings}", flush=True)
-        print(f"   • Alignment: Point-wise Cosine Distance + Token Cross-Entropy", flush=True)
+        print(f"   • Alignment: Continuous Point-wise Cosine Distance (Weight: 3.0)", flush=True)
+        print(f"   • MelDecoder Protection: Frozen during cross-reconstruction", flush=True)
         print(f"   • Adversarial Warm-up: Da Epoca {DISC_START_EPOCH}", flush=True)
         print("==========================================================\n", flush=True)
 
@@ -204,7 +204,7 @@ def main():
             # 1. PASSO GENERATORE
             # ------------------------------------------------------------------
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                # 1a. Mel Branch (aggiorna il codebook EMA)
+                # 1a. Mel Branch (aggiorna autonomamente il codebook EMA)
                 recon_mel, vq_loss_mel, z_e_mel, z_q_mel, indices_mel = mel_vae(x_mel_target)
 
                 # 1b. Octave Branch (inferenza pura e quantizzazione read-only su EMA)
@@ -217,19 +217,20 @@ def main():
                 # 1c. Allineamento continuo tra gli spazi latenti (spinge z_e_oct su z_e_mel)
                 loss_align_cos = compute_cosine_alignment_loss(z_e_oct, z_e_mel.detach())
 
-                # 1d. Distillazione supervisionata sui token discreti di Stage 0
-                target_stage0 = indices_mel[:, 0, :, :].detach()
-                loss_token_ce = compute_token_distillation_loss(octave_vae.module, z_e_oct, target_stage0)
-
-                # 1e. Cross-Domain Reconstruction
+                # 1d. Cross-Domain Reconstruction con protezione per MelDecoder
+                for param in mel_vae.module.decoder.parameters():
+                    param.requires_grad = False
                 cross_mel_recon = mel_vae.module.decoder(z_q_oct)
+                for param in mel_vae.module.decoder.parameters():
+                    param.requires_grad = True
+
                 loss_cross = acoustic_loss_fn(cross_mel_recon, x_mel_target)
 
+                # Loss combinata: allineamento continuo + ricostruzioni senza gradienti duri
                 loss_g_base = (loss_rec_mel + loss_rec_oct) + \
                               loss_vq + \
-                              2.0 * loss_align_cos + \
-                              1.0 * loss_token_ce + \
-                              1.5 * loss_cross
+                              3.0 * loss_align_cos + \
+                              1.0 * loss_cross
 
                 loss_adv_total = torch.tensor(0.0, device=device)
                 loss_fm_total = torch.tensor(0.0, device=device)
@@ -304,7 +305,6 @@ def main():
                     print(f" ⏱️  Epoch [{epoch:03d}/{end_epoch-1:03d}] | Progress: {percent:5.1f}% | "
                           f"G-Loss: {avg_g:.4f} | D-Loss: {loss_d_total.item():.4f} | "
                           f"CosDist: {loss_align_cos.item():.4f} | "
-                          f"CE-Tok: {loss_token_ce.item():.4f} | "
                           f"L1 Token Match: {token_match_l1:4.1f}% | "
                           f"Tokens L1: {unique_c}/{num_embeddings} ({pct_u:.1f}%) | {elapsed:.1f}s", flush=True)
                 running_loss_g = 0.0
