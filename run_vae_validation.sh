@@ -43,7 +43,7 @@ export BASEDIR="$TEMP_DIR"
 export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
 export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/weights/CLAP_weights_2023.pth"
 export LOCAL_CLAP_BN0_CONSTANTS_PATH="/tmp_data/work_dir/weights/clap_bn0_constants.npz"
-export BOTTLENECK_TYPE="1d"
+export BOTTLENECK_TYPE="2d"
 export LATENT_DIM=256
 export NUM_EPOCHS=50
 
