@@ -1,7 +1,6 @@
 import os
 import sys
 
-# Previene la frammentazione CUDA all'avvio
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 import time
@@ -44,50 +43,25 @@ def parse_args():
     parser.add_argument("--num_quantizers", type=int, default=NUM_QUANTIZERS)
     return parser.parse_args()
 
-class InfoNCELoss(nn.Module):
-    def __init__(self, temperature=0.07):
-        super().__init__()
-        self.temperature = temperature
-
-    def forward(self, z_a, z_b, world_size=1):
-        z_a = F.normalize(z_a, p=2, dim=-1)
-        z_b = F.normalize(z_b, p=2, dim=-1)
-
-        if world_size > 1 and dist.is_initialized():
-            gather_a = [torch.zeros_like(z_a) for _ in range(world_size)]
-            gather_b = [torch.zeros_like(z_b) for _ in range(world_size)]
-            dist.all_gather(gather_a, z_a)
-            dist.all_gather(gather_b, z_b)
-            all_a = torch.cat(gather_a, dim=0)
-            all_b = torch.cat(gather_b, dim=0)
-        else:
-            all_a = z_a
-            all_b = z_b
-
-        sim_ab = torch.matmul(z_a, all_b.T) / self.temperature
-        sim_ba = torch.matmul(z_b, all_a.T) / self.temperature
-
-        rank = dist.get_rank() if dist.is_initialized() else 0
-        local_bs = z_a.size(0)
-        labels = torch.arange(local_bs, device=z_a.device) + (rank * local_bs)
-
-        loss_a = F.cross_entropy(sim_ab, labels)
-        loss_b = F.cross_entropy(sim_ba, labels)
-        return 0.5 * (loss_a + loss_b)
-
-def compute_cosine_alignment_loss(z_e_oct, z_q_mel):
+def compute_cosine_alignment_loss(z_e_oct, z_e_mel):
     """
-    Calcola la Cosine Distance punto a punto tra lo spazio latente continuo
-    dell'ottava (post Cross-Attention) e i vettori quantizzati del Mel.
+    Calcola la Cosine Distance punto a punto tra le feature continue dei due encoder.
     """
-    cos_sim = F.cosine_similarity(z_e_oct, z_q_mel, dim=1)  # Shape: [B, H, W]
+    cos_sim = F.cosine_similarity(z_e_oct, z_e_mel, dim=1)  # [B, H, W]
     return torch.mean(1.0 - cos_sim)
 
+def compute_token_distillation_loss(octave_vae_module, z_e_oct, target_stage0_indices):
+    """
+    Calcola la Cross-Entropy forzando OctaveEncoder a predire esattamente
+    gli indici di codebook scelti da MelEncoder sullo stadio principale (Stage 0).
+    """
+    # Utilizza il primo layer di quantizzazione condiviso
+    stage0_quantizer = octave_vae_module.quantizer.layers[0]
+    logits = stage0_quantizer.get_logits(z_e_oct, temperature=0.1)  # [B*H*W, num_embeddings]
+    targets = target_stage0_indices.reshape(-1)                     # [B*H*W]
+    return F.cross_entropy(logits, targets)
+
 def compute_codebook_diagnostics(indices, num_embeddings):
-    """
-    Calcola utilizzo e perplessità del codebook sul primo livello di quantizzazione (RVQ stage 0).
-    indices: [B, num_quantizers, H, W]
-    """
     first_level = indices[:, 0, :, :].flatten()
     unique_count = torch.unique(first_level).numel()
     pct_usage = (unique_count / num_embeddings) * 100.0
@@ -154,7 +128,6 @@ def main():
     target_model_dir = base_model_dir if base_model_dir.startswith("/") else os.path.join(src_root, base_model_dir)
     os.makedirs(target_model_dir, exist_ok=True)
 
-    # Ripristino da checkpoint precedente se start_epoch > 0
     if start_epoch > 0:
         prev_epoch = start_epoch - 1
         ckpt_candidate = os.path.join(target_model_dir, f"dual_vae_epoch_{prev_epoch}.pt")
@@ -187,7 +160,6 @@ def main():
     )
 
     acoustic_loss_fn = AcousticStructuralLoss(alpha=1.0, beta=0.5).to(device)
-    contrastive_fn = InfoNCELoss(temperature=0.07).to(device)
 
     total_steps = len(dataloader)
     print_freq = max(1, total_steps // 10)
@@ -196,11 +168,8 @@ def main():
         print("==========================================================", flush=True)
         print(f"🏁 Dual RVQ-GAN Training Initialized (DDP, GPUs: {world_size})", flush=True)
         print(f"   • RVQ Stages: {num_quantizers} | Embeddings per stage: {num_embeddings}", flush=True)
-        print(f"   • Batch: {LOCAL_BATCH_SIZE} (x{ACCUMULATION_STEPS} accum = {LOCAL_BATCH_SIZE * ACCUMULATION_STEPS} effettivo)", flush=True)
-        print(f"   • Latent Alignment: Cosine Distance su griglia [4, 72]", flush=True)
-        print(f"   • Curriculum Learning: Fase 1 [6,12,16] -> Fase 2 [3..24] -> Fase 3 [1..32]", flush=True)
-        print(f"   • Adversarial Warm-up: Inizio Discriminatore da Epoca {DISC_START_EPOCH}", flush=True)
-        print(f"   • Range epoche: [{start_epoch} -> {end_epoch - 1}] ({num_epochs} epoche)", flush=True)
+        print(f"   • Alignment: Point-wise Cosine Distance + Token Cross-Entropy", flush=True)
+        print(f"   • Adversarial Warm-up: Da Epoca {DISC_START_EPOCH}", flush=True)
         print("==========================================================\n", flush=True)
 
     optimizer_g.zero_grad(set_to_none=True)
@@ -222,53 +191,45 @@ def main():
         for step, (raw_audio, _) in enumerate(dataloader):
             raw_audio = raw_audio.to(device, non_blocking=True)
 
-            # ------------------------------------------------------------------
-            # 🎯 CURRICULUM LEARNING SULLE FRAZIONI D'OTTAVA
-            # ------------------------------------------------------------------
             if epoch < 10:
-                # Fase 1: risoluzioni intermedie e geometricamente stabili
                 fraction_id = np.random.choice([6, 12, 16])
             elif epoch < 25:
-                # Fase 2: espansione graduale
                 fraction_id = np.random.choice([3, 6, 12, 16, 24])
             else:
-                # Fase 3: spettro completo incluse le frazioni estremali (1/1 e 1/32)
                 fraction_id = np.random.choice([1, 3, 6, 12, 16, 24, 32])
 
-            # Generazione spettrogrammi (Float32 nativo su torchaudio)
             x_mel_target, x_octave_pchip = spectral_pipeline(raw_audio, format_id=1, fraction_id=fraction_id, device=device)
 
             # ------------------------------------------------------------------
-            # 1. PASSO GENERATORE (Sotto autocast bfloat16 per i modelli neurali)
+            # 1. PASSO GENERATORE
             # ------------------------------------------------------------------
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                # 1a. Ramo Mel
+                # 1a. Mel Branch (aggiorna il codebook EMA)
                 recon_mel, vq_loss_mel, z_e_mel, z_q_mel, indices_mel = mel_vae(x_mel_target)
 
-                # 1b. Ramo Ottava guidato via Cross-Attention dalle feature Mel continue
-                recon_oct, vq_loss_oct, z_e_oct, z_q_oct, indices_oct = octave_vae(x_octave_pchip, z_mel_ref=z_e_mel.detach())
+                # 1b. Octave Branch (inferenza pura e quantizzazione read-only su EMA)
+                recon_oct, vq_loss_oct, z_e_oct, z_q_oct, indices_oct = octave_vae(x_octave_pchip)
 
                 loss_rec_mel = acoustic_loss_fn(recon_mel, x_mel_target)
                 loss_rec_oct = F.l1_loss(recon_oct, x_octave_pchip)
                 loss_vq = vq_loss_mel + vq_loss_oct
 
-                # Allineamento contrastivo globale
-                z_cont_mel = F.adaptive_avg_pool2d(z_e_mel, (1, 1)).flatten(1)
-                z_cont_oct = F.adaptive_avg_pool2d(z_e_oct, (1, 1)).flatten(1)
-                loss_contrastive = contrastive_fn(z_cont_mel, z_cont_oct, world_size=world_size)
+                # 1c. Allineamento continuo tra gli spazi latenti (spinge z_e_oct su z_e_mel)
+                loss_align_cos = compute_cosine_alignment_loss(z_e_oct, z_e_mel.detach())
 
-                # Allineamento locale punto a punto via Cosine Distance
-                loss_latent_align = compute_cosine_alignment_loss(z_e_oct, z_q_mel.detach())
+                # 1d. Distillazione supervisionata sui token discreti di Stage 0
+                target_stage0 = indices_mel[:, 0, :, :].detach()
+                loss_token_ce = compute_token_distillation_loss(octave_vae.module, z_e_oct, target_stage0)
 
-                # Ricostruzione incrociata Mel usando i codici quantizzati del ramo ottava
+                # 1e. Cross-Domain Reconstruction
                 cross_mel_recon = mel_vae.module.decoder(z_q_oct)
                 loss_cross = acoustic_loss_fn(cross_mel_recon, x_mel_target)
 
                 loss_g_base = (loss_rec_mel + loss_rec_oct) + \
                               loss_vq + \
-                              0.5 * loss_latent_align + \
-                              0.2 * loss_contrastive + \
-                              1.0 * loss_cross
+                              2.0 * loss_align_cos + \
+                              1.0 * loss_token_ce + \
+                              1.5 * loss_cross
 
                 loss_adv_total = torch.tensor(0.0, device=device)
                 loss_fm_total = torch.tensor(0.0, device=device)
@@ -313,7 +274,6 @@ def main():
 
                 loss_d_scaled.backward()
 
-            # Aggiornamento parametri con accumulo gradienti
             if (step + 1) % ACCUMULATION_STEPS == 0 or (step + 1) == total_steps:
                 torch.nn.utils.clip_grad_norm_(gen_params, max_norm=1.0)
                 optimizer_g.step()
@@ -343,9 +303,10 @@ def main():
                     avg_g = running_loss_g / print_freq
                     print(f" ⏱️  Epoch [{epoch:03d}/{end_epoch-1:03d}] | Progress: {percent:5.1f}% | "
                           f"G-Loss: {avg_g:.4f} | D-Loss: {loss_d_total.item():.4f} | "
-                          f"Align Cos: {loss_latent_align.item():.4f} | "
+                          f"CosDist: {loss_align_cos.item():.4f} | "
+                          f"CE-Tok: {loss_token_ce.item():.4f} | "
                           f"L1 Token Match: {token_match_l1:4.1f}% | "
-                          f"Tokens L1: {unique_c}/{num_embeddings} ({pct_u:.1f}%) | Perp: {perp:.1f} | {elapsed:.1f}s", flush=True)
+                          f"Tokens L1: {unique_c}/{num_embeddings} ({pct_u:.1f}%) | {elapsed:.1f}s", flush=True)
                 running_loss_g = 0.0
                 step_start_time = time.time()
 
