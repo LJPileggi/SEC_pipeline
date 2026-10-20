@@ -23,6 +23,7 @@ from .dirs_config import *
 from .filterbank_diffusion.models.unet import SpectrogramUNet
 from .filterbank_diffusion.models.diffusion import ConditionalGaussianDiffusion
 from .filterbank_vae.models.vae import MelVQVAE, OctaveVQVAE, DEFAULT_BOTTLENECK_TYPE
+from .filterbank_refiner.models.unet_refiner import MelRefinerUNet
 
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
@@ -30,17 +31,27 @@ os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
-# Production global variables
 VERBOSE = os.environ.get("VERBOSE", "False").lower() == "true"
 INJECT_OCTAVE = os.environ.get("INJECT_OCTAVE", "False").lower() == "true"
-GENERATIVE_BACKBONE = os.environ.get("GENERATIVE_BACKBONE", "diffusion").lower()
+GENERATIVE_BACKBONE = os.environ.get("GENERATIVE_BACKBONE", "vae_refiner").lower()
+
+def resolve_single_checkpoint(model_dir, target_epoch, prefix):
+    if not os.path.exists(model_dir):
+        return None
+    zero_idx = target_epoch - 1
+    cands = [
+        os.path.join(model_dir, f"{prefix}_{zero_idx}.pt"),
+        os.path.join(model_dir, f"{prefix}_{target_epoch}.pt")
+    ]
+    for c in cands:
+        if os.path.exists(c):
+            return c
+    pts = sorted([f for f in os.listdir(model_dir) if f.startswith(f"{prefix}_") and f.endswith(".pt")])
+    if pts:
+        return os.path.join(model_dir, pts[-1])
+    return None
 
 def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class_to_process, cut_secs, n_octave, config, audio_dataset_manager=None):
-    """
-    Processes a specific audio class by extracting fixed-length audio segments, generating 
-    CLAP embeddings and octave spectrograms in a batched, GPU-accelerated pipeline.
-    Supports both the Residual Diffusion Model and the Dual VQ-VAE Cross-Domain translation.
-    """
     root_source, root_target = config['dirs']['root_source'], config['dirs']['root_target']
     target_class_dir = os.path.join(root_target, f'{cut_secs}_secs', class_to_process)
     os.makedirs(target_class_dir, exist_ok=True)
@@ -61,13 +72,6 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     
     if VERBOSE and rank == 0:
         print(f"[RANK {rank}] Dynamic Batch set to {BATCH_SIZE} (n_octave={n_octave}, cut={cut_secs}s, backbone={GENERATIVE_BACKBONE})", flush=True)
-    
-    def write_perf_log():
-        if stats["count"] > 0:
-            c = stats["count"]
-            perf_log_path = os.path.join(root_target, f"perf_stats_rank_{rank}.txt")
-            with open(perf_log_path, "a") as f:
-                f.write(f"[{time.strftime('%H:%M:%S')}] {class_to_process} {cut_secs}s | Total: {c} | Avg: {sum(v for k,v in stats.items() if k!='count')/c:.6f}s/audio\n")
 
     class_seed = int(seed + hash(class_to_process) % 10000000)
     offset_rng = np.random.default_rng(class_seed)
@@ -87,62 +91,65 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
     
     adaptive_buffer_size = max(BATCH_SIZE, int(256 / cut_secs))
     torch.set_num_threads(1)
-
     batch_audio = []; batch_meta = []
 
-    # Checkpoint configuration
-    TARGET_EPOCH = int(os.environ.get("TARGET_EPOCH", 125 if GENERATIVE_BACKBONE == "diffusion" else 100))
     target_work_dir = os.path.join(os.environ.get("TEMP_DIR", "/tmp"), "work_dir")
 
     diff_unet = None
     diffusion_scheduler = None
     mel_vae = None
     octave_vae = None
+    mel_refiner = None
 
-    if GENERATIVE_BACKBONE == "vae":
-        target_model_dir = os.path.join(target_work_dir, "vae_model")
-        checkpoint_path = os.path.join(target_model_dir, f"dual_vae_epoch_{TARGET_EPOCH - 1}.pt")
+    VAE_TARGET_EPOCH = int(os.environ.get("VAE_TARGET_EPOCH", 50))
+    REFINER_TARGET_EPOCH = int(os.environ.get("REFINER_TARGET_EPOCH", 25))
 
-        if not os.path.exists(checkpoint_path):
-            pts = [f for f in os.listdir(target_model_dir) if f.endswith(".pt")] if os.path.exists(target_model_dir) else []
-            if pts:
-                checkpoint_path = os.path.join(target_model_dir, sorted(pts)[-1])
+    # --- INIZIALIZZAZIONE BACKBONE GENERATIVO ---
+    if GENERATIVE_BACKBONE in ["vae", "vae_refiner"]:
+        target_vae_dir = os.path.join(target_work_dir, "vae_model")
+        vae_ckpt_path = resolve_single_checkpoint(target_vae_dir, VAE_TARGET_EPOCH, "dual_vae_epoch")
+        if vae_ckpt_path is None:
+            raise FileNotFoundError(f"Checkpoint VAE per epoca {VAE_TARGET_EPOCH} non trovato in {target_vae_dir}")
 
-        checkpoint = torch.load(checkpoint_path, map_location=device)
-        l_dim = int(checkpoint.get("latent_dim", os.environ.get("LATENT_DIM", 256)))
-        n_embed = int(checkpoint.get("num_embeddings", os.environ.get("NUM_EMBEDDINGS", 1024)))
+        checkpoint_vae = torch.load(vae_ckpt_path, map_location=device)
+        l_dim = int(checkpoint_vae.get("latent_dim", os.environ.get("LATENT_DIM", 256)))
+        n_embed = int(checkpoint_vae.get("num_embeddings", os.environ.get("NUM_EMBEDDINGS", 1024)))
 
-        # Inizializzazione VQ-VAE con quantizzatore a codebook discreto condiviso
         mel_vae = MelVQVAE(base_channels=64, latent_dim=l_dim, num_embeddings=n_embed).to(device)
         octave_vae = OctaveVQVAE(base_channels=64, latent_dim=l_dim, num_embeddings=n_embed, shared_quantizer=mel_vae.quantizer).to(device)
 
-        mel_vae.load_state_dict(checkpoint['mel_vae_state_dict'])
-        octave_vae.load_state_dict(checkpoint['octave_vae_state_dict'])
+        mel_vae.load_state_dict({k.replace('module.', ''): v for k, v in checkpoint_vae['mel_vae_state_dict'].items()})
+        octave_vae.load_state_dict({k.replace('module.', ''): v for k, v in checkpoint_vae['octave_vae_state_dict'].items()})
         mel_vae.eval()
         octave_vae.eval()
 
-        if VERBOSE and rank == 0:
-            print(f"✅ Loaded Dual VQ-VAE checkpoint from: {checkpoint_path} (Codebook: {n_embed} tokens, {l_dim} dims)", flush=True)
+        if rank == 0 and VERBOSE:
+            print(f"✅ [RANK 0] Loaded Dual VQ-VAE: {vae_ckpt_path}", flush=True)
+
+        # Se richiesta pipeline a 2 stadi, carica il generatore di raffinamento 1-step
+        if GENERATIVE_BACKBONE == "vae_refiner":
+            target_ref_dir = os.path.join(target_work_dir, "refiner_model")
+            ref_ckpt_path = resolve_single_checkpoint(target_ref_dir, REFINER_TARGET_EPOCH, "refiner_epoch")
+            if ref_ckpt_path is None:
+                raise FileNotFoundError(f"Checkpoint Refiner per epoca {REFINER_TARGET_EPOCH} non trovato in {target_ref_dir}")
+
+            mel_refiner = MelRefinerUNet(in_channels=1, out_channels=1, base_channels=32).to(device)
+            checkpoint_ref = torch.load(ref_ckpt_path, map_location=device)
+            mel_refiner.load_state_dict({k.replace('module.', ''): v for k, v in checkpoint_ref['refiner_state_dict'].items()})
+            mel_refiner.eval()
+
+            if rank == 0 and VERBOSE:
+                print(f"✅ [RANK 0] Loaded Mel Refiner GAN: {ref_ckpt_path}", flush=True)
 
     else:
-        # Default: Diffusion Model
-        target_model_dir = os.path.join(target_work_dir, "diff_model")
-        checkpoint_path = os.path.join(target_model_dir, f"unet_epoch_{TARGET_EPOCH - 1}.pt")
-
-        if not os.path.exists(checkpoint_path):
-            pts = [f for f in os.listdir(target_model_dir) if f.endswith(".pt")] if os.path.exists(target_model_dir) else []
-            if pts: 
-                checkpoint_path = os.path.join(target_model_dir, sorted(pts)[-1])
-
+        # Fallback Diffusion standalone
+        target_diff_dir = os.path.join(target_work_dir, "diff_model")
+        diff_ckpt_path = resolve_single_checkpoint(target_diff_dir, 500, "unet_epoch")
         diff_unet = SpectrogramUNet(base_channels=64, emb_dim=256).to(device)
-        checkpoint = torch.load(checkpoint_path, map_location=device)
+        checkpoint = torch.load(diff_ckpt_path, map_location=device)
         diff_unet.load_state_dict(checkpoint['model_state_dict'])
         diff_unet.eval()
-
         diffusion_scheduler = ConditionalGaussianDiffusion(unet_model=diff_unet, timesteps=1000).to(device)
-
-        if VERBOSE and rank == 0:
-            print(f"✅ Loaded Diffusion Model checkpoint from: {checkpoint_path}", flush=True)
 
     clap_model.clap.to(device)
 
@@ -151,10 +158,6 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
         if not batch_audio: return
         
         t_gpu_start = time.perf_counter()
-        
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
         raw_batch = torch.stack(batch_audio).pin_memory().to(device, non_blocking=True).float()
         raw_batch = torch.nan_to_num(raw_batch, nan=0.0, posinf=0.0, neginf=0.0)
         
@@ -166,71 +169,60 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
             noise = (torch.rand(raw_batch.shape, generator=g, device=device) * 2 - 1) * means
             batch_tensor = (1 - noise_perc) * raw_batch + noise_perc * noise
             
-            # Step 1: Spettrogrammi a bande d'ottava su GPU
+            # 1. Banco filtri d'ottava su GPU
             specs_gpu = spectrogram_n_octaveband_generator_gpu(
                 batch_tensor, sr, n_octave, center_freqs=center_freqs, ref=ref, device=device
             )
             
             del raw_batch, noise, means
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
             
-            # Step 2: Generazione e ricostruzione Mel per CLAP
-            with torch.no_grad():
-                if use_specs:
-                    if INJECT_OCTAVE:
-                        octave_spec = specs_gpu.permute(0, 2, 1)
+            # 2. Generazione e ricostruzione Mel per CLAP
+            if use_specs:
+                if INJECT_OCTAVE:
+                    octave_spec = specs_gpu.permute(0, 2, 1)
 
-                        if GENERATIVE_BACKBONE == "vae":
-                            # 1. PCHIP Spline GPU verso 320 bande d'ottava
-                            x_oct_pchip = hyperresolve_octave_pchip_gpu(
-                                octave_spec, n_octave=n_octave, target_bands=320, target_time=1152, sample_rate=sr
-                            )
-                            # 2. Inversione discreta VQ-VAE: Encoder -> Proiezione Codebook -> Decoder
-                            z_e_oct = octave_vae.encoder(x_oct_pchip)
-                            z_q_oct, _, _ = octave_vae.quantizer(z_e_oct)
-                            mel_reconstructed = mel_vae.decoder(z_q_oct)
-
-                        else:
-                            # 1. Resampling bilineare a griglia U-Net (64x1152) con normalizzazione CLAP bn0
-                            x_cond = convert_octave_to_msclap_mel(octave_spec, target_mels=64, target_time=1152)
-
-                            # 2. Tensore di condizionamento risoluzione
-                            frac_tensor = torch.full((batch_tensor.shape[0],), fill_value=float(n_octave), device=device)
-
-                            # 3. DDIM Sampling su guida d'ottava
-                            mel_reconstructed = diffusion_scheduler.sample_ddim(x_cond, fraction_id=frac_tensor, ddim_steps=100)
-
-                        # Estrazione deterministica sliding-window ed embedding CLAP
-                        embeddings = extract_clap_embedding_from_reconstructed_mel(
-                            mel_reconstructed=mel_reconstructed,
-                            clap_model=clap_model,
-                            target_time=1140,
-                            device=device
+                    if GENERATIVE_BACKBONE in ["vae", "vae_refiner"]:
+                        # Step 1: Interpolazione PCHIP GPU -> 320 bande d'ottava
+                        x_oct_pchip = hyperresolve_octave_pchip_gpu(
+                            octave_spec, n_octave=n_octave, target_bands=320, target_time=1152, sample_rate=sr
                         )
+                        # Step 2: Cross-domain pass sul Dual VAE congelato
+                        z_e_oct = octave_vae.encoder(x_oct_pchip)
+                        z_q_oct, _, _ = octave_vae.quantizer(z_e_oct)
+                        mel_cross_raw = mel_vae.decoder(z_q_oct)
+
+                        if GENERATIVE_BACKBONE == "vae_refiner":
+                            # Step 3: Super-Resolution 1-step tramite Residual-GAN Refiner
+                            mel_reconstructed = mel_refiner(mel_cross_raw)
+                        else:
+                            mel_reconstructed = mel_cross_raw
 
                     else:
-                        clap_model.clap.audio_encoder.to(device)
-                        resampled_batch = spectrogram_to_audio_batch(specs_gpu, sr)
-                        output = clap_model.clap.audio_encoder(resampled_batch)
-                        embeddings = output[0] if isinstance(output, (tuple, list)) else output
-                        if embeddings.dim() > 2: embeddings = embeddings.squeeze(1)
+                        x_cond = convert_octave_to_msclap_mel(octave_spec, target_mels=64, target_time=1152)
+                        frac_tensor = torch.full((batch_tensor.shape[0],), fill_value=float(n_octave), device=device)
+                        mel_reconstructed = diffusion_scheduler.sample_ddim(x_cond, fraction_id=frac_tensor, ddim_steps=100)
+
+                    # Estrazione embedding CLAP su Mel ricostruito
+                    embeddings = extract_clap_embedding_from_reconstructed_mel(
+                        mel_reconstructed=mel_reconstructed,
+                        clap_model=clap_model,
+                        target_time=1140,
+                        device=device
+                    )
                 else:
-                    batch_tensor = batch_tensor.to(torch.float32)
-                    batch_tensor = batch_tensor + torch.randn_like(batch_tensor) * 1e-6
-                    batch_tensor = torch.nan_to_num(batch_tensor, nan=0.0)
                     clap_model.clap.audio_encoder.to(device)
-                    output = clap_model.clap.audio_encoder(batch_tensor)
+                    resampled_batch = spectrogram_to_audio_batch(specs_gpu, sr)
+                    output = clap_model.clap.audio_encoder(resampled_batch)
                     embeddings = output[0] if isinstance(output, (tuple, list)) else output
                     if embeddings.dim() > 2: embeddings = embeddings.squeeze(1)
+            else:
+                batch_tensor = batch_tensor.to(torch.float32) + torch.randn_like(batch_tensor) * 1e-6
+                clap_model.clap.audio_encoder.to(device)
+                output = clap_model.clap.audio_encoder(batch_tensor)
+                embeddings = output[0] if isinstance(output, (tuple, list)) else output
+                if embeddings.dim() > 2: embeddings = embeddings.squeeze(1)
 
-        embeddings_cpu = embeddings.float().cpu().numpy()
-        if torch.isnan(batch_tensor).any(): print("💥 NaN FOUND IN INPUT AUDIO!")
-        if torch.isnan(specs_gpu).any():    print("💥 NaN FOUND IN GENERATED SPECTROGRAMS!")
-        if np.isnan(embeddings_cpu).any():
-            print(f"🚨 ALERT: NaNs detected AFTER CLAP forward pass. Suppressing NaNs.")
-            embeddings_cpu = np.nan_to_num(embeddings_cpu, nan=0.0)
-            
+        embeddings_cpu = np.nan_to_num(embeddings.float().cpu().numpy(), nan=0.0)
         specs_cpu = specs_gpu.float().cpu().numpy()
         stats["gpu_total"] += (time.perf_counter() - t_gpu_start)
 
@@ -257,14 +249,7 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
         n_embeddings_per_run += cur_batch_len
         
         print(f"[RANK {rank}] {class_to_process} | {cut_secs}s: {results}/{target_counts_list[di]} ({division_names[di]})", flush=True)
-
-        if stats["count"] % (BATCH_SIZE * 4) == 0: 
-            write_perf_log()
-            
         batch_audio.clear(); batch_meta.clear()
-        
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
 
     try:
         permuted_indices = audio_dataset_manager.get_reproducible_permutation(class_seed)
@@ -291,7 +276,6 @@ def process_class_with_cut_secs_slurm_batched(clap_model, audio_embedding, class
                             return n_embeddings_per_run, True
 
                     emb_pkey = f"{class_idx_attr}_{track_idx}_{b}_{round_}_{results}"
-                    
                     if split_emb_dataset_manager and emb_pkey in split_emb_dataset_manager:
                         results += 1; continue
 

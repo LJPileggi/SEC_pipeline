@@ -6,7 +6,7 @@ CLAP_WEIGHTS          | /leonardo_scratch/large/userexternal/$USER/SEC_pipeline/
 ROBERTA_PATH          | /leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.clap_weights/roberta-base
 DIFF_MODELS           | /leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.models/diff_model
 VAE_MODELS            | /leonardo_scratch/large/userexternal/$USER/SEC_pipeline/.models/vae_model
-GENERATIVE_BACKBONE   | vae
+GENERATIVE_BACKBONE   | vae_refiner
 DATASEC_GLOBAL        | /leonardo_scratch/large/userexternal/$USER/dataSEC
 SLURM_ACCOUNT         | IscrC_BrISkite_0
 SLURM_PARTITION       | boost_usr_prod

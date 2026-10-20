@@ -101,15 +101,18 @@ echo "📦 Staging data..."
 cp "$CLAP_SCRATCH_WEIGHTS" "\$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth" || exit 1
 cp -r "$ROBERTA_PATH/." "\$TEMP_DIR/roberta-base/" || exit 1
 
-# 🎯 STAGE-IN CONDIZIONATO DEI MODELLI GENERATIVI (DIFFUSION / VAE)
-if [ "$GENERATIVE_BACKBONE" = "vae" ]; then
-    export TARGET_EPOCH=50
-    if [ -d "$VAE_MODELS_PATH" ]; then
-        echo "📦 Staging Dual-VAE model weights from $VAE_MODELS_PATH..."
-        LATEST_VAE=\$(ls -v "$VAE_MODELS_PATH"/dual_vae_epoch_*.pt 2>/dev/null | tail -n 1)
-        [ -f "\$LATEST_VAE" ] && cp "\$LATEST_VAE" "\$TEMP_DIR/work_dir/vae_model/" || exit 1
-    else
-        echo "⚠️ Warning: VAE models path '$VAE_MODELS_PATH' not found!"
+# 🎯 STAGE-IN CONDIZIONATO DEI MODELLI GENERATIVI (DIFFUSION / VAE / VAE_REFINER)
+if [ "$GENERATIVE_BACKBONE" = "vae" ] || [ "$GENERATIVE_BACKBONE" = "vae_refiner" ]; then
+    export VAE_TARGET_EPOCH=50
+    VAE_ZERO_IDX=$(( VAE_TARGET_EPOCH - 1 ))
+    LATEST_VAE=$(ls -v "$VAE_MODELS_PATH"/dual_vae_epoch_*.pt 2>/dev/null | tail -n 1)
+    [ -f "$LATEST_VAE" ] && cp "$LATEST_VAE" "$TEMP_DIR/work_dir/vae_model/dual_vae_epoch_${VAE_ZERO_IDX}.pt" || exit 1
+
+    if [ "$GENERATIVE_BACKBONE" = "vae_refiner" ]; then
+        export REFINER_TARGET_EPOCH=25
+        REF_ZERO_IDX=$(( REFINER_TARGET_EPOCH - 1 ))
+        LATEST_REF=$(ls -v "$REFINER_MODELS_PATH"/refiner_epoch_*.pt 2>/dev/null | tail -n 1)
+        [ -f "$LATEST_REF" ] && cp "$LATEST_REF" "$TEMP_DIR/work_dir/refiner_model/refiner_epoch_${REF_ZERO_IDX}.pt" || exit 1
     fi
 else
     export TARGET_EPOCH=500
