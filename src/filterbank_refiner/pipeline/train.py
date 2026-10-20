@@ -14,8 +14,9 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 import numpy as np
 
+# Percorso corretto: risale da pipeline -> filterbank_refiner -> src -> SEC_pipeline root (/app)
 current_dir = os.path.dirname(os.path.abspath(__file__))
-src_root = os.path.abspath(os.path.join(current_dir, "..", ".."))
+src_root = os.path.abspath(os.path.join(current_dir, "..", "..", ".."))
 if src_root not in sys.path:
     sys.path.insert(0, src_root)
 
@@ -78,7 +79,7 @@ def main():
     weights_path = os.environ.get("LOCAL_CLAP_WEIGHTS_PATH", ".clap_weights/CLAP_weights_2023.pth")
     spectral_pipeline = OnlineSpectrogramPipeline(weights_path=weights_path, sample_rate=sampling_rate, device=device).to(device)
 
-    # Risoluzione checkpoint VAE globale / scratch
+    # Risoluzione checkpoint VAE singolo
     vae_ckpt = args.vae_checkpoint
     if not vae_ckpt or not os.path.exists(vae_ckpt):
         raise RuntimeError(f"❌ Checkpoint VAE non fornito o inesistente: {vae_ckpt}")
@@ -100,8 +101,11 @@ def main():
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=seed)
     dataloader = DataLoader(dataset, batch_size=LOCAL_BATCH_SIZE, sampler=sampler, num_workers=4, pin_memory=True, drop_last=True)
 
-    save_dir = os.path.join(src_root, ".models", "refiner_model")
-    os.makedirs(save_dir, exist_ok=True)
+    # Cartella di salvataggio esplicita: legge REFINER_CHECKPOINT_DIR o /app/.models/refiner_model
+    save_dir = os.environ.get("REFINER_CHECKPOINT_DIR", os.path.join(src_root, ".models", "refiner_model"))
+    if rank == 0:
+        os.makedirs(save_dir, exist_ok=True)
+        print(f"📁 I checkpoint del refiner verranno salvati in: {save_dir}", flush=True)
 
     total_steps = len(dataloader)
     print_freq = max(1, total_steps // 10)
@@ -143,7 +147,7 @@ def main():
                 v_pred = refiner(x_t, x_cond, t)
                 loss_flow = F.mse_loss(v_pred, v_target)
 
-                # Penalità acustica opzionale sulla traiettoria integrata a t=1
+                # Penalità acustica sulla traiettoria proiettata
                 x_1_pred = x_cond + v_pred
                 loss_struct = acoustic_loss_fn(x_1_pred, x_0_pristine)
                 total_loss = loss_flow + 0.1 * loss_struct

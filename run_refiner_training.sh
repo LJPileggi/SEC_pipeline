@@ -53,6 +53,7 @@ echo "🎯 Refiner Training Launcher"
 echo "   • Refiner Epochs:     $NUM_EPOCHS"
 echo "   • VAE Source Epoch:   $VAE_TARGET_EPOCH"
 echo "   • Single VAE Staged:  $TARGET_FILE"
+echo "   • Refiner Save Dir:   $PROJECT_DIR/.models/refiner_model"
 echo "=========================================================="
 
 echo "📦 Stage-in: Staging datasets, pesi CLAP e SINGOLO checkpoint VAE..."
@@ -66,6 +67,7 @@ export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
 export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/weights/CLAP_weights_2023.pth"
 export LOCAL_CLAP_BN0_CONSTANTS_PATH="/tmp_data/work_dir/weights/clap_bn0_constants.npz"
 export LOCAL_VAE_CHECKPOINT="/tmp_data/single_vae_model/target_dual_vae.pt"
+export REFINER_CHECKPOINT_DIR="/app/.models/refiner_model"
 export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
 export PYTHONUNBUFFERED=1
 export PYTORCH_ALLOC_CONF=expandable_segments:True
