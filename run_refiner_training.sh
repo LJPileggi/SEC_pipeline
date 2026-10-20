@@ -42,4 +42,19 @@ export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
 export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/weights/CLAP_weights_2023.pth"
 export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
 export PYTHONUNBUFFERED=1
-export PYTORCH_ALLOC_CONF=expandable_segments
+export PYTORCH_ALLOC_CONF=expandable_segments:True
+
+export MASTER_ADDR=$(hostname)
+export MASTER_PORT=$(expr 22000 + ${SLURM_JOB_ID} % 10000)
+
+echo "🚀 Launching Refiner Training on 4 ranks (Epochs: $NUM_EPOCHS)..."
+srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \
+    singularity exec --nv --no-home \
+    --bind "/leonardo_scratch:/leonardo_scratch" \
+    --bind "$TEMP_DIR:/tmp_data" \
+    --bind "$PROJECT_DIR:/app" --pwd "/app" \
+    "$SIF_FILE" \
+    python3 src/filterbank_refiner/pipeline/train.py \
+        --epochs "$NUM_EPOCHS"
+
+cleanup_job_scratch
