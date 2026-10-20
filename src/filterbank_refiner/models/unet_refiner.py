@@ -129,14 +129,15 @@ class MelRefinerUNet(nn.Module):
     @torch.no_grad()
     def sample_refined(self, x_cond, num_steps=10):
         """
-        Euler ODE sampling (Conditional Flow Matching).
-        Traiettoria lineare da x_cond + rumore residuo verso x_target pulito.
+        Euler ODE sampling deterministico (Conditional Flow Matching).
+        Traiettoria pulita da x_cond (t=0) a X_0 (t=1).
         """
         device = x_cond.device
-        B, _, H, W = x_cond.shape
-        # Punto di partenza: x_cond perturbato leggermente con rumore gaussiano
-        x = x_cond + 0.1 * torch.randn_like(x_cond)
-        dt = 1.0 / num_steps
+        B = x_cond.shape[0]
+        
+        # ✅ Il punto di partenza a t=0 è ESATTAMENTE x_cond (NESSUN RUMORE)
+        x = x_cond.clone()
+        dt = 1.0 / float(num_steps)
 
         for i in range(num_steps):
             t_val = i / float(num_steps)
