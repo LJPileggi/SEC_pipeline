@@ -9,7 +9,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
-src_root = os.path.abspath(os.path.join(current_dir, "..", ".."))
+src_root = os.path.abspath(os.path.join(current_dir, "..", "..", ".."))
 if src_root not in sys.path:
     sys.path.insert(0, src_root)
 
@@ -25,12 +25,11 @@ NUM_QUANTIZERS = int(os.environ.get("NUM_QUANTIZERS", 4))
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Plot Full Generative Pipeline")
+    parser = argparse.ArgumentParser(description="Plot Full Generative Pipeline (Residual-GAN)")
     parser.add_argument("--vae_checkpoint", type=str, default=os.environ.get("LOCAL_VAE_CHECKPOINT", ""))
     parser.add_argument("--refiner_checkpoint", type=str, default=os.environ.get("LOCAL_REFINER_CHECKPOINT", ""))
     parser.add_argument("--target_fraction", type=int, default=int(os.environ.get("TARGET_FRACTION", "3")))
     parser.add_argument("--samples_per_class", type=int, default=2)
-    parser.add_argument("--sampling_steps", type=int, default=10)
     return parser.parse_args()
 
 
@@ -63,9 +62,9 @@ def plot_pipeline_diagnostic(pristine_mel, recon_mel_intra, recon_mel_cross_raw,
     axes[2].set_ylabel("Mel (64)", fontsize=8)
     fig.colorbar(im2, ax=axes[2], fraction=0.015, pad=0.01)
 
-    # 4. Refined Mel Flow Matching
+    # 4. Refined Mel Residual-GAN
     im3 = axes[3].imshow(recon_mel_refined, origin='lower', aspect='auto', cmap='magma', vmin=vmin_mel, vmax=vmax_mel)
-    axes[3].set_title("3. Stage 2: Refined Mel (Conditional Flow Matching U-Net)", fontsize=10, fontweight='bold')
+    axes[3].set_title("3. Stage 2: Refined Mel (Residual-GAN 1-Step Super-Resolution)", fontsize=10, fontweight='bold')
     axes[3].set_ylabel("Mel (64)", fontsize=8)
     fig.colorbar(im3, ax=axes[3], fraction=0.015, pad=0.01)
 
@@ -101,7 +100,6 @@ def main():
     weights_path = os.environ.get("LOCAL_CLAP_WEIGHTS_PATH", ".clap_weights/CLAP_weights_2023.pth")
     spectral_pipeline = OnlineSpectrogramPipeline(weights_path=weights_path, sample_rate=sampling_rate, device=device).to(device)
 
-    # Carica VAE
     mel_vae = MelVQVAE(base_channels=64, latent_dim=LATENT_DIM, num_embeddings=NUM_EMBEDDINGS, num_quantizers=NUM_QUANTIZERS).to(device)
     octave_vae = OctaveVQVAE(base_channels=64, latent_dim=LATENT_DIM, num_embeddings=NUM_EMBEDDINGS, num_quantizers=NUM_QUANTIZERS, shared_quantizer=mel_vae.quantizer).to(device)
     ckpt_vae = torch.load(args.vae_checkpoint, map_location=device)
@@ -110,8 +108,7 @@ def main():
     mel_vae.eval()
     octave_vae.eval()
 
-    # Carica Refiner
-    refiner = MelRefinerUNet(in_channels=2, out_channels=1, base_channels=32).to(device)
+    refiner = MelRefinerUNet(in_channels=1, out_channels=1, base_channels=32).to(device)
     ckpt_ref = torch.load(args.refiner_checkpoint, map_location=device)
     refiner.load_state_dict({k.replace('module.', ''): v for k, v in ckpt_ref['refiner_state_dict'].items()})
     refiner.eval()
@@ -140,8 +137,8 @@ def main():
                 recon_oct, _, z_e_oct, z_q_oct, indices_oct = octave_vae(x_oct_pchip)
                 recon_cross_raw = mel_vae.decoder(z_q_oct)
 
-                # Refinement ODE
-                recon_refined = refiner.sample_refined(recon_cross_raw, num_steps=args.sampling_steps)
+                # 1-Step Residual Generation
+                recon_refined = refiner(recon_cross_raw)
 
                 l2_diff = torch.norm(z_q_mel - z_q_oct, p=2, dim=1).squeeze(0).cpu().numpy()
                 tok_match = float((indices_mel == indices_oct).float().mean().item() * 100.0)

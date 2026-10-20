@@ -14,7 +14,6 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 import numpy as np
 
-# Percorso corretto: risale da pipeline -> filterbank_refiner -> src -> SEC_pipeline root (/app)
 current_dir = os.path.dirname(os.path.abspath(__file__))
 src_root = os.path.abspath(os.path.join(current_dir, "..", "..", ".."))
 if src_root not in sys.path:
@@ -22,21 +21,25 @@ if src_root not in sys.path:
 
 from utils import setup_environ_vars, setup_distributed_environment, cleanup_distributed_environment, get_config_from_yaml
 from filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
-from filterbank_vae.pipeline.spectral import OnlineSpectrogramPipeline, AcousticStructuralLoss
+from filterbank_vae.pipeline.spectral import OnlineSpectrogramPipeline, AcousticStructuralLoss, feature_matching_loss
 from filterbank_vae.models.vae import MelVQVAE, OctaveVQVAE
-from filterbank_refiner.models.unet_refiner import MelRefinerUNet
+from filterbank_refiner.models.unet_refiner import MelRefinerUNet, RefinerPatchDiscriminator
 
-DEFAULT_EPOCHS = 20
+DEFAULT_EPOCHS = 25
 LOCAL_BATCH_SIZE = 16
 LATENT_DIM = 256
 NUM_EMBEDDINGS = 1024
 NUM_QUANTIZERS = 4
+ACCUMULATION_STEPS = 1
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Conditional Flow Matching Refiner for Cross-Domain Mel")
+    parser = argparse.ArgumentParser(description="Residual-GAN Refiner for Spectrogram Super-Resolution")
     parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS)
-    parser.add_argument("--lr", type=float, default=2e-4)
+    parser.add_argument("--lr_g", type=float, default=2e-4)
+    parser.add_argument("--lr_d", type=float, default=1e-4)
+    parser.add_argument("--adv_weight", type=float, default=0.1)
+    parser.add_argument("--fm_weight", type=float, default=2.0)
     parser.add_argument("--vae_checkpoint", type=str, default=os.environ.get("LOCAL_VAE_CHECKPOINT", ""))
     return parser.parse_args()
 
@@ -46,14 +49,11 @@ def load_frozen_vae(device, ckpt_path):
     octave_vae = OctaveVQVAE(base_channels=64, latent_dim=LATENT_DIM, num_embeddings=NUM_EMBEDDINGS, num_quantizers=NUM_QUANTIZERS, shared_quantizer=mel_vae.quantizer).to(device)
 
     if not os.path.exists(ckpt_path):
-        raise FileNotFoundError(f"Checkpoint VAE non trovato in {ckpt_path}")
+        raise FileNotFoundError(f"Checkpoint VAE non trovato: {ckpt_path}")
 
     checkpoint = torch.load(ckpt_path, map_location=device)
-    mel_state = {k.replace('module.', ''): v for k, v in checkpoint['mel_vae_state_dict'].items()}
-    octave_state = {k.replace('module.', ''): v for k, v in checkpoint['octave_vae_state_dict'].items()}
-
-    mel_vae.load_state_dict(mel_state)
-    octave_vae.load_state_dict(octave_state)
+    mel_vae.load_state_dict({k.replace('module.', ''): v for k, v in checkpoint['mel_vae_state_dict'].items()})
+    octave_vae.load_state_dict({k.replace('module.', ''): v for k, v in checkpoint['octave_vae_state_dict'].items()})
 
     mel_vae.eval()
     octave_vae.eval()
@@ -63,6 +63,19 @@ def load_frozen_vae(device, ckpt_path):
         p.requires_grad = False
 
     return mel_vae, octave_vae
+
+
+def high_frequency_gradient_loss(pred, target):
+    """Calcola la consistenza sulle derivate prime temporali e spettrali (Sobel differenziali)."""
+    d_t_pred = pred[..., :, 1:] - pred[..., :, :-1]
+    d_t_tgt = target[..., :, 1:] - target[..., :, :-1]
+    loss_t = F.l1_loss(d_t_pred, d_t_tgt)
+
+    d_f_pred = pred[..., 1:, :] - pred[..., :-1, :]
+    d_f_tgt = target[..., 1:, :] - target[..., :-1, :]
+    loss_f = F.l1_loss(d_f_pred, d_f_tgt)
+
+    return loss_t + 2.0 * loss_f
 
 
 def main():
@@ -79,48 +92,61 @@ def main():
     weights_path = os.environ.get("LOCAL_CLAP_WEIGHTS_PATH", ".clap_weights/CLAP_weights_2023.pth")
     spectral_pipeline = OnlineSpectrogramPipeline(weights_path=weights_path, sample_rate=sampling_rate, device=device).to(device)
 
-    # Risoluzione checkpoint VAE singolo
-    vae_ckpt = args.vae_checkpoint
-    if not vae_ckpt or not os.path.exists(vae_ckpt):
-        raise RuntimeError(f"❌ Checkpoint VAE non fornito o inesistente: {vae_ckpt}")
+    if not args.vae_checkpoint or not os.path.exists(args.vae_checkpoint):
+        raise RuntimeError(f"❌ Checkpoint VAE errato o assente: {args.vae_checkpoint}")
 
     if rank == 0:
-        print(f"❄️ Caricamento Dual VQ-VAE congelato dal checkpoint mirato: {vae_ckpt}", flush=True)
-    mel_vae, octave_vae = load_frozen_vae(device, vae_ckpt)
+        print(f"❄️ Caricamento Dual VQ-VAE congelato: {args.vae_checkpoint}", flush=True)
+    mel_vae, octave_vae = load_frozen_vae(device, args.vae_checkpoint)
 
-    # Inizializzazione U-Net di raffinamento
-    refiner = MelRefinerUNet(in_channels=2, out_channels=1, base_channels=32).to(device)
+    # 1. Generatore U-Net Diretto
+    refiner = MelRefinerUNet(in_channels=1, out_channels=1, base_channels=32).to(device)
     refiner = nn.parallel.DistributedDataParallel(refiner, device_ids=[rank], output_device=rank)
 
-    optimizer = torch.optim.AdamW(refiner.parameters(), lr=args.lr, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
-    acoustic_loss_fn = AcousticStructuralLoss(alpha=0.5, beta=0.25).to(device)
+    # 2. Discriminatore PatchGAN
+    discriminator = RefinerPatchDiscriminator(in_channels=1, ndf=32).to(device)
+    discriminator = nn.parallel.DistributedDataParallel(
+        discriminator,
+        device_ids=[rank],
+        output_device=rank,
+        broadcast_buffers=False
+    )
+
+    optimizer_g = torch.optim.AdamW(refiner.parameters(), lr=args.lr_g, betas=(0.5, 0.9), weight_decay=1e-4)
+    optimizer_d = torch.optim.AdamW(discriminator.parameters(), lr=args.lr_d, betas=(0.5, 0.9), weight_decay=1e-4)
+
+    scheduler_g = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_g, T_max=args.epochs, eta_min=1e-6)
+    scheduler_d = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_d, T_max=args.epochs, eta_min=1e-6)
+
+    acoustic_loss_fn = AcousticStructuralLoss(alpha=1.0, beta=1.0).to(device)
 
     raw_dataset_root = os.path.join(os.environ.get("BASEDIR", "/tmp"), "dataSEC", "RAW_DATASET", "raw_wav")
     dataset = DistributedAudioRAWDataset(base_dir=raw_dataset_root, split="train", target_samples_per_class=500)
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=seed)
     dataloader = DataLoader(dataset, batch_size=LOCAL_BATCH_SIZE, sampler=sampler, num_workers=4, pin_memory=True, drop_last=True)
 
-    # Cartella di salvataggio esplicita: legge REFINER_CHECKPOINT_DIR o /app/.models/refiner_model
     save_dir = os.environ.get("REFINER_CHECKPOINT_DIR", os.path.join(src_root, ".models", "refiner_model"))
     if rank == 0:
         os.makedirs(save_dir, exist_ok=True)
-        print(f"📁 I checkpoint del refiner verranno salvati in: {save_dir}", flush=True)
+        print(f"📁 Checkpoint salvati in: {save_dir}", flush=True)
 
     total_steps = len(dataloader)
     print_freq = max(1, total_steps // 10)
 
     if rank == 0:
         print("==========================================================", flush=True)
-        print(f"🚀 Training Conditional Flow Refiner (Epochs: {args.epochs})", flush=True)
-        print(f"   • U-Net Parametri: {sum(p.numel() for p in refiner.parameters() if p.requires_grad):,}", flush=True)
-        print(f"   • Batch Size locale: {LOCAL_BATCH_SIZE} (Totale: {LOCAL_BATCH_SIZE * world_size})", flush=True)
+        print(f"🚀 Training Residual-GAN Refiner (1-Step Super-Resolution)", flush=True)
+        print(f"   • U-Net Generator Parametri:    {sum(p.numel() for p in refiner.parameters() if p.requires_grad):,}", flush=True)
+        print(f"   • Patch Discriminator Parametri: {sum(p.numel() for p in discriminator.parameters() if p.requires_grad):,}", flush=True)
+        print(f"   • Adv Weight: {args.adv_weight} | FM Weight: {args.fm_weight}", flush=True)
         print("==========================================================\n", flush=True)
 
     for epoch in range(args.epochs):
         refiner.train()
+        discriminator.train()
         sampler.set_epoch(epoch)
-        running_loss = 0.0
+        running_g = 0.0
+        running_d = 0.0
         epoch_start = time.time()
 
         for step, (raw_audio, _) in enumerate(dataloader):
@@ -129,43 +155,66 @@ def main():
 
             with torch.no_grad():
                 x_0_pristine, x_oct_pchip = spectral_pipeline(raw_audio, format_id=1, fraction_id=fraction_id, device=device)
-                # Generazione condizione cross-domain dal VAE congelato
                 _, _, _, z_q_oct, _ = octave_vae(x_oct_pchip)
                 x_cond = mel_vae.decoder(z_q_oct).detach()
 
-            # Conditional Flow Matching: interpolazione lineare da x_cond a x_0_pristine
-            B = x_0_pristine.shape[0]
-            t = torch.rand(B, device=device).float()
-            t_expand = t[:, None, None, None]
-
-            # x_t = (1 - t) * x_cond + t * x_0
-            x_t = (1.0 - t_expand) * x_cond + t_expand * x_0_pristine
-            v_target = x_0_pristine - x_cond
-
-            optimizer.zero_grad(set_to_none=True)
+            # ------------------------------------------------------
+            # 1. PASSO GENERATORE
+            # ------------------------------------------------------
+            optimizer_g.zero_grad(set_to_none=True)
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                v_pred = refiner(x_t, x_cond, t)
-                loss_flow = F.mse_loss(v_pred, v_target)
+                x_refined = refiner(x_cond)
 
-                # Penalità acustica sulla traiettoria proiettata
-                x_1_pred = x_cond + v_pred
-                loss_struct = acoustic_loss_fn(x_1_pred, x_0_pristine)
-                total_loss = loss_flow + 0.1 * loss_struct
+                l1_loss = F.l1_loss(x_refined, x_0_pristine)
+                struct_loss = acoustic_loss_fn(x_refined, x_0_pristine)
+                hf_loss = high_frequency_gradient_loss(x_refined, x_0_pristine)
 
-            total_loss.backward()
+                pred_fake, feats_fake = discriminator(x_refined)
+                with torch.no_grad():
+                    _, feats_real = discriminator(x_0_pristine)
+
+                fm_loss = feature_matching_loss(feats_real, feats_fake)
+                adv_loss = -torch.mean(pred_fake)
+
+                loss_g = l1_loss + struct_loss + 2.0 * hf_loss + (args.fm_weight * fm_loss) + (args.adv_weight * adv_loss)
+
+            loss_g.backward()
             torch.nn.utils.clip_grad_norm_(refiner.parameters(), max_norm=1.0)
-            optimizer.step()
+            optimizer_g.step()
 
-            running_loss += total_loss.item()
+            # ------------------------------------------------------
+            # 2. PASSO DISCRIMINATORE
+            # ------------------------------------------------------
+            optimizer_d.zero_grad(set_to_none=True)
+            with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                pred_real_d, _ = discriminator(x_0_pristine)
+                pred_fake_d, _ = discriminator(x_refined.detach())
+
+                loss_d_real = torch.mean(F.relu(1.0 - pred_real_d))
+                loss_d_fake = torch.mean(F.relu(1.0 + pred_fake_d))
+                loss_d = 0.5 * (loss_d_real + loss_d_fake)
+
+            loss_d.backward()
+            torch.nn.utils.clip_grad_norm_(discriminator.parameters(), max_norm=1.0)
+            optimizer_d.step()
+
+            running_g += loss_g.item()
+            running_d += loss_d.item()
 
             if (step + 1) % print_freq == 0 or (step + 1) == total_steps:
-                avg_l = running_loss / print_freq
+                avg_g = running_g / print_freq
+                avg_d = running_d / print_freq
                 if rank == 0:
                     percent = ((step + 1) / total_steps) * 100
-                    print(f"⏱️ Epoch [{epoch:02d}/{args.epochs-1:02d}] | Progress: {percent:5.1f}% | Flow Loss: {avg_l:.5f}", flush=True)
-                running_loss = 0.0
+                    print(f"⏱️ Epoch [{epoch:02d}/{args.epochs-1:02d}] | Progress: {percent:5.1f}% | "
+                          f"G-Loss: {avg_g:.4f} (Adv: {adv_loss.item():.3f}, HF: {hf_loss.item():.4f}) | "
+                          f"D-Loss: {avg_d:.4f}", flush=True)
+                running_g = 0.0
+                running_d = 0.0
 
-        scheduler.step()
+        scheduler_g.step()
+        scheduler_d.step()
+
         if rank == 0:
             elapsed = time.time() - epoch_start
             print(f"📢 Epoch {epoch:02d} completata in {elapsed:.1f}s ({elapsed/60:.2f} min).\n", flush=True)
@@ -175,8 +224,9 @@ def main():
                 torch.save({
                     'epoch': epoch,
                     'refiner_state_dict': refiner.module.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'loss': total_loss.item(),
+                    'discriminator_state_dict': discriminator.module.state_dict(),
+                    'optimizer_g_state_dict': optimizer_g.state_dict(),
+                    'optimizer_d_state_dict': optimizer_d.state_dict(),
                 }, ckpt_path)
                 print(f"💾 Checkpoint Refiner salvato in: {ckpt_path}\n", flush=True)
 

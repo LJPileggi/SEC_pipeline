@@ -10,7 +10,7 @@ import pandas as pd
 import scipy.stats
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
-src_root = os.path.abspath(os.path.join(current_dir, "..", ".."))
+src_root = os.path.abspath(os.path.join(current_dir, "..", "..", ".."))
 if src_root not in sys.path:
     sys.path.insert(0, src_root)
 
@@ -26,10 +26,9 @@ NUM_QUANTIZERS = int(os.environ.get("NUM_QUANTIZERS", 4))
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="End-to-End Validation: Dual VAE + Mel Refiner")
+    parser = argparse.ArgumentParser(description="End-to-End Validation: Dual VAE + Residual Refiner")
     parser.add_argument("--vae_checkpoint", type=str, default=os.environ.get("LOCAL_VAE_CHECKPOINT", ""))
     parser.add_argument("--refiner_checkpoint", type=str, default=os.environ.get("LOCAL_REFINER_CHECKPOINT", ""))
-    parser.add_argument("--sampling_steps", type=int, default=10)
     parser.add_argument("--samples_per_class", type=int, default=50)
     parser.add_argument("--batch_size", type=int, default=16)
     return parser.parse_args()
@@ -81,18 +80,16 @@ def main():
     octave_vae = OctaveVQVAE(base_channels=64, latent_dim=LATENT_DIM, num_embeddings=NUM_EMBEDDINGS, num_quantizers=NUM_QUANTIZERS, shared_quantizer=mel_vae.quantizer).to(device)
 
     ckpt_vae = torch.load(args.vae_checkpoint, map_location=device)
-    mel_state = {k.replace('module.', ''): v for k, v in ckpt_vae['mel_vae_state_dict'].items()}
-    octave_state = {k.replace('module.', ''): v for k, v in ckpt_vae['octave_vae_state_dict'].items()}
-    mel_vae.load_state_dict(mel_state)
-    octave_vae.load_state_dict(octave_state)
+    mel_vae.load_state_dict({k.replace('module.', ''): v for k, v in ckpt_vae['mel_vae_state_dict'].items()})
+    octave_vae.load_state_dict({k.replace('module.', ''): v for k, v in ckpt_vae['octave_vae_state_dict'].items()})
     mel_vae.eval()
     octave_vae.eval()
 
-    # 2. Caricamento Refiner U-Net
+    # 2. Caricamento Refiner Diretto
     if not args.refiner_checkpoint or not os.path.exists(args.refiner_checkpoint):
         raise FileNotFoundError(f"Checkpoint Refiner non trovato: {args.refiner_checkpoint}")
 
-    refiner = MelRefinerUNet(in_channels=2, out_channels=1, base_channels=32).to(device)
+    refiner = MelRefinerUNet(in_channels=1, out_channels=1, base_channels=32).to(device)
     ckpt_ref = torch.load(args.refiner_checkpoint, map_location=device)
     ref_state = {k.replace('module.', ''): v for k, v in ckpt_ref['refiner_state_dict'].items()}
     refiner.load_state_dict(ref_state)
@@ -121,8 +118,8 @@ def main():
                 _, _, _, z_q_oct, _ = octave_vae(x_oct_pchip)
                 recon_mel_cross_raw = mel_vae.decoder(z_q_oct)
 
-                # Step 2: Refiner Flow Matching ODE Sampling
-                recon_mel_refined = refiner.sample_refined(recon_mel_cross_raw, num_steps=args.sampling_steps)
+                # Step 2: 1-Step Residual Super-Resolution
+                recon_mel_refined = refiner(recon_mel_cross_raw)
 
                 bs = x_0_pristine.shape[0]
                 for b in range(bs):

@@ -11,7 +11,7 @@
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
 
-NUM_EPOCHS=${1:-20}
+NUM_EPOCHS=${1:-25}
 VAE_TARGET_EPOCH=${2:-${VAE_TARGET_EPOCH:-50}}
 
 PROJECT_DIR="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline"

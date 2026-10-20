@@ -12,7 +12,7 @@
 #SBATCH --error=%x_%j.err
 
 VAE_EPOCH=${1:-50}
-REFINER_EPOCH=${2:-20}
+REFINER_EPOCH=${2:-25}
 TASK_MODE=${3:-"both"}
 
 PROJECT_DIR="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline"
