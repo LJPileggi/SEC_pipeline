@@ -36,7 +36,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Conditional Flow Matching Refiner for Cross-Domain Mel")
     parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS)
     parser.add_argument("--lr", type=float, default=2e-4)
-    parser.add_argument("--vae_checkpoint", type=str, default="")
+    parser.add_argument("--vae_checkpoint", type=str, default=os.environ.get("LOCAL_VAE_CHECKPOINT", ""))
     return parser.parse_args()
 
 
@@ -80,15 +80,11 @@ def main():
 
     # Risoluzione checkpoint VAE globale / scratch
     vae_ckpt = args.vae_checkpoint
-    if not vae_ckpt:
-        model_dir = os.environ.get("MODELS_GLOBAL", os.path.join(src_root, ".models", "vae_model"))
-        pts = sorted([f for f in os.listdir(model_dir) if f.startswith("dual_vae_epoch_") and f.endswith(".pt")])
-        if not pts:
-            raise RuntimeError(f"Nessun checkpoint trovato in {model_dir}")
-        vae_ckpt = os.path.join(model_dir, pts[-1])
+    if not vae_ckpt or not os.path.exists(vae_ckpt):
+        raise RuntimeError(f"❌ Checkpoint VAE non fornito o inesistente: {vae_ckpt}")
 
     if rank == 0:
-        print(f"❄️ Caricamento Dual VQ-VAE congelato: {vae_ckpt}", flush=True)
+        print(f"❄️ Caricamento Dual VQ-VAE congelato dal checkpoint mirato: {vae_ckpt}", flush=True)
     mel_vae, octave_vae = load_frozen_vae(device, vae_ckpt)
 
     # Inizializzazione U-Net di raffinamento
