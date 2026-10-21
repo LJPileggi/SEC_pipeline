@@ -10,6 +10,7 @@
 #SBATCH -A IscrC_BrISkite_0
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
+#SBATCH --signal=B:TERM@60
 
 NUM_EPOCHS=${1:-25}
 VAE_TARGET_EPOCH=${2:-${VAE_TARGET_EPOCH:-50}}
@@ -22,7 +23,7 @@ CLAP_BN0_CONSTANTS="$PROJECT_DIR/.clap_weights/clap_bn0_constants.npz"
 DATASEC_GLOBAL="/leonardo_scratch/large/userexternal/$USER/dataSEC"
 MODELS_GLOBAL="$PROJECT_DIR/.models/vae_model"
 
-# Risoluzione del singolo file di checkpoint VAE desiderato (gestione zero-index: epoca 50 -> file _49 o _50)
+# Risoluzione del singolo file di checkpoint VAE desiderato
 TARGET_FILE=""
 VAE_IDX=$((VAE_TARGET_EPOCH - 1))
 if [ -f "$MODELS_GLOBAL/dual_vae_epoch_${VAE_IDX}.pt" ]; then
@@ -40,13 +41,40 @@ mkdir -p "$TEMP_DIR/numba_cache"
 mkdir -p "$TEMP_DIR/single_vae_model"
 mkdir -p "$PROJECT_DIR/.models/refiner_model"
 
+CLEANED_UP=0
+
 cleanup_job_scratch() {
-    trap - SIGTERM SIGINT
-    echo "🧹 Purging temporary scratch space..."
-    rm -rf "$TEMP_DIR"
+    local sig=$1
+    if [ "$CLEANED_UP" -eq 1 ]; then
+        return
+    fi
+    CLEANED_UP=1
+
+    trap - SIGTERM SIGINT SIGHUP EXIT
+    echo -e "\n⚠️ Signal [${sig:-EXIT}] intercettato! Avvio consolidamento I/O..."
+
+    if [ -n "$SRUN_PID" ] && kill -0 "$SRUN_PID" 2>/dev/null; then
+        echo "🛑 Arresto controllato dello step srun (PID: $SRUN_PID)..."
+        kill -SIGTERM "$SRUN_PID" 2>/dev/null
+        sleep 3
+    fi
+
+    # Flush I/O su Lustre per consolidare i checkpoint del refiner già salvati
+    sync
+
+    if [ -d "$TEMP_DIR" ]; then
+        echo "🧹 Rimozione directory temporanea $TEMP_DIR..."
+        rm -rf "$TEMP_DIR"
+    fi
+
+    echo "🏁 Procedura di completamento terminata."
     exit 0
 }
-trap 'cleanup_job_scratch' SIGTERM SIGINT
+
+trap 'cleanup_job_scratch SIGTERM' SIGTERM
+trap 'cleanup_job_scratch SIGINT'  SIGINT
+trap 'cleanup_job_scratch SIGHUP'  SIGHUP
+trap 'cleanup_job_scratch EXIT'    EXIT
 
 echo "=========================================================="
 echo "🎯 Refiner Training Launcher"
@@ -76,6 +104,7 @@ export MASTER_ADDR=$(hostname)
 export MASTER_PORT=$(expr 22000 + ${SLURM_JOB_ID} % 10000)
 
 echo "🚀 Launching Refiner Training on 4 ranks..."
+
 srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \
     singularity exec --nv --no-home \
     --bind "/leonardo_scratch:/leonardo_scratch" \
@@ -84,6 +113,10 @@ srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \
     "$SIF_FILE" \
     python3 src/filterbank_refiner/pipeline/train.py \
         --epochs "$NUM_EPOCHS" \
-        --vae_checkpoint "/tmp_data/single_vae_model/target_dual_vae.pt"
+        --vae_checkpoint "/tmp_data/single_vae_model/target_dual_vae.pt" &
 
-cleanup_job_scratch
+SRUN_PID=$!
+wait "$SRUN_PID"
+SRUN_STATUS=$?
+
+exit $SRUN_STATUS

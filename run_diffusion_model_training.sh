@@ -10,6 +10,7 @@
 #SBATCH -A IscrC_BrISkite_0
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
+#SBATCH --signal=B:TERM@60
 
 START_EPOCH=${1:-0}
 NUM_EPOCHS=${2:-125}
@@ -29,20 +30,46 @@ mkdir -p "$TEMP_DIR/numba_cache"
 mkdir -p "$TEMP_DIR/models/diff_model"
 mkdir -p "$MODELS_GLOBAL"
 
+CLEANED_UP=0
+
 cleanup_job_scratch() {
-    trap - SIGTERM SIGINT
-    echo "⚠️ Settle process triggered. Syncing checkpoints to SCRATCH..."
+    local sig=$1
+    if [ "$CLEANED_UP" -eq 1 ]; then
+        return
+    fi
+    CLEANED_UP=1
+
+    trap - SIGTERM SIGINT SIGHUP EXIT
+    echo -e "\n⚠️ Signal [${sig:-EXIT}] intercettato! Avvio sincronizzazione e pulizia scratch..."
+
+    # Arresto controllato del processo srun se ancora attivo in background
+    if [ -n "$SRUN_PID" ] && kill -0 "$SRUN_PID" 2>/dev/null; then
+        echo "🛑 Arresto controllato dello step srun (PID: $SRUN_PID)..."
+        kill -SIGTERM "$SRUN_PID" 2>/dev/null
+        sleep 3
+    fi
+
+    # Stage-out atomico dei checkpoint della diffusione
+    if [ -d "$TEMP_DIR/models/diff_model" ]; then
+        echo "📦 Stage-out: Sincronizzazione checkpoint diffusione su $MODELS_GLOBAL..."
+        rsync -rlt --ignore-errors "$TEMP_DIR/models/diff_model/" "$MODELS_GLOBAL/"
+        sync
+        echo "✅ Checkpoint diffusione sincronizzati con successo."
+    fi
+
     if [ -d "$TEMP_DIR" ]; then
-        if [ -d "$TEMP_DIR/models/diff_model" ]; then
-            echo "📦 Stage-out: Syncing model checkpoints to $MODELS_GLOBAL..."
-            rsync -rlt "$TEMP_DIR/models/diff_model/" "$MODELS_GLOBAL/"
-        fi
-        echo "🧹 Purging temporary scratch space..."
+        echo "🧹 Rimozione directory temporanea $TEMP_DIR..."
         rm -rf "$TEMP_DIR"
     fi
+
+    echo "🏁 Procedura di uscita completata."
     exit 0
 }
-trap 'cleanup_job_scratch' SIGTERM SIGINT
+
+trap 'cleanup_job_scratch SIGTERM' SIGTERM
+trap 'cleanup_job_scratch SIGINT'  SIGINT
+trap 'cleanup_job_scratch SIGHUP'  SIGHUP
+trap 'cleanup_job_scratch EXIT'    EXIT
 
 echo "=========================================================="
 echo "🎯 Diffusion Training (Guided Cross-Attention):"
@@ -77,6 +104,8 @@ export MASTER_ADDR=$(hostname)
 export MASTER_PORT=$(expr 20000 + ${SLURM_JOB_ID} % 10000)
 
 echo "🚀 Launching Distributed Training on 4 ranks..."
+
+# Esecuzione in background con monitoraggio del PID per intercettare i segnali
 srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \
     singularity exec --nv --no-home \
     --bind "/leonardo_scratch:/leonardo_scratch" \
@@ -85,6 +114,10 @@ srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \
     "$SIF_FILE" \
     python3 src/filterbank_diffusion/pipeline/train.py \
         --start_epoch "$START_EPOCH" \
-        --epochs "$NUM_EPOCHS"
+        --epochs "$NUM_EPOCHS" &
 
-cleanup_job_scratch
+SRUN_PID=$!
+wait "$SRUN_PID"
+SRUN_STATUS=$?
+
+exit $SRUN_STATUS

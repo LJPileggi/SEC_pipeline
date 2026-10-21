@@ -370,15 +370,14 @@ class OctaveVQVAE(nn.Module):
 
 
 # ==============================================================================
-# 3. DISCRIMINATORE PATCHGAN CONDIZIONALE (PROJECTION DISCRIMINATOR)
+# 3. DISCRIMINATORE PATCHGAN CONDIZIONALE SCALATO
 # ==============================================================================
 
 class DiscriminatorWithFeatures(nn.Module):
     """
-    Projection PatchGAN Discriminator (Miyato et al.).
-    Prende in input lo spettrogramma x [B, 1, 64, 1152] e la classe class_idx [B].
-    L'output combina la patch score incondizionata con il prodotto scalare delle feature globali
-    e l'embedding della classe target.
+    Projection PatchGAN Discriminator (Miyato et al.) con scaling numerico stabile.
+    Usa torch.mean spaziale e scaling 1/sqrt(D) sul prodotto scalare per mantenere
+    i logit entro ordini di grandezza compatibili con la Hinge loss (+/- 1.0).
     """
     def __init__(self, in_channels=1, ndf=64, num_classes=22):
         super().__init__()
@@ -398,8 +397,8 @@ class DiscriminatorWithFeatures(nn.Module):
         )
         self.out_conv = nn.Conv2d(ndf * 4, 1, kernel_size=4, stride=1, padding=1)
 
-        # Embedding di classe per il prodotto scalare proiettivo
         self.class_emb = nn.Embedding(num_classes, ndf * 4)
+        nn.init.normal_(self.class_emb.weight, std=0.02)
 
     def forward(self, x, class_idx=None):
         features = []
@@ -412,10 +411,12 @@ class DiscriminatorWithFeatures(nn.Module):
         out = self.out_conv(h)
 
         if class_idx is not None:
-            # Global pooling su h3 e proiezione con l'embedding della classe reale
-            h_pool = torch.sum(h, dim=(2, 3))  # [B, ndf * 4]
-            c_vec = self.class_emb(class_idx)  # [B, ndf * 4]
-            proj_term = torch.sum(h_pool * c_vec, dim=1, keepdim=True)[:, :, None, None]  # [B, 1, 1, 1]
+            # 1. Media spaziale (invece di somma)
+            h_pool = torch.mean(h, dim=(2, 3))  # [B, ndf * 4]
+            c_vec = self.class_emb(class_idx)   # [B, ndf * 4]
+            # 2. Normalizzazione scalare per radice della dimensione
+            scale = 1.0 / (c_vec.shape[-1] ** 0.5)
+            proj_term = (torch.sum(h_pool * c_vec, dim=1, keepdim=True) * scale)[:, :, None, None]
             out = out + proj_term
 
         return out, features

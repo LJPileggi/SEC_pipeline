@@ -31,12 +31,12 @@ LATENT_DIM = 256
 NUM_EMBEDDINGS = 1024
 NUM_QUANTIZERS = 4
 DISC_START_EPOCH = int(os.environ.get("DISC_START_EPOCH", 5))
-DISC_WEIGHT = float(os.environ.get("DISC_WEIGHT", 0.1))
+DISC_WEIGHT = float(os.environ.get("DISC_WEIGHT", 0.05))
 CLS_WEIGHT = float(os.environ.get("CLS_WEIGHT", 1.0))
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Distributed Dual RVQ-GAN Training: Unconditioned Decoder + Class-Supervised Bottleneck & Discriminator")
+    parser = argparse.ArgumentParser(description="Distributed Dual RVQ-GAN Training: Unconditioned Decoder + Class-Supervised Bottleneck & Scaled Discriminator")
     parser.add_argument("--start_epoch", type=int, default=int(os.environ.get("START_EPOCH", 0)))
     parser.add_argument("--epochs", type=int, default=int(os.environ.get("NUM_EPOCHS", DEFAULT_EPOCHS)))
     parser.add_argument("--bottleneck_type", type=str, default=DEFAULT_BOTTLENECK_TYPE)
@@ -109,10 +109,10 @@ def main():
         shared_quantizer=mel_vae.quantizer
     ).to(device)
 
-    # Testa ausiliaria sui token (solo training)
+    # Testa ausiliaria sui token (GAP + GMP)
     aux_cls_head = ClassAuxiliaryHead(latent_dim=latent_dim, num_classes=num_classes).to(device)
 
-    # Projection Discriminator condizionale (solo training)
+    # Projection Discriminator condizionale scalato
     discriminator = DiscriminatorWithFeatures(in_channels=1, ndf=64, num_classes=num_classes).to(device)
 
     gen_params = list(mel_vae.parameters()) + list(octave_vae.parameters()) + list(aux_cls_head.parameters())
@@ -142,8 +142,10 @@ def main():
                 discriminator.load_state_dict(checkpoint['discriminator_state_dict'], strict=False)
             if 'aux_cls_head_state_dict' in checkpoint:
                 aux_cls_head.load_state_dict(checkpoint['aux_cls_head_state_dict'])
-            optimizer_g.load_state_dict(checkpoint['optimizer_state_dict'])
-            scheduler_g.load_state_dict(checkpoint['scheduler_state_dict'])
+            if 'optimizer_state_dict' in checkpoint:
+                optimizer_g.load_state_dict(checkpoint['optimizer_state_dict'])
+            if 'scheduler_state_dict' in checkpoint:
+                scheduler_g.load_state_dict(checkpoint['scheduler_state_dict'])
         else:
             if rank == 0:
                 print(f"❌ [CRITICAL] Checkpoint non trovato: {ckpt_candidate}", flush=True)
@@ -163,11 +165,11 @@ def main():
         print("==========================================================", flush=True)
         print(f"🏁 Dual RVQ-GAN Training Initialized (DDP, GPUs: {world_size})", flush=True)
         print(f"   • MelDecoder: Incondizionato (Pure Latent Decoding)", flush=True)
-        print(f"   • Discriminatore: Projection Discriminator Condizionale su Classe", flush=True)
-        print(f"   • Supervisione Semantica Token: GAP+GMP Auxiliary Head (Weight: {args.cls_weight})", flush=True)
+        print(f"   • Discriminatore: Scaled Projection Discriminator (Hinge target ~1.0)", flush=True)
+        print(f"   • Token Bottleneck Supervision: GAP+GMP Auxiliary Head (Weight: {args.cls_weight})", flush=True)
         print(f"   • Alignment: Continuous Point-wise Cosine Distance (Weight: 3.0)", flush=True)
         print(f"   • MelDecoder Protection: Frozen during cross-reconstruction", flush=True)
-        print(f"   • Adversarial Warm-up: Da Epoca {DISC_START_EPOCH}", flush=True)
+        print(f"   • Adversarial Warm-up: Da Epoca {DISC_START_EPOCH} (con Soft Ramp-up)", flush=True)
         print("==========================================================\n", flush=True)
 
     optimizer_g.zero_grad(set_to_none=True)
@@ -186,6 +188,12 @@ def main():
         step_start_time = time.time()
 
         use_discriminator = (epoch >= DISC_START_EPOCH)
+        # Rampa lineare di 3 epoche all'attivazione del discriminatore
+        if use_discriminator:
+            ramp_factor = min(1.0, float(epoch - DISC_START_EPOCH + 1) / 3.0)
+            cur_disc_weight = DISC_WEIGHT * ramp_factor
+        else:
+            cur_disc_weight = 0.0
 
         for step, (raw_audio, class_labels) in enumerate(dataloader):
             raw_audio = raw_audio.to(device, non_blocking=True)
@@ -204,7 +212,7 @@ def main():
             # 1. PASSO GENERATORE
             # ------------------------------------------------------------------
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                # 1a. Mel Branch (Decoder incondizionato)
+                # 1a. Mel Branch (incondizionato)
                 recon_mel, vq_loss_mel, z_e_mel, z_q_mel, indices_mel = mel_vae(x_mel_target)
 
                 # 1b. Octave Branch
@@ -241,7 +249,6 @@ def main():
                 loss_fm_total = torch.tensor(0.0, device=device)
 
                 if use_discriminator:
-                    # Il discriminatore viene interrogato fornendogli la classe reale del batch
                     pred_fake_mel, feats_fake_mel = discriminator(recon_mel, class_idx=class_labels)
                     pred_fake_cross, feats_fake_cross = discriminator(cross_mel_recon, class_idx=class_labels)
 
@@ -256,7 +263,7 @@ def main():
                     loss_adv_cross = -torch.mean(pred_fake_cross)
                     loss_adv_total = 0.5 * (loss_adv_mel + loss_adv_cross)
 
-                    loss_g_total = loss_g_base + (0.5 * loss_fm_total) + (DISC_WEIGHT * loss_adv_total)
+                    loss_g_total = loss_g_base + (0.5 * loss_fm_total) + (cur_disc_weight * loss_adv_total)
                 else:
                     loss_g_total = loss_g_base
 
@@ -265,7 +272,7 @@ def main():
             loss_g_scaled.backward()
 
             # ------------------------------------------------------------------
-            # 2. PASSO DISCRIMINATORE (CONDIZIONALE SU CLASSE)
+            # 2. PASSO DISCRIMINATORE
             # ------------------------------------------------------------------
             loss_d_total = torch.tensor(0.0, device=device)
             if use_discriminator:
@@ -310,8 +317,9 @@ def main():
                     elapsed = time.time() - step_start_time
                     percent = ((step + 1) / total_steps) * 100
                     avg_g = running_loss_g / print_freq
+                    d_val = loss_d_total.item() if use_discriminator else 0.0
                     print(f" ⏱️  Epoch [{epoch:03d}/{end_epoch-1:03d}] | Progress: {percent:5.1f}% | "
-                          f"G-Loss: {avg_g:.4f} | D-Loss: {loss_d_total.item():.4f} | "
+                          f"G-Loss: {avg_g:.4f} | D-Loss: {d_val:.4f} (W: {cur_disc_weight:.3f}) | "
                           f"ClsLoss: {loss_cls.item():.3f} (Acc Mel: {acc_mel:.1f}%, Oct: {acc_oct:.1f}%) | "
                           f"L1 Token Match: {token_match_l1:4.1f}% | {elapsed:.1f}s", flush=True)
                 running_loss_g = 0.0

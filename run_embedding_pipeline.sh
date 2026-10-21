@@ -54,6 +54,7 @@ run_slurm() {
 #SBATCH -p boost_usr_prod
 #SBATCH -A IscrC_BrISkite_0
 #SBATCH --output=%x_%j.out
+#SBATCH --signal=B:TERM@60
 
 export TEMP_DIR="/leonardo_scratch/large/userexternal/\$USER/tmp_job_\$SLURM_JOB_ID"
 TARGET_GLOBAL="$FINAL_DEST"
@@ -67,10 +68,24 @@ mkdir -p "\$TEMP_DIR/work_dir/refiner_model"
 mkdir -p "\$TEMP_DIR/roberta-base"
 mkdir -p "\$TEMP_DIR/numba_cache"
 
+CLEANED_UP=0
+
 finalize_and_cleanup() {
-    trap - SIGTERM SIGINT
-    echo "⚠️ Signal caught! Settling I/O..."
-    sleep 5
+    local sig=\$1
+    if [ "\$CLEANED_UP" -eq 1 ]; then
+        return
+    fi
+    CLEANED_UP=1
+
+    trap - SIGTERM SIGINT SIGHUP EXIT
+    echo -e "\n⚠️ Signal [\${sig:-EXIT}] intercettato! Avvio consolidamento I/O..."
+
+    if [ -n "\$SRUN_PID" ] && kill -0 "\$SRUN_PID" 2>/dev/null; then
+        echo "🛑 Arresto controllato del worker srun (PID: \$SRUN_PID)..."
+        kill -SIGTERM "\$SRUN_PID" 2>/dev/null
+        sleep 3
+    fi
+
     if [ -d "\$TEMP_DIR" ]; then
         echo "🔗 Merging logs & Joining HDF5..."
         singularity exec --no-home --bind "\$TEMP_DIR:/tmp_data" --bind "\$(pwd):/app" --pwd "/app" "$SIF_FILE" \\
@@ -78,14 +93,22 @@ finalize_and_cleanup() {
         singularity exec --nv --no-home --bind "/leonardo_scratch:/leonardo_scratch" --bind "\$TEMP_DIR:/tmp_data" \\
             --bind "\$(pwd):/app" --pwd "/app" "$SIF_FILE" \\
             python3 scripts/join_hdf5.py --config_file "$CONFIG_FILE" --n_octave "$N_OCTAVE" --audio_format "$AUDIO_FORMAT"
-        echo "📦 Stage-out..."
+        
+        echo "📦 Stage-out: Sincronizzazione embedding su Lustre..."
         mkdir -p "\$TARGET_GLOBAL"
-        rsync -rlt "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/$target_folder/" "\$TARGET_GLOBAL/"
+        rsync -rlt --ignore-errors "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/$target_folder/" "\$TARGET_GLOBAL/"
+        sync
+        echo "🧹 Rimozione scratch directory temporanea..."
         rm -rf "\$TEMP_DIR"
     fi
+    echo "🏁 Consolidamento completato con successo."
     exit 0
 }
-trap 'finalize_and_cleanup' SIGTERM SIGINT
+
+trap 'finalize_and_cleanup SIGTERM' SIGTERM
+trap 'finalize_and_cleanup SIGINT'  SIGINT
+trap 'finalize_and_cleanup SIGHUP'  SIGHUP
+trap 'finalize_and_cleanup EXIT'    EXIT
 
 echo "📦 Stage-in CLAP weights and RAW datasets..."
 cp "$CLAP_SCRATCH_WEIGHTS" "\$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth"
@@ -94,7 +117,7 @@ cp -r "$ROBERTA_PATH/." "\$TEMP_DIR/roberta-base/"
 [ -d "\$TARGET_GLOBAL" ] && cp -r "\$TARGET_GLOBAL/." "\$TEMP_DIR/dataSEC/PREPROCESSED_DATASET/$AUDIO_FORMAT/$target_folder/"
 cp "$DATASEC_GLOBAL/RAW_DATASET/raw_$AUDIO_FORMAT"/*.h5 "\$TEMP_DIR/dataSEC/RAW_DATASET/raw_$AUDIO_FORMAT/" 2>/dev/null
 
-# Stage-in selettivo del modello generativo
+# Stage-in selettivo dei pesi generativi
 if [ "$GENERATIVE_BACKBONE" = "vae" ] || [ "$GENERATIVE_BACKBONE" = "vae_refiner" ]; then
     export VAE_TARGET_EPOCH=$VAE_TARGET_EPOCH
     VAE_ZERO_IDX=\$(( VAE_TARGET_EPOCH - 1 ))
@@ -162,9 +185,13 @@ echo "🚀 Launching Embedding Extraction on 4 GPUs (Backbone: $GENERATIVE_BACKB
 srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \\
     singularity exec --nv --no-home --bind "/leonardo_scratch:/leonardo_scratch" --bind "\$TEMP_DIR:/tmp_data" \\
     --bind "\$(pwd):/app" --pwd "/app" "$SIF_FILE" \\
-    python3 scripts/get_clap_embeddings.py --config_file "$CONFIG_FILE" --n_octave "$N_OCTAVE" --audio_format "$AUDIO_FORMAT"
+    python3 scripts/get_clap_embeddings.py --config_file "$CONFIG_FILE" --n_octave "$N_OCTAVE" --audio_format "$AUDIO_FORMAT" &
 
-finalize_and_cleanup
+SRUN_PID=\$!
+wait "\$SRUN_PID"
+SRUN_STATUS=\$?
+
+exit \$SRUN_STATUS
 EOF
     chmod +x "$script"
     sbatch "$script"

@@ -10,6 +10,7 @@
 #SBATCH -A IscrC_BrISkite_0
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
+#SBATCH --signal=B:TERM@60
 
 START_EPOCH=${1:-0}
 NUM_EPOCHS=${2:-50}
@@ -30,20 +31,52 @@ mkdir -p "$TEMP_DIR/numba_cache"
 mkdir -p "$TEMP_DIR/models/vae_model"
 mkdir -p "$MODELS_GLOBAL"
 
+# Variabile per evitare esecuzioni ricorsive o doppie del cleanup
+CLEANED_UP=0
+
 cleanup_job_scratch() {
-    trap - SIGTERM SIGINT
-    echo "⚠️ Settle process triggered. Syncing checkpoints to SCRATCH..."
+    local sig=$1
+    if [ "$CLEANED_UP" -eq 1 ]; then
+        return
+    fi
+    CLEANED_UP=1
+    
+    # Rimuoviamo i trap per evitare loop durante l'uscita
+    trap - SIGTERM SIGINT SIGHUP EXIT
+    
+    echo -e "\n⚠️ Signal [${sig:-EXIT}] intercettato! Avvio procedura di salvataggio e stage-out..."
+    
+    # 1. Se il processo srun è ancora in background, fermalo con grazia
+    if [ -n "$SRUN_PID" ] && kill -0 "$SRUN_PID" 2>/dev/null; then
+        echo "🛑 Arresto controllato dello step srun (PID: $SRUN_PID)..."
+        kill -SIGTERM "$SRUN_PID" 2>/dev/null
+        # Breve attesa per permettere a Singularity di liberare le risorse I/O
+        sleep 3
+    fi
+
+    # 2. Stage-out prioritario dei checkpoint generati prima di toccare la cartella
+    if [ -d "$TEMP_DIR/models/vae_model" ]; then
+        echo "📦 Stage-out: Sincronizzazione atomica dei checkpoint su $MODELS_GLOBAL..."
+        rsync -rlt --ignore-errors "$TEMP_DIR/models/vae_model/" "$MODELS_GLOBAL/"
+        sync
+        echo "✅ Checkpoint salvati con successo in $MODELS_GLOBAL."
+    fi
+
+    # 3. Rimozione della cartella temporanea locale
     if [ -d "$TEMP_DIR" ]; then
-        if [ -d "$TEMP_DIR/models/vae_model" ]; then
-            echo "📦 Stage-out: Syncing VAE checkpoints to $MODELS_GLOBAL..."
-            rsync -rlt "$TEMP_DIR/models/vae_model/" "$MODELS_GLOBAL/"
-        fi
-        echo "🧹 Purging temporary scratch space..."
+        echo "🧹 Rimozione directory temporanea $TEMP_DIR..."
         rm -rf "$TEMP_DIR"
     fi
+
+    echo "🏁 Procedura di uscita completata."
     exit 0
 }
-trap 'cleanup_job_scratch' SIGTERM SIGINT
+
+# Trap attivo su tutti i segnali di stop inviati da scancel o timeout Slurm
+trap 'cleanup_job_scratch SIGTERM' SIGTERM
+trap 'cleanup_job_scratch SIGINT'  SIGINT
+trap 'cleanup_job_scratch SIGHUP'  SIGHUP
+trap 'cleanup_job_scratch EXIT'    EXIT
 
 echo "=========================================================="
 echo "🎯 Dual-VAE Training Config:"
@@ -79,6 +112,8 @@ export MASTER_ADDR=$(hostname)
 export MASTER_PORT=$(expr 20000 + ${SLURM_JOB_ID} % 10000)
 
 echo "🚀 Launching Distributed Training on 4 ranks..."
+
+# Esecuzione in background con cattura del PID per non mascherare i segnali
 srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \
     singularity exec --nv --no-home \
     --bind "/leonardo_scratch:/leonardo_scratch" \
@@ -88,6 +123,11 @@ srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \
     python3 src/filterbank_vae/pipeline/train.py \
         --start_epoch "$START_EPOCH" \
         --epochs "$NUM_EPOCHS" \
-        --bottleneck_type "$BOTTLENECK_TYPE"
+        --bottleneck_type "$BOTTLENECK_TYPE" &
 
-cleanup_job_scratch
+SRUN_PID=$!
+wait "$SRUN_PID"
+SRUN_STATUS=$?
+
+# Il cleanup finale su EXIT si occuperà automaticamente dello stage-out
+exit $SRUN_STATUS
