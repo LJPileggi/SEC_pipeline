@@ -5,11 +5,30 @@ import torch.nn.functional as F
 DEFAULT_BOTTLENECK_TYPE = "rvq_2d"
 
 
+class ClassAuxiliaryHead(nn.Module):
+    """
+    Testa ausiliaria di supervisione semantica sul collo di bottiglia discreto z_q [B, D, 4, 72].
+    Combina Global Average Pooling (GAP) e Global Max Pooling (GMP).
+    Attiva solo in fase di addestramento per separare lo spazio dei token.
+    """
+    def __init__(self, latent_dim=256, num_classes=22, dropout=0.1):
+        super().__init__()
+        self.classifier = nn.Sequential(
+            nn.Dropout(p=dropout),
+            nn.Linear(latent_dim * 2, latent_dim),
+            nn.SiLU(),
+            nn.Dropout(p=dropout),
+            nn.Linear(latent_dim, num_classes)
+        )
+
+    def forward(self, z_q):
+        gap = torch.mean(z_q, dim=(2, 3))  # [B, D]
+        gmp = torch.amax(z_q, dim=(2, 3))  # [B, D]
+        feat = torch.cat([gap, gmp], dim=1)  # [B, 2D]
+        return self.classifier(feat)
+
+
 class AttentionBlock(nn.Module):
-    """
-    Multi-Head Self-Attention leggera per correlare armoniche distanti
-    e dipendenze temporali globali a bassa risoluzione.
-    """
     def __init__(self, channels, num_heads=4):
         super().__init__()
         self.channels = channels
@@ -27,9 +46,6 @@ class AttentionBlock(nn.Module):
 
 
 class ResBlock(nn.Module):
-    """
-    Blocco residuo convoluzionale con GroupNorm e SiLU.
-    """
     def __init__(self, in_channels, out_channels):
         super().__init__()
         self.norm1 = nn.GroupNorm(num_groups=min(32, in_channels // 4), num_channels=in_channels)
@@ -64,15 +80,6 @@ class VectorQuantizerEMA(nn.Module):
         self.register_buffer("ema_cluster_size", torch.ones(num_embeddings))
         self.register_buffer("ema_w", embedding.clone())
 
-    def get_logits(self, inputs, temperature=1.0):
-        """Restituisce i logits / cosine similarities normalizzate gestendo l'autocast."""
-        inputs_permuted = inputs.permute(0, 2, 3, 1).contiguous()
-        flat_input = inputs_permuted.view(-1, self.embedding_dim)
-        flat_input_norm = F.normalize(flat_input, p=2, dim=-1)
-        embedding_norm = F.normalize(self.embedding.to(dtype=flat_input.dtype), p=2, dim=0)
-        logits = torch.matmul(flat_input_norm, embedding_norm) / temperature
-        return logits
-
     def forward(self, inputs, update_ema=True):
         inputs_permuted = inputs.permute(0, 2, 3, 1).contiguous()
         flat_input = inputs_permuted.view(-1, self.embedding_dim)
@@ -92,7 +99,6 @@ class VectorQuantizerEMA(nn.Module):
 
         quantized = torch.matmul(encodings, self.embedding.to(dtype=flat_input.dtype).t()).view(inputs_permuted.shape)
 
-        # L'aggiornamento EMA del vocabolario avviene SOLO se update_ema=True (ramo Mel)
         if self.training and update_ema:
             target_dtype = self.ema_w.dtype
             flat_input_fp32 = flat_input.to(dtype=target_dtype)
@@ -177,7 +183,7 @@ class ResidualVectorQuantizerEMA(nn.Module):
 
 
 # ==============================================================================
-# 1. RAMO MEL VQ-VAE (Input: [B, 1, 64, 1152])
+# 1. RAMO MEL VQ-VAE (Input: [B, 1, 64, 1152]) - Decoder Incondizionato
 # ==============================================================================
 
 class MelEncoder(nn.Module):
@@ -211,6 +217,7 @@ class MelEncoder(nn.Module):
 
 
 class MelDecoder(nn.Module):
+    """Decoder Mel puramente incondizionato: riceve unicamente z_q [B, D, 4, 72]."""
     def __init__(self, out_channels=1, base_channels=64, latent_dim=256):
         super().__init__()
         self.proj_in = nn.Conv2d(latent_dim, base_channels * 4, kernel_size=1)
@@ -363,11 +370,17 @@ class OctaveVQVAE(nn.Module):
 
 
 # ==============================================================================
-# 3. DISCRIMINATORE PATCHGAN CON FEATURE EXTRACTION
+# 3. DISCRIMINATORE PATCHGAN CONDIZIONALE (PROJECTION DISCRIMINATOR)
 # ==============================================================================
 
 class DiscriminatorWithFeatures(nn.Module):
-    def __init__(self, in_channels=1, ndf=64):
+    """
+    Projection PatchGAN Discriminator (Miyato et al.).
+    Prende in input lo spettrogramma x [B, 1, 64, 1152] e la classe class_idx [B].
+    L'output combina la patch score incondizionata con il prodotto scalare delle feature globali
+    e l'embedding della classe target.
+    """
+    def __init__(self, in_channels=1, ndf=64, num_classes=22):
         super().__init__()
         self.block1 = nn.Sequential(
             nn.Conv2d(in_channels, ndf, kernel_size=4, stride=2, padding=1),
@@ -385,7 +398,10 @@ class DiscriminatorWithFeatures(nn.Module):
         )
         self.out_conv = nn.Conv2d(ndf * 4, 1, kernel_size=4, stride=1, padding=1)
 
-    def forward(self, x):
+        # Embedding di classe per il prodotto scalare proiettivo
+        self.class_emb = nn.Embedding(num_classes, ndf * 4)
+
+    def forward(self, x, class_idx=None):
         features = []
         h = self.block1(x)
         features.append(h)
@@ -394,6 +410,14 @@ class DiscriminatorWithFeatures(nn.Module):
         h = self.block3(h)
         features.append(h)
         out = self.out_conv(h)
+
+        if class_idx is not None:
+            # Global pooling su h3 e proiezione con l'embedding della classe reale
+            h_pool = torch.sum(h, dim=(2, 3))  # [B, ndf * 4]
+            c_vec = self.class_emb(class_idx)  # [B, ndf * 4]
+            proj_term = torch.sum(h_pool * c_vec, dim=1, keepdim=True)[:, :, None, None]  # [B, 1, 1, 1]
+            out = out + proj_term
+
         return out, features
 
 

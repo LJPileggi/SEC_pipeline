@@ -22,7 +22,7 @@ if src_root not in sys.path:
 from utils import setup_environ_vars, setup_distributed_environment, cleanup_distributed_environment, get_config_from_yaml
 from filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
 from filterbank_vae.pipeline.spectral import OnlineSpectrogramPipeline, AcousticStructuralLoss, feature_matching_loss
-from filterbank_vae.models.vae import MelVQVAE, OctaveVQVAE, DiscriminatorWithFeatures, DEFAULT_BOTTLENECK_TYPE
+from filterbank_vae.models.vae import MelVQVAE, OctaveVQVAE, DiscriminatorWithFeatures, ClassAuxiliaryHead, DEFAULT_BOTTLENECK_TYPE
 
 DEFAULT_EPOCHS = 50
 LOCAL_BATCH_SIZE = 8
@@ -32,23 +32,25 @@ NUM_EMBEDDINGS = 1024
 NUM_QUANTIZERS = 4
 DISC_START_EPOCH = int(os.environ.get("DISC_START_EPOCH", 5))
 DISC_WEIGHT = float(os.environ.get("DISC_WEIGHT", 0.1))
+CLS_WEIGHT = float(os.environ.get("CLS_WEIGHT", 1.0))
+
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Distributed Dual RVQ-GAN Cross-Domain Training")
+    parser = argparse.ArgumentParser(description="Distributed Dual RVQ-GAN Training: Unconditioned Decoder + Class-Supervised Bottleneck & Discriminator")
     parser.add_argument("--start_epoch", type=int, default=int(os.environ.get("START_EPOCH", 0)))
     parser.add_argument("--epochs", type=int, default=int(os.environ.get("NUM_EPOCHS", DEFAULT_EPOCHS)))
     parser.add_argument("--bottleneck_type", type=str, default=DEFAULT_BOTTLENECK_TYPE)
     parser.add_argument("--latent_dim", type=int, default=LATENT_DIM)
     parser.add_argument("--num_embeddings", type=int, default=NUM_EMBEDDINGS)
     parser.add_argument("--num_quantizers", type=int, default=NUM_QUANTIZERS)
+    parser.add_argument("--cls_weight", type=float, default=CLS_WEIGHT)
     return parser.parse_args()
 
+
 def compute_cosine_alignment_loss(z_e_oct, z_e_mel):
-    """
-    Calcola la Cosine Distance punto a punto tra le feature continue dei due encoder.
-    """
-    cos_sim = F.cosine_similarity(z_e_oct, z_e_mel, dim=1)  # [B, H, W]
+    cos_sim = F.cosine_similarity(z_e_oct, z_e_mel, dim=1)
     return torch.mean(1.0 - cos_sim)
+
 
 def compute_codebook_diagnostics(indices, num_embeddings):
     first_level = indices[:, 0, :, :].flatten()
@@ -59,6 +61,7 @@ def compute_codebook_diagnostics(indices, num_embeddings):
     avg_probs = encodings.mean(dim=0)
     perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-10))).item()
     return unique_count, pct_usage, perplexity
+
 
 def main():
     args = parse_args()
@@ -73,6 +76,7 @@ def main():
     device = setup_distributed_environment(rank, world_size, slurm=True)
 
     classes_list, _, _, _, sampling_rate, _, _, seed, _, _, _ = get_config_from_yaml("config0.yaml")
+    num_classes = len(classes_list)
 
     local_seed = seed + rank
     torch.manual_seed(local_seed)
@@ -89,6 +93,7 @@ def main():
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=seed)
     dataloader = DataLoader(dataset, batch_size=LOCAL_BATCH_SIZE, sampler=sampler, num_workers=4, pin_memory=True, drop_last=True)
 
+    # VAE puro incondizionato
     mel_vae = MelVQVAE(
         base_channels=64,
         latent_dim=latent_dim,
@@ -104,9 +109,13 @@ def main():
         shared_quantizer=mel_vae.quantizer
     ).to(device)
 
-    discriminator = DiscriminatorWithFeatures(in_channels=1, ndf=64).to(device)
+    # Testa ausiliaria sui token (solo training)
+    aux_cls_head = ClassAuxiliaryHead(latent_dim=latent_dim, num_classes=num_classes).to(device)
 
-    gen_params = list(mel_vae.parameters()) + list(octave_vae.parameters())
+    # Projection Discriminator condizionale (solo training)
+    discriminator = DiscriminatorWithFeatures(in_channels=1, ndf=64, num_classes=num_classes).to(device)
+
+    gen_params = list(mel_vae.parameters()) + list(octave_vae.parameters()) + list(aux_cls_head.parameters())
     optimizer_g = torch.optim.AdamW(gen_params, lr=2e-4, betas=(0.5, 0.9), weight_decay=1e-5)
     scheduler_g = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_g, T_max=end_epoch, eta_min=1e-6)
 
@@ -127,10 +136,12 @@ def main():
             if rank == 0:
                 print(f"🔄 [RESUMPTION] Caricamento checkpoint Dual RVQ-GAN: {ckpt_candidate}", flush=True)
             checkpoint = torch.load(ckpt_candidate, map_location=device)
-            mel_vae.load_state_dict(checkpoint['mel_vae_state_dict'])
-            octave_vae.load_state_dict(checkpoint['octave_vae_state_dict'])
+            mel_vae.load_state_dict(checkpoint['mel_vae_state_dict'], strict=False)
+            octave_vae.load_state_dict(checkpoint['octave_vae_state_dict'], strict=False)
             if 'discriminator_state_dict' in checkpoint:
-                discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
+                discriminator.load_state_dict(checkpoint['discriminator_state_dict'], strict=False)
+            if 'aux_cls_head_state_dict' in checkpoint:
+                aux_cls_head.load_state_dict(checkpoint['aux_cls_head_state_dict'])
             optimizer_g.load_state_dict(checkpoint['optimizer_state_dict'])
             scheduler_g.load_state_dict(checkpoint['scheduler_state_dict'])
         else:
@@ -138,25 +149,10 @@ def main():
                 print(f"❌ [CRITICAL] Checkpoint non trovato: {ckpt_candidate}", flush=True)
             sys.exit(1)
 
-    mel_vae = nn.parallel.DistributedDataParallel(
-        mel_vae,
-        device_ids=[rank],
-        output_device=rank,
-        find_unused_parameters=True
-    )
-    octave_vae = nn.parallel.DistributedDataParallel(
-        octave_vae,
-        device_ids=[rank],
-        output_device=rank,
-        find_unused_parameters=True
-    )
-    discriminator = nn.parallel.DistributedDataParallel(
-        discriminator,
-        device_ids=[rank],
-        output_device=rank,
-        find_unused_parameters=True,
-        broadcast_buffers=False
-    )
+    mel_vae = nn.parallel.DistributedDataParallel(mel_vae, device_ids=[rank], output_device=rank, find_unused_parameters=True)
+    octave_vae = nn.parallel.DistributedDataParallel(octave_vae, device_ids=[rank], output_device=rank, find_unused_parameters=True)
+    aux_cls_head = nn.parallel.DistributedDataParallel(aux_cls_head, device_ids=[rank], output_device=rank)
+    discriminator = nn.parallel.DistributedDataParallel(discriminator, device_ids=[rank], output_device=rank, find_unused_parameters=True, broadcast_buffers=False)
 
     acoustic_loss_fn = AcousticStructuralLoss(alpha=1.0, beta=0.5).to(device)
 
@@ -166,7 +162,9 @@ def main():
     if rank == 0:
         print("==========================================================", flush=True)
         print(f"🏁 Dual RVQ-GAN Training Initialized (DDP, GPUs: {world_size})", flush=True)
-        print(f"   • RVQ Stages: {num_quantizers} | Embeddings per stage: {num_embeddings}", flush=True)
+        print(f"   • MelDecoder: Incondizionato (Pure Latent Decoding)", flush=True)
+        print(f"   • Discriminatore: Projection Discriminator Condizionale su Classe", flush=True)
+        print(f"   • Supervisione Semantica Token: GAP+GMP Auxiliary Head (Weight: {args.cls_weight})", flush=True)
         print(f"   • Alignment: Continuous Point-wise Cosine Distance (Weight: 3.0)", flush=True)
         print(f"   • MelDecoder Protection: Frozen during cross-reconstruction", flush=True)
         print(f"   • Adversarial Warm-up: Da Epoca {DISC_START_EPOCH}", flush=True)
@@ -178,6 +176,7 @@ def main():
     for epoch in range(start_epoch, end_epoch):
         mel_vae.train()
         octave_vae.train()
+        aux_cls_head.train()
         discriminator.train()
         sampler.set_epoch(epoch)
 
@@ -188,8 +187,9 @@ def main():
 
         use_discriminator = (epoch >= DISC_START_EPOCH)
 
-        for step, (raw_audio, _) in enumerate(dataloader):
+        for step, (raw_audio, class_labels) in enumerate(dataloader):
             raw_audio = raw_audio.to(device, non_blocking=True)
+            class_labels = class_labels.to(device, non_blocking=True)
 
             if epoch < 10:
                 fraction_id = np.random.choice([6, 12, 16])
@@ -204,20 +204,25 @@ def main():
             # 1. PASSO GENERATORE
             # ------------------------------------------------------------------
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                # 1a. Mel Branch (aggiorna autonomamente il codebook EMA)
+                # 1a. Mel Branch (Decoder incondizionato)
                 recon_mel, vq_loss_mel, z_e_mel, z_q_mel, indices_mel = mel_vae(x_mel_target)
 
-                # 1b. Octave Branch (inferenza pura e quantizzazione read-only su EMA)
+                # 1b. Octave Branch
                 recon_oct, vq_loss_oct, z_e_oct, z_q_oct, indices_oct = octave_vae(x_octave_pchip)
 
                 loss_rec_mel = acoustic_loss_fn(recon_mel, x_mel_target)
                 loss_rec_oct = F.l1_loss(recon_oct, x_octave_pchip)
                 loss_vq = vq_loss_mel + vq_loss_oct
 
-                # 1c. Allineamento continuo tra gli spazi latenti (spinge z_e_oct su z_e_mel)
+                # 1c. Supervisione Semantica dei Token (GAP + GMP Head)
+                logits_mel = aux_cls_head(z_q_mel)
+                logits_oct = aux_cls_head(z_q_oct)
+                loss_cls = 0.5 * (F.cross_entropy(logits_mel, class_labels) + F.cross_entropy(logits_oct, class_labels))
+
+                # 1d. Allineamento continuo degli spazi latenti
                 loss_align_cos = compute_cosine_alignment_loss(z_e_oct, z_e_mel.detach())
 
-                # 1d. Cross-Domain Reconstruction con protezione per MelDecoder
+                # 1e. Cross-Domain Reconstruction incondizionata (MelDecoder protetto)
                 for param in mel_vae.module.decoder.parameters():
                     param.requires_grad = False
                 cross_mel_recon = mel_vae.module.decoder(z_q_oct)
@@ -226,9 +231,9 @@ def main():
 
                 loss_cross = acoustic_loss_fn(cross_mel_recon, x_mel_target)
 
-                # Loss combinata: allineamento continuo + ricostruzioni senza gradienti duri
                 loss_g_base = (loss_rec_mel + loss_rec_oct) + \
                               loss_vq + \
+                              (args.cls_weight * loss_cls) + \
                               3.0 * loss_align_cos + \
                               1.0 * loss_cross
 
@@ -236,11 +241,12 @@ def main():
                 loss_fm_total = torch.tensor(0.0, device=device)
 
                 if use_discriminator:
-                    pred_fake_mel, feats_fake_mel = discriminator(recon_mel)
-                    pred_fake_cross, feats_fake_cross = discriminator(cross_mel_recon)
+                    # Il discriminatore viene interrogato fornendogli la classe reale del batch
+                    pred_fake_mel, feats_fake_mel = discriminator(recon_mel, class_idx=class_labels)
+                    pred_fake_cross, feats_fake_cross = discriminator(cross_mel_recon, class_idx=class_labels)
 
                     with torch.no_grad():
-                        _, feats_real_mel = discriminator(x_mel_target)
+                        _, feats_real_mel = discriminator(x_mel_target, class_idx=class_labels)
 
                     loss_fm_mel = feature_matching_loss(feats_real_mel, feats_fake_mel)
                     loss_fm_cross = feature_matching_loss(feats_real_mel, feats_fake_cross)
@@ -259,14 +265,14 @@ def main():
             loss_g_scaled.backward()
 
             # ------------------------------------------------------------------
-            # 2. PASSO DISCRIMINATORE
+            # 2. PASSO DISCRIMINATORE (CONDIZIONALE SU CLASSE)
             # ------------------------------------------------------------------
             loss_d_total = torch.tensor(0.0, device=device)
             if use_discriminator:
                 with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                    pred_real, _ = discriminator(x_mel_target)
-                    pred_fake_mel, _ = discriminator(recon_mel.detach())
-                    pred_fake_cross, _ = discriminator(cross_mel_recon.detach())
+                    pred_real, _ = discriminator(x_mel_target, class_idx=class_labels)
+                    pred_fake_mel, _ = discriminator(recon_mel.detach(), class_idx=class_labels)
+                    pred_fake_cross, _ = discriminator(cross_mel_recon.detach(), class_idx=class_labels)
 
                     loss_d_real = torch.mean(F.relu(1.0 - pred_real))
                     loss_d_fake = 0.5 * (torch.mean(F.relu(1.0 + pred_fake_mel)) + torch.mean(F.relu(1.0 + pred_fake_cross)))
@@ -297,6 +303,8 @@ def main():
             if (step + 1) % print_freq == 0 or (step + 1) == total_steps:
                 unique_c, pct_u, perp = compute_codebook_diagnostics(indices_mel, num_embeddings)
                 token_match_l1 = (indices_mel[:, 0] == indices_oct[:, 0]).float().mean().item() * 100.0
+                acc_mel = (logits_mel.argmax(dim=-1) == class_labels).float().mean().item() * 100.0
+                acc_oct = (logits_oct.argmax(dim=-1) == class_labels).float().mean().item() * 100.0
 
                 if rank == 0:
                     elapsed = time.time() - step_start_time
@@ -304,9 +312,8 @@ def main():
                     avg_g = running_loss_g / print_freq
                     print(f" ⏱️  Epoch [{epoch:03d}/{end_epoch-1:03d}] | Progress: {percent:5.1f}% | "
                           f"G-Loss: {avg_g:.4f} | D-Loss: {loss_d_total.item():.4f} | "
-                          f"CosDist: {loss_align_cos.item():.4f} | "
-                          f"L1 Token Match: {token_match_l1:4.1f}% | "
-                          f"Tokens L1: {unique_c}/{num_embeddings} ({pct_u:.1f}%) | {elapsed:.1f}s", flush=True)
+                          f"ClsLoss: {loss_cls.item():.3f} (Acc Mel: {acc_mel:.1f}%, Oct: {acc_oct:.1f}%) | "
+                          f"L1 Token Match: {token_match_l1:4.1f}% | {elapsed:.1f}s", flush=True)
                 running_loss_g = 0.0
                 step_start_time = time.time()
 
@@ -325,6 +332,7 @@ def main():
                     'epoch': epoch,
                     'mel_vae_state_dict': mel_vae.module.state_dict(),
                     'octave_vae_state_dict': octave_vae.module.state_dict(),
+                    'aux_cls_head_state_dict': aux_cls_head.module.state_dict(),
                     'discriminator_state_dict': discriminator.module.state_dict(),
                     'optimizer_state_dict': optimizer_g.state_dict(),
                     'scheduler_state_dict': scheduler_g.state_dict(),
@@ -333,11 +341,13 @@ def main():
                     'latent_dim': latent_dim,
                     'num_embeddings': num_embeddings,
                     'num_quantizers': num_quantizers,
+                    'num_classes': num_classes,
                 }, checkpoint_path)
                 print(f"💾 Checkpoint Dual RVQ-GAN salvato in: {checkpoint_path}", flush=True)
 
     dataset.close()
     cleanup_distributed_environment(rank)
+
 
 if __name__ == "__main__":
     main()
