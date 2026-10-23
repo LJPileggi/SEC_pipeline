@@ -5,27 +5,42 @@ import torch.nn.functional as F
 DEFAULT_BOTTLENECK_TYPE = "rvq_2d"
 
 
-class ClassAuxiliaryHead(nn.Module):
+class TemporalClassAuxiliaryHead(nn.Module):
     """
-    Testa ausiliaria di supervisione semantica sul collo di bottiglia discreto z_q [B, D, 4, 72].
-    Combina Global Average Pooling (GAP) e Global Max Pooling (GMP).
-    Attiva solo in fase di addestramento per separare lo spazio dei token.
+    Testa ausiliaria di supervisione semantica spazio-temporale.
+    Invece di distruggere l'asse temporale con GAP/GMP globale, esegue pooling solo
+    sull'asse frequenziale (4 bande) e predice la classe per ciascuno dei 72 step temporali.
+    Forza l'encoder a mantenere token coerenti con la classe lungo tutta la durata della clip.
     """
     def __init__(self, latent_dim=256, num_classes=22, dropout=0.1):
         super().__init__()
-        self.classifier = nn.Sequential(
-            nn.Dropout(p=dropout),
-            nn.Linear(latent_dim * 2, latent_dim),
+        in_dim = latent_dim * 2  # avg + max sulle 4 bande frequenziali
+        hidden_dim = latent_dim
+
+        self.temporal_conv = nn.Sequential(
+            nn.Conv1d(in_dim, hidden_dim, kernel_size=3, padding=1),
+            nn.GroupNorm(num_groups=min(32, hidden_dim // 4), num_channels=hidden_dim),
             nn.SiLU(),
             nn.Dropout(p=dropout),
-            nn.Linear(latent_dim, num_classes)
+            nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, padding=1),
+            nn.GroupNorm(num_groups=min(32, hidden_dim // 4), num_channels=hidden_dim),
+            nn.SiLU(),
+            nn.Dropout(p=dropout)
         )
+        self.classifier = nn.Conv1d(hidden_dim, num_classes, kernel_size=1)
 
     def forward(self, z_q):
-        gap = torch.mean(z_q, dim=(2, 3))  # [B, D]
-        gmp = torch.amax(z_q, dim=(2, 3))  # [B, D]
-        feat = torch.cat([gap, gmp], dim=1)  # [B, 2D]
-        return self.classifier(feat)
+        # z_q: [B, D, H=4, W=72]
+        avg_f = torch.mean(z_q, dim=2)  # [B, D, 72]
+        max_f = torch.amax(z_q, dim=2)  # [B, D, 72]
+        feat = torch.cat([avg_f, max_f], dim=1)  # [B, 2D, 72]
+
+        h = self.temporal_conv(feat)  # [B, hidden_dim, 72]
+        logits_temporal = self.classifier(h)  # [B, num_classes, 72]
+        return logits_temporal
+
+
+ClassAuxiliaryHead = TemporalClassAuxiliaryHead
 
 
 class AttentionBlock(nn.Module):
@@ -80,6 +95,16 @@ class VectorQuantizerEMA(nn.Module):
         self.register_buffer("ema_cluster_size", torch.ones(num_embeddings))
         self.register_buffer("ema_w", embedding.clone())
 
+    def get_codebook_similarities(self, inputs):
+        """Calcola il prodotto scalare coseno tra i latenti e il codebook normalizzato."""
+        inputs_permuted = inputs.permute(0, 2, 3, 1).contiguous()
+        flat_input = inputs_permuted.view(-1, self.embedding_dim)
+        flat_input_norm = F.normalize(flat_input, p=2, dim=-1)
+        embedding_norm = F.normalize(self.embedding.to(dtype=flat_input.dtype), p=2, dim=0)
+        # Cosine similarity matrix: [-1.0, 1.0]
+        similarities = torch.matmul(flat_input_norm, embedding_norm)
+        return similarities, inputs_permuted.shape
+
     def forward(self, inputs, update_ema=True):
         inputs_permuted = inputs.permute(0, 2, 3, 1).contiguous()
         flat_input = inputs_permuted.view(-1, self.embedding_dim)
@@ -87,6 +112,7 @@ class VectorQuantizerEMA(nn.Module):
         flat_input_norm = F.normalize(flat_input, p=2, dim=-1)
         embedding_norm = F.normalize(self.embedding.to(dtype=flat_input.dtype), p=2, dim=0)
 
+        # Distanza euclidea su sfera unitaria
         distances = (
             torch.sum(flat_input_norm ** 2, dim=1, keepdim=True)
             + torch.sum(embedding_norm ** 2, dim=0, keepdim=True)
@@ -411,10 +437,8 @@ class DiscriminatorWithFeatures(nn.Module):
         out = self.out_conv(h)
 
         if class_idx is not None:
-            # 1. Media spaziale (invece di somma)
-            h_pool = torch.mean(h, dim=(2, 3))  # [B, ndf * 4]
-            c_vec = self.class_emb(class_idx)   # [B, ndf * 4]
-            # 2. Normalizzazione scalare per radice della dimensione
+            h_pool = torch.mean(h, dim=(2, 3))
+            c_vec = self.class_emb(class_idx)
             scale = 1.0 / (c_vec.shape[-1] ** 0.5)
             proj_term = (torch.sum(h_pool * c_vec, dim=1, keepdim=True) * scale)[:, :, None, None]
             out = out + proj_term

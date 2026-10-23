@@ -33,10 +33,12 @@ NUM_QUANTIZERS = 4
 DISC_START_EPOCH = int(os.environ.get("DISC_START_EPOCH", 5))
 DISC_WEIGHT = float(os.environ.get("DISC_WEIGHT", 0.05))
 CLS_WEIGHT = float(os.environ.get("CLS_WEIGHT", 1.0))
+CODEBOOK_DISTILL_WEIGHT = float(os.environ.get("CODEBOOK_DISTILL_WEIGHT", 0.5))
+ENTROPY_WEIGHT = float(os.environ.get("ENTROPY_WEIGHT", 0.01))
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Distributed Dual RVQ-GAN Training: Unconditioned Decoder + Class-Supervised Bottleneck & Scaled Discriminator")
+    parser = argparse.ArgumentParser(description="Distributed Dual RVQ-GAN Training: Disentangled Bottleneck with Temporal Semantics & Codebook Distillation")
     parser.add_argument("--start_epoch", type=int, default=int(os.environ.get("START_EPOCH", 0)))
     parser.add_argument("--epochs", type=int, default=int(os.environ.get("NUM_EPOCHS", DEFAULT_EPOCHS)))
     parser.add_argument("--bottleneck_type", type=str, default=DEFAULT_BOTTLENECK_TYPE)
@@ -44,12 +46,50 @@ def parse_args():
     parser.add_argument("--num_embeddings", type=int, default=NUM_EMBEDDINGS)
     parser.add_argument("--num_quantizers", type=int, default=NUM_QUANTIZERS)
     parser.add_argument("--cls_weight", type=float, default=CLS_WEIGHT)
+    parser.add_argument("--codebook_distill_weight", type=float, default=CODEBOOK_DISTILL_WEIGHT)
+    parser.add_argument("--entropy_weight", type=float, default=ENTROPY_WEIGHT)
     return parser.parse_args()
 
 
 def compute_cosine_alignment_loss(z_e_oct, z_e_mel):
     cos_sim = F.cosine_similarity(z_e_oct, z_e_mel, dim=1)
     return torch.mean(1.0 - cos_sim)
+
+
+def compute_codebook_distillation_loss(quantizer, z_e_oct, z_e_mel, temperature=0.1):
+    """
+    Distillazione diretta sui logit del codebook (KL divergence temperata).
+    Forza z_e_oct a scegliere la stessa specifica cella di Voronoi di z_e_mel prima dell'argmin.
+    """
+    first_stage = quantizer.layers[0]
+    sim_mel, _ = first_stage.get_codebook_similarities(z_e_mel.detach())  # [B*H*W, K]
+    sim_oct, _ = first_stage.get_codebook_similarities(z_e_oct)           # [B*H*W, K]
+
+    # Target di probabilità del Mel pristine e log-probabilità dell'Octave degradato
+    prob_mel = F.softmax(sim_mel / temperature, dim=-1)
+    log_prob_oct = F.log_softmax(sim_oct / temperature, dim=-1)
+
+    # KL Divergence scalata per tau^2 per preservare l'ordine di grandezza del gradiente
+    kl_div = F.kl_div(log_prob_oct, prob_mel, reduction="batchmean") * (temperature ** 2)
+    return kl_div
+
+
+def compute_batch_entropy_loss(quantizer, z_e_oct, num_embeddings=1024, temperature=0.2):
+    """
+    Massimizza l'entropia della distribuzione marginale dei token nel batch.
+    Penalizza i super-hub (#146, #60) costringendo il modello a diversificare i codici discreti.
+    """
+    first_stage = quantizer.layers[0]
+    sim_oct, _ = first_stage.get_codebook_similarities(z_e_oct)  # [N_tokens, K]
+    prob_oct = F.softmax(sim_oct / temperature, dim=-1)         # [N_tokens, K]
+
+    # Frequenza marginale media d'uso dei token su tutto il batch
+    avg_probs = torch.mean(prob_oct, dim=0)  # [K]
+    # Minimizzare -H(P) = massimizzare l'entropia
+    entropy = -torch.sum(avg_probs * torch.log(avg_probs + 1e-6))
+    max_entropy = math.log(num_embeddings)
+    loss_entropy = (max_entropy - entropy) / max_entropy
+    return loss_entropy
 
 
 def compute_codebook_diagnostics(indices, num_embeddings):
@@ -93,7 +133,6 @@ def main():
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=seed)
     dataloader = DataLoader(dataset, batch_size=LOCAL_BATCH_SIZE, sampler=sampler, num_workers=4, pin_memory=True, drop_last=True)
 
-    # VAE puro incondizionato
     mel_vae = MelVQVAE(
         base_channels=64,
         latent_dim=latent_dim,
@@ -109,10 +148,8 @@ def main():
         shared_quantizer=mel_vae.quantizer
     ).to(device)
 
-    # Testa ausiliaria sui token (GAP + GMP)
+    # Nuova testa con supervisione temporale continua a 72 frame
     aux_cls_head = ClassAuxiliaryHead(latent_dim=latent_dim, num_classes=num_classes).to(device)
-
-    # Projection Discriminator condizionale scalato
     discriminator = DiscriminatorWithFeatures(in_channels=1, ndf=64, num_classes=num_classes).to(device)
 
     gen_params = list(mel_vae.parameters()) + list(octave_vae.parameters()) + list(aux_cls_head.parameters())
@@ -141,7 +178,11 @@ def main():
             if 'discriminator_state_dict' in checkpoint:
                 discriminator.load_state_dict(checkpoint['discriminator_state_dict'], strict=False)
             if 'aux_cls_head_state_dict' in checkpoint:
-                aux_cls_head.load_state_dict(checkpoint['aux_cls_head_state_dict'])
+                try:
+                    aux_cls_head.load_state_dict(checkpoint['aux_cls_head_state_dict'], strict=True)
+                except Exception:
+                    if rank == 0:
+                        print("⚠️ [NOTE] Nuova TemporalClassAuxiliaryHead inizializzata da zero.", flush=True)
             if 'optimizer_state_dict' in checkpoint:
                 optimizer_g.load_state_dict(checkpoint['optimizer_state_dict'])
             if 'scheduler_state_dict' in checkpoint:
@@ -163,13 +204,13 @@ def main():
 
     if rank == 0:
         print("==========================================================", flush=True)
-        print(f"🏁 Dual RVQ-GAN Training Initialized (DDP, GPUs: {world_size})", flush=True)
+        print(f"🏁 Dual RVQ-GAN Enhanced Training (DDP, GPUs: {world_size})", flush=True)
         print(f"   • MelDecoder: Incondizionato (Pure Latent Decoding)", flush=True)
-        print(f"   • Discriminatore: Scaled Projection Discriminator (Hinge target ~1.0)", flush=True)
-        print(f"   • Token Bottleneck Supervision: GAP+GMP Auxiliary Head (Weight: {args.cls_weight})", flush=True)
-        print(f"   • Alignment: Continuous Point-wise Cosine Distance (Weight: 3.0)", flush=True)
-        print(f"   • MelDecoder Protection: Frozen during cross-reconstruction", flush=True)
-        print(f"   • Adversarial Warm-up: Da Epoca {DISC_START_EPOCH} (con Soft Ramp-up)", flush=True)
+        print(f"   • Token Bottleneck: 1D Temporal Frame-by-Frame Supervision (W: {args.cls_weight})", flush=True)
+        print(f"   • Codebook Distillation: Soft-Target Voronoi KL Divergence (W: {args.codebook_distill_weight})", flush=True)
+        print(f"   • Diversity Regularization: Marginal Batch Entropy Maximization (W: {args.entropy_weight})", flush=True)
+        print(f"   • Continuous Alignment: Cosine Distance (W: 3.0)", flush=True)
+        print(f"   • Discriminator: Scaled Projection PatchGAN (Warm-up da Epoca {DISC_START_EPOCH})", flush=True)
         print("==========================================================\n", flush=True)
 
     optimizer_g.zero_grad(set_to_none=True)
@@ -188,7 +229,6 @@ def main():
         step_start_time = time.time()
 
         use_discriminator = (epoch >= DISC_START_EPOCH)
-        # Rampa lineare di 3 epoche all'attivazione del discriminatore
         if use_discriminator:
             ramp_factor = min(1.0, float(epoch - DISC_START_EPOCH + 1) / 3.0)
             cur_disc_weight = DISC_WEIGHT * ramp_factor
@@ -212,25 +252,38 @@ def main():
             # 1. PASSO GENERATORE
             # ------------------------------------------------------------------
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                # 1a. Mel Branch (incondizionato)
+                # 1a. Mel & Octave Branch
                 recon_mel, vq_loss_mel, z_e_mel, z_q_mel, indices_mel = mel_vae(x_mel_target)
-
-                # 1b. Octave Branch
                 recon_oct, vq_loss_oct, z_e_oct, z_q_oct, indices_oct = octave_vae(x_octave_pchip)
 
                 loss_rec_mel = acoustic_loss_fn(recon_mel, x_mel_target)
                 loss_rec_oct = F.l1_loss(recon_oct, x_octave_pchip)
                 loss_vq = vq_loss_mel + vq_loss_oct
 
-                # 1c. Supervisione Semantica dei Token (GAP + GMP Head)
-                logits_mel = aux_cls_head(z_q_mel)
-                logits_oct = aux_cls_head(z_q_oct)
-                loss_cls = 0.5 * (F.cross_entropy(logits_mel, class_labels) + F.cross_entropy(logits_oct, class_labels))
+                # 1b. Supervisione Semantica Temporale (72 step temporali indipendenti)
+                logits_mel_t = aux_cls_head(z_q_mel)  # [B, num_classes, 72]
+                logits_oct_t = aux_cls_head(z_q_oct)  # [B, num_classes, 72]
 
-                # 1d. Allineamento continuo degli spazi latenti
+                # Espansione target sui 72 step temporali
+                targets_t = class_labels.unsqueeze(1).expand(-1, 72)  # [B, 72]
+                loss_cls_mel = F.cross_entropy(logits_mel_t, targets_t)
+                loss_cls_oct = F.cross_entropy(logits_oct_t, targets_t)
+                loss_cls = 0.5 * (loss_cls_mel + loss_cls_oct)
+
+                # 1c. Allineamento continuo (Cosine)
                 loss_align_cos = compute_cosine_alignment_loss(z_e_oct, z_e_mel.detach())
 
-                # 1e. Cross-Domain Reconstruction incondizionata (MelDecoder protetto)
+                # 1d. Distillazione Discreta dei Logits del Codebook (Soft-Target Voronoi)
+                loss_codebook_distill = compute_codebook_distillation_loss(
+                    mel_vae.module.quantizer, z_e_oct, z_e_mel, temperature=0.1
+                )
+
+                # 1e. Massimizzazione dell'Entropia Marginale del Batch (Anti-Superhub)
+                loss_entropy = compute_batch_entropy_loss(
+                    mel_vae.module.quantizer, z_e_oct, num_embeddings=num_embeddings, temperature=0.2
+                )
+
+                # 1f. Cross-Domain Reconstruction (MelDecoder protetto)
                 for param in mel_vae.module.decoder.parameters():
                     param.requires_grad = False
                 cross_mel_recon = mel_vae.module.decoder(z_q_oct)
@@ -239,11 +292,14 @@ def main():
 
                 loss_cross = acoustic_loss_fn(cross_mel_recon, x_mel_target)
 
+                # Composizione Loss Base Generatore
                 loss_g_base = (loss_rec_mel + loss_rec_oct) + \
                               loss_vq + \
                               (args.cls_weight * loss_cls) + \
-                              3.0 * loss_align_cos + \
-                              1.0 * loss_cross
+                              (3.0 * loss_align_cos) + \
+                              (args.codebook_distill_weight * loss_codebook_distill) + \
+                              (args.entropy_weight * loss_entropy) + \
+                              (1.0 * loss_cross)
 
                 loss_adv_total = torch.tensor(0.0, device=device)
                 loss_fm_total = torch.tensor(0.0, device=device)
@@ -310,8 +366,12 @@ def main():
             if (step + 1) % print_freq == 0 or (step + 1) == total_steps:
                 unique_c, pct_u, perp = compute_codebook_diagnostics(indices_mel, num_embeddings)
                 token_match_l1 = (indices_mel[:, 0] == indices_oct[:, 0]).float().mean().item() * 100.0
-                acc_mel = (logits_mel.argmax(dim=-1) == class_labels).float().mean().item() * 100.0
-                acc_oct = (logits_oct.argmax(dim=-1) == class_labels).float().mean().item() * 100.0
+
+                # Accuratezza temporale media
+                pred_cls_mel = torch.mean(logits_mel_t, dim=-1).argmax(dim=-1)
+                pred_cls_oct = torch.mean(logits_oct_t, dim=-1).argmax(dim=-1)
+                acc_mel = (pred_cls_mel == class_labels).float().mean().item() * 100.0
+                acc_oct = (pred_cls_oct == class_labels).float().mean().item() * 100.0
 
                 if rank == 0:
                     elapsed = time.time() - step_start_time
@@ -321,7 +381,8 @@ def main():
                     print(f" ⏱️  Epoch [{epoch:03d}/{end_epoch-1:03d}] | Progress: {percent:5.1f}% | "
                           f"G-Loss: {avg_g:.4f} | D-Loss: {d_val:.4f} (W: {cur_disc_weight:.3f}) | "
                           f"ClsLoss: {loss_cls.item():.3f} (Acc Mel: {acc_mel:.1f}%, Oct: {acc_oct:.1f}%) | "
-                          f"L1 Token Match: {token_match_l1:4.1f}% | {elapsed:.1f}s", flush=True)
+                          f"Distill: {loss_codebook_distill.item():.3f} | EntropyLoss: {loss_entropy.item():.3f} | "
+                          f"L1 Match: {token_match_l1:4.1f}% | {elapsed:.1f}s", flush=True)
                 running_loss_g = 0.0
                 step_start_time = time.time()
 
