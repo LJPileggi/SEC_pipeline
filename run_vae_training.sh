@@ -129,7 +129,7 @@ srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \
     --bind "$TEMP_DIR:/tmp_data" \
     --bind "$PROJECT_DIR:/app" --pwd "/app" \
     "$SIF_FILE" \
-    python3 src/filterbank_vae/training/train.py \
+    python3 src/filterbank_vae/pipeline/train.py \
         --start_epoch "$START_EPOCH" \
         --epochs "$NUM_EPOCHS" \
         --bottleneck_type "$BOTTLENECK_TYPE" \
