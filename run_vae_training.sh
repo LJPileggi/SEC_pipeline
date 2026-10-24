@@ -3,7 +3,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=8
-#SBATCH --time=00:30:00
+#SBATCH --time=04:00:00
 #SBATCH --mem=128G
 #SBATCH --gres=gpu:4
 #SBATCH -p boost_usr_prod
@@ -15,6 +15,8 @@
 START_EPOCH=${1:-0}
 NUM_EPOCHS=${2:-50}
 BOTTLENECK_TYPE=${3:-"rvq_2d"}
+CODEBOOK_DISTILL_WEIGHT=${4:-1.0}
+WARM_RESTART=${5:-"true"}
 
 PROJECT_DIR="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline"
 TEMP_DIR="/leonardo_scratch/large/userexternal/$USER/tmp_train_vae_$SLURM_JOB_ID"
@@ -78,11 +80,18 @@ trap 'cleanup_job_scratch SIGINT'  SIGINT
 trap 'cleanup_job_scratch SIGHUP'  SIGHUP
 trap 'cleanup_job_scratch EXIT'    EXIT
 
+EXTRA_ARGS=""
+if [ "$WARM_RESTART" = "true" ] || [ "$WARM_RESTART" = "1" ]; then
+    EXTRA_ARGS="--warm_restart"
+fi
+
 echo "=========================================================="
 echo "🎯 Dual-VAE Training Config:"
-echo "   • Start Epoch:      $START_EPOCH"
-echo "   • Number of Epochs: $NUM_EPOCHS"
-echo "   • Bottleneck Type:  $BOTTLENECK_TYPE"
+echo "   • Start Epoch:             $START_EPOCH"
+echo "   • Number of Epochs:        $NUM_EPOCHS"
+echo "   • Bottleneck Type:         $BOTTLENECK_TYPE"
+echo "   • Codebook Distill Weight: $CODEBOOK_DISTILL_WEIGHT"
+echo "   • Warm Restart Active:     $WARM_RESTART"
 echo "=========================================================="
 
 echo "📦 Stage-in: Moving global WAV HDF5 datasets and weights..."
@@ -120,10 +129,12 @@ srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \
     --bind "$TEMP_DIR:/tmp_data" \
     --bind "$PROJECT_DIR:/app" --pwd "/app" \
     "$SIF_FILE" \
-    python3 src/filterbank_vae/pipeline/train.py \
+    python3 src/filterbank_vae/training/train.py \
         --start_epoch "$START_EPOCH" \
         --epochs "$NUM_EPOCHS" \
-        --bottleneck_type "$BOTTLENECK_TYPE" &
+        --bottleneck_type "$BOTTLENECK_TYPE" \
+        --codebook_distill_weight "$CODEBOOK_DISTILL_WEIGHT" \
+        $EXTRA_ARGS &
 
 SRUN_PID=$!
 wait "$SRUN_PID"
