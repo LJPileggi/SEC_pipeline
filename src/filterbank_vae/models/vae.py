@@ -8,13 +8,12 @@ DEFAULT_BOTTLENECK_TYPE = "rvq_2d"
 class TemporalClassAuxiliaryHead(nn.Module):
     """
     Testa ausiliaria di supervisione semantica spazio-temporale.
-    Invece di distruggere l'asse temporale con GAP/GMP globale, esegue pooling solo
-    sull'asse frequenziale (4 bande) e predice la classe per ciascuno dei 72 step temporali.
-    Forza l'encoder a mantenere token coerenti con la classe lungo tutta la durata della clip.
+    Esegue pooling sulle 4 bande frequenziali preservando i 72 step temporali.
+    Forza l'encoder a mantenere token coerenti con la classe lungo tutta la clip.
     """
     def __init__(self, latent_dim=256, num_classes=22, dropout=0.1):
         super().__init__()
-        in_dim = latent_dim * 2  # avg + max sulle 4 bande frequenziali
+        in_dim = latent_dim * 2  # avg + max su frequenza
         hidden_dim = latent_dim
 
         self.temporal_conv = nn.Sequential(
@@ -30,14 +29,12 @@ class TemporalClassAuxiliaryHead(nn.Module):
         self.classifier = nn.Conv1d(hidden_dim, num_classes, kernel_size=1)
 
     def forward(self, z_q):
-        # z_q: [B, D, H=4, W=72]
         avg_f = torch.mean(z_q, dim=2)  # [B, D, 72]
         max_f = torch.amax(z_q, dim=2)  # [B, D, 72]
         feat = torch.cat([avg_f, max_f], dim=1)  # [B, 2D, 72]
 
-        h = self.temporal_conv(feat)  # [B, hidden_dim, 72]
-        logits_temporal = self.classifier(h)  # [B, num_classes, 72]
-        return logits_temporal
+        h = self.temporal_conv(feat)
+        return self.classifier(h)  # [B, num_classes, 72]
 
 
 ClassAuxiliaryHead = TemporalClassAuxiliaryHead
@@ -95,13 +92,14 @@ class VectorQuantizerEMA(nn.Module):
         self.register_buffer("ema_cluster_size", torch.ones(num_embeddings))
         self.register_buffer("ema_w", embedding.clone())
 
+    def set_decay(self, new_decay):
+        self.decay = new_decay
+
     def get_codebook_similarities(self, inputs):
-        """Calcola il prodotto scalare coseno tra i latenti e il codebook normalizzato."""
         inputs_permuted = inputs.permute(0, 2, 3, 1).contiguous()
         flat_input = inputs_permuted.view(-1, self.embedding_dim)
         flat_input_norm = F.normalize(flat_input, p=2, dim=-1)
         embedding_norm = F.normalize(self.embedding.to(dtype=flat_input.dtype), p=2, dim=0)
-        # Cosine similarity matrix: [-1.0, 1.0]
         similarities = torch.matmul(flat_input_norm, embedding_norm)
         return similarities, inputs_permuted.shape
 
@@ -112,7 +110,6 @@ class VectorQuantizerEMA(nn.Module):
         flat_input_norm = F.normalize(flat_input, p=2, dim=-1)
         embedding_norm = F.normalize(self.embedding.to(dtype=flat_input.dtype), p=2, dim=0)
 
-        # Distanza euclidea su sfera unitaria
         distances = (
             torch.sum(flat_input_norm ** 2, dim=1, keepdim=True)
             + torch.sum(embedding_norm ** 2, dim=0, keepdim=True)
@@ -184,6 +181,10 @@ class ResidualVectorQuantizerEMA(nn.Module):
             for _ in range(num_quantizers)
         ])
 
+    def set_decay(self, new_decay):
+        for layer in self.layers:
+            layer.set_decay(new_decay)
+
     def forward(self, inputs, update_ema=True):
         residual = inputs
         quantized_out = torch.zeros_like(inputs)
@@ -207,10 +208,6 @@ class ResidualVectorQuantizerEMA(nn.Module):
             quantized_out = quantized_out + layer.quantize_code(stage_indices)
         return quantized_out
 
-
-# ==============================================================================
-# 1. RAMO MEL VQ-VAE (Input: [B, 1, 64, 1152]) - Decoder Incondizionato
-# ==============================================================================
 
 class MelEncoder(nn.Module):
     def __init__(self, in_channels=1, base_channels=64, latent_dim=256):
@@ -243,7 +240,6 @@ class MelEncoder(nn.Module):
 
 
 class MelDecoder(nn.Module):
-    """Decoder Mel puramente incondizionato: riceve unicamente z_q [B, D, 4, 72]."""
     def __init__(self, out_channels=1, base_channels=64, latent_dim=256):
         super().__init__()
         self.proj_in = nn.Conv2d(latent_dim, base_channels * 4, kernel_size=1)
@@ -290,10 +286,6 @@ class MelVQVAE(nn.Module):
         recon = self.decoder(z_q)
         return recon, vq_loss, z_e, z_q, indices
 
-
-# ==============================================================================
-# 2. RAMO OCTAVE VQ-VAE (Input: [B, 1, 320, 1152] via PCHIP GPU)
-# ==============================================================================
 
 class OctaveEncoder(nn.Module):
     def __init__(self, in_channels=1, base_channels=64, latent_dim=256):
@@ -395,16 +387,7 @@ class OctaveVQVAE(nn.Module):
         return recon, vq_loss, z_e, z_q, indices
 
 
-# ==============================================================================
-# 3. DISCRIMINATORE PATCHGAN CONDIZIONALE SCALATO
-# ==============================================================================
-
 class DiscriminatorWithFeatures(nn.Module):
-    """
-    Projection PatchGAN Discriminator (Miyato et al.) con scaling numerico stabile.
-    Usa torch.mean spaziale e scaling 1/sqrt(D) sul prodotto scalare per mantenere
-    i logit entro ordini di grandezza compatibili con la Hinge loss (+/- 1.0).
-    """
     def __init__(self, in_channels=1, ndf=64, num_classes=22):
         super().__init__()
         self.block1 = nn.Sequential(

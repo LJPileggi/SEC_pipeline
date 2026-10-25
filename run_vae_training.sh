@@ -79,7 +79,7 @@ if [ "$WARM_RESTART" = "true" ] || [ "$WARM_RESTART" = "1" ]; then
 fi
 
 echo "=========================================================="
-echo "🎯 Dual-VAE Training Config:"
+echo "🎯 Dual-VAE Robust Anti-Drift Training Config:"
 echo "   • Start Epoch:             $START_EPOCH"
 echo "   • Number of Epochs:        $NUM_EPOCHS"
 echo "   • Bottleneck Type:         $BOTTLENECK_TYPE"
@@ -115,6 +115,7 @@ export MASTER_PORT=$(expr 20000 + ${SLURM_JOB_ID} % 10000)
 
 echo "🚀 Launching Distributed Training on 4 ranks..."
 
+# Percorso esatto e verificato: src/filterbank_vae/pipeline/train.py
 srun --unbuffered -l -n 4 --export=ALL --cpu-bind=none \
     singularity exec --nv --no-home \
     --bind "/leonardo_scratch:/leonardo_scratch" \
