@@ -34,14 +34,18 @@ NUM_QUANTIZERS = 4
 DISC_START_EPOCH = int(os.environ.get("DISC_START_EPOCH", 5))
 DISC_WEIGHT = float(os.environ.get("DISC_WEIGHT", 0.05))
 
-# PESI FISSI COSTANTI: Nessun curriculum dinamico che sbilancia l'equilibrio
+# PESI FISSI COSTANTI: Nessun curriculum che sbilancia le loss
 CLS_WEIGHT = float(os.environ.get("CLS_WEIGHT", 1.0))
 CODEBOOK_DISTILL_WEIGHT = float(os.environ.get("CODEBOOK_DISTILL_WEIGHT", 1.0))
 ENTROPY_WEIGHT = float(os.environ.get("ENTROPY_WEIGHT", 0.01))
 
+# VALORI CONGELATI DI EPOCA 35
+FROZEN_LR_G = 9.72e-05
+FROZEN_LR_D = 5.0e-05
+
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Distributed Dual RVQ-GAN Robust Training: Anti-Drift Architecture & Stable Learning Floor")
+    parser = argparse.ArgumentParser(description="Distributed Dual RVQ-GAN Training: Frozen Epoch 35 LR & Fixed Weights")
     parser.add_argument("--start_epoch", type=int, default=int(os.environ.get("START_EPOCH", 0)))
     parser.add_argument("--epochs", type=int, default=int(os.environ.get("NUM_EPOCHS", DEFAULT_EPOCHS)))
     parser.add_argument("--total_planned_epochs", type=int, default=int(os.environ.get("TOTAL_PLANNED_EPOCHS", 50)))
@@ -52,7 +56,7 @@ def parse_args():
     parser.add_argument("--cls_weight", type=float, default=CLS_WEIGHT)
     parser.add_argument("--codebook_distill_weight", type=float, default=CODEBOOK_DISTILL_WEIGHT)
     parser.add_argument("--entropy_weight", type=float, default=ENTROPY_WEIGHT)
-    parser.add_argument("--warm_restart", action="store_true", default=True, help="Reinizializza il ciclo LR sulle epoche da eseguire")
+    parser.add_argument("--freeze_lr", action="store_true", default=True, help="Blocca il learning rate al valore di epoca 35 senza farlo scendere")
     return parser.parse_args()
 
 
@@ -147,21 +151,33 @@ def main():
 
     gen_params = list(mel_vae.parameters()) + list(octave_vae.parameters()) + list(aux_cls_head.parameters())
 
-    # LEARNING RATE FLOOR: eta_min fissato a 3.5e-5 (mai più gradient vanishing a 4e-6)
-    if start_epoch == 0:
+    # -------------------------------------------------------------------------
+    # GESTIONE LEARNING RATE: CONGELAMENTO A EPOCA 35
+    # -------------------------------------------------------------------------
+    if start_epoch >= 35 and args.freeze_lr:
+        base_lr_g = FROZEN_LR_G
+        base_lr_d = FROZEN_LR_D
+        optimizer_g = torch.optim.AdamW(gen_params, lr=base_lr_g, betas=(0.5, 0.9), weight_decay=1e-5)
+        scheduler_g = torch.optim.lr_scheduler.LambdaLR(optimizer_g, lr_lambda=lambda _: 1.0)
+
+        optimizer_d = torch.optim.AdamW(discriminator.parameters(), lr=base_lr_d, betas=(0.5, 0.9), weight_decay=1e-5)
+        scheduler_d = torch.optim.lr_scheduler.LambdaLR(optimizer_d, lr_lambda=lambda _: 1.0)
+    elif start_epoch == 0:
         base_lr_g = 2.0e-4
         base_lr_d = 1.0e-4
-        sched_t_max = total_planned
+        optimizer_g = torch.optim.AdamW(gen_params, lr=base_lr_g, betas=(0.5, 0.9), weight_decay=1e-5)
+        scheduler_g = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_g, T_max=total_planned, eta_min=3.5e-5)
+
+        optimizer_d = torch.optim.AdamW(discriminator.parameters(), lr=base_lr_d, betas=(0.5, 0.9), weight_decay=1e-5)
+        scheduler_d = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_d, T_max=total_planned, eta_min=1.8e-5)
     else:
-        base_lr_g = 1.3e-4 if start_epoch >= (total_planned // 2) else 1.8e-4
-        base_lr_d = 7.0e-5 if start_epoch >= (total_planned // 2) else 9.0e-5
-        sched_t_max = num_epochs if args.warm_restart else total_planned
+        base_lr_g = 1.3e-4
+        base_lr_d = 7.0e-5
+        optimizer_g = torch.optim.AdamW(gen_params, lr=base_lr_g, betas=(0.5, 0.9), weight_decay=1e-5)
+        scheduler_g = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_g, T_max=num_epochs, eta_min=3.5e-5)
 
-    optimizer_g = torch.optim.AdamW(gen_params, lr=base_lr_g, betas=(0.5, 0.9), weight_decay=1e-5)
-    scheduler_g = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_g, T_max=sched_t_max, eta_min=3.5e-5)
-
-    optimizer_d = torch.optim.AdamW(discriminator.parameters(), lr=base_lr_d, betas=(0.5, 0.9), weight_decay=1e-5)
-    scheduler_d = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_d, T_max=sched_t_max, eta_min=1.8e-5)
+        optimizer_d = torch.optim.AdamW(discriminator.parameters(), lr=base_lr_d, betas=(0.5, 0.9), weight_decay=1e-5)
+        scheduler_d = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_d, T_max=num_epochs, eta_min=1.8e-5)
 
     base_model_dir = os.environ.get("MODEL_CHECKPOINT_DIR", os.path.join(src_root, ".models", "vae_model"))
     target_model_dir = base_model_dir if base_model_dir.startswith("/") else os.path.join(src_root, base_model_dir)
@@ -188,14 +204,11 @@ def main():
                     if rank == 0:
                         print("⚠️ [NOTE] Nuova TemporalClassAuxiliaryHead inizializzata da zero.", flush=True)
 
-            if not args.warm_restart:
-                if 'optimizer_state_dict' in checkpoint:
-                    optimizer_g.load_state_dict(checkpoint['optimizer_state_dict'])
-                if 'scheduler_state_dict' in checkpoint:
-                    scheduler_g.load_state_dict(checkpoint['scheduler_state_dict'])
-            else:
-                if rank == 0:
-                    print(f"🚀 [WARM-RESTART] Scheduler attivo su {num_epochs} epoche (G-LR: {base_lr_g:.2e} -> floor 3.5e-5)", flush=True)
+            if rank == 0:
+                if start_epoch >= 35 and args.freeze_lr:
+                    print(f"🔒 [FROZEN LR] Learning Rate congelato: G-LR={base_lr_g:.2e}, D-LR={base_lr_d:.2e} (Zero Decay)", flush=True)
+                else:
+                    print(f"🚀 [WARM-RESTART] Scheduler attivo su {num_epochs} epoche (G-LR: {base_lr_g:.2e})", flush=True)
         else:
             if rank == 0:
                 print(f"❌ [CRITICAL] Checkpoint non trovato: {ckpt_candidate}", flush=True)
@@ -213,11 +226,11 @@ def main():
 
     if rank == 0:
         print("==========================================================", flush=True)
-        print(f"🏁 Dual RVQ-GAN Anti-Drift Architecture (DDP, GPUs: {world_size})", flush=True)
+        print(f"🏁 Dual RVQ-GAN Frozen-LR Training (DDP, GPUs: {world_size})", flush=True)
         print(f"   • Range Epoche: [{start_epoch} -> {end_epoch - 1}]", flush=True)
-        print(f"   • Pesi Loss Rigorosamente Fissi: ClsWeight={args.cls_weight}, DistillWeight={args.codebook_distill_weight}", flush=True)
-        print(f"   • Learning Rate Floor: min={3.5e-5:.2e} (Previene Codebook-Lag)", flush=True)
-        print(f"   • EMA Stabilization (decay=0.999 a epoca >= 25): Attiva", flush=True)
+        print(f"   • Pesi Loss Fissi: ClsWeight={args.cls_weight}, DistillWeight={args.codebook_distill_weight}", flush=True)
+        print(f"   • G-LR: {base_lr_g:.2e} (Decay: {'OFF (Costante)' if (start_epoch >= 35 and args.freeze_lr) else 'Cosine'})", flush=True)
+        print(f"   • EMA Stabilization (decay=0.999 per epoca >= 25): Attiva", flush=True)
         print(f"   • Dynamic Octave Weight (1/1: 0.25x, 1/3: 0.5x, others: 1.0x): Attivo", flush=True)
         print("==========================================================\n", flush=True)
 
@@ -225,7 +238,7 @@ def main():
     optimizer_d.zero_grad(set_to_none=True)
 
     for epoch in range(start_epoch, end_epoch):
-        # A partire da metà training, stabilizziamo i centroidi del codebook: decay da 0.99 a 0.999
+        # A partire da metà training stabilizziamo i centroidi del codebook
         if epoch >= (total_planned // 2):
             mel_vae.module.quantizer.set_decay(0.999)
 
@@ -260,7 +273,6 @@ def main():
 
             x_mel_target, x_octave_pchip = spectral_pipeline(raw_audio, format_id=1, fraction_id=fraction_id, device=device)
 
-            # Peso di attenuazione degli artefatti spuri PCHIP per le frazioni a bassissima risoluzione
             oct_rec_weight = 0.25 if fraction_id == 1 else (0.5 if fraction_id == 3 else 1.0)
 
             # ------------------------------------------------------------------
@@ -292,12 +304,9 @@ def main():
                     mel_vae.module.quantizer, z_e_oct, num_embeddings=num_embeddings, temperature=0.2
                 )
 
-                # Cross-reconstruction: MelDecoder riceve il gradiente pieno dal proprio ramo,
-                # e mantiene gradiente attivo anche su cross_mel_recon
                 cross_mel_recon = mel_vae.module.decoder(z_q_oct)
                 loss_cross = acoustic_loss_fn(cross_mel_recon, x_mel_target)
 
-                # Loss base a PESI COSTANTI: stabilità asintotica garantita
                 loss_g_base = (loss_rec_mel + loss_rec_oct) + \
                               loss_vq + \
                               (args.cls_weight * loss_cls) + \
