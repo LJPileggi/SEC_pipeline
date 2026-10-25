@@ -34,18 +34,13 @@ NUM_QUANTIZERS = 4
 DISC_START_EPOCH = int(os.environ.get("DISC_START_EPOCH", 5))
 DISC_WEIGHT = float(os.environ.get("DISC_WEIGHT", 0.05))
 
-# PESI FISSI COSTANTI: Nessun curriculum che sbilancia le loss
 CLS_WEIGHT = float(os.environ.get("CLS_WEIGHT", 1.0))
 CODEBOOK_DISTILL_WEIGHT = float(os.environ.get("CODEBOOK_DISTILL_WEIGHT", 1.0))
 ENTROPY_WEIGHT = float(os.environ.get("ENTROPY_WEIGHT", 0.01))
 
-# VALORI CONGELATI DI EPOCA 35
-FROZEN_LR_G = 9.72e-05
-FROZEN_LR_D = 5.0e-05
-
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Distributed Dual RVQ-GAN Training: Frozen Epoch 35 LR & Fixed Weights")
+    parser = argparse.ArgumentParser(description="Distributed Dual RVQ-GAN Debug & Diagnostic Training")
     parser.add_argument("--start_epoch", type=int, default=int(os.environ.get("START_EPOCH", 0)))
     parser.add_argument("--epochs", type=int, default=int(os.environ.get("NUM_EPOCHS", DEFAULT_EPOCHS)))
     parser.add_argument("--total_planned_epochs", type=int, default=int(os.environ.get("TOTAL_PLANNED_EPOCHS", 50)))
@@ -57,7 +52,7 @@ def parse_args():
     parser.add_argument("--codebook_distill_weight", type=float, default=CODEBOOK_DISTILL_WEIGHT)
     parser.add_argument("--entropy_weight", type=float, default=ENTROPY_WEIGHT)
     parser.add_argument("--warm_restart", action="store_true", default=True, help="Supporto compatibilità warm restart")
-    parser.add_argument("--freeze_lr", action="store_true", default=True, help="Blocca il learning rate al valore di epoca 35 senza farlo scendere")
+    parser.add_argument("--freeze_lr", action="store_true", default=False, help="Opzione per congelare il learning rate")
     return parser.parse_args()
 
 
@@ -153,32 +148,22 @@ def main():
     gen_params = list(mel_vae.parameters()) + list(octave_vae.parameters()) + list(aux_cls_head.parameters())
 
     # -------------------------------------------------------------------------
-    # GESTIONE LEARNING RATE: CONGELAMENTO A EPOCA 35
+    # RIPRISTINO SCHEDULING ORIGINARIO CON SOGLIA MINIMA CONTROLLATA
     # -------------------------------------------------------------------------
-    if start_epoch >= 35 and args.freeze_lr:
-        base_lr_g = FROZEN_LR_G
-        base_lr_d = FROZEN_LR_D
-        optimizer_g = torch.optim.AdamW(gen_params, lr=base_lr_g, betas=(0.5, 0.9), weight_decay=1e-5)
-        scheduler_g = torch.optim.lr_scheduler.LambdaLR(optimizer_g, lr_lambda=lambda _: 1.0)
-
-        optimizer_d = torch.optim.AdamW(discriminator.parameters(), lr=base_lr_d, betas=(0.5, 0.9), weight_decay=1e-5)
-        scheduler_d = torch.optim.lr_scheduler.LambdaLR(optimizer_d, lr_lambda=lambda _: 1.0)
-    elif start_epoch == 0:
+    if start_epoch == 0:
         base_lr_g = 2.0e-4
         base_lr_d = 1.0e-4
-        optimizer_g = torch.optim.AdamW(gen_params, lr=base_lr_g, betas=(0.5, 0.9), weight_decay=1e-5)
-        scheduler_g = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_g, T_max=total_planned, eta_min=3.5e-5)
-
-        optimizer_d = torch.optim.AdamW(discriminator.parameters(), lr=base_lr_d, betas=(0.5, 0.9), weight_decay=1e-5)
-        scheduler_d = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_d, T_max=total_planned, eta_min=1.8e-5)
+        sched_t_max = total_planned
     else:
-        base_lr_g = 1.3e-4
-        base_lr_d = 7.0e-5
-        optimizer_g = torch.optim.AdamW(gen_params, lr=base_lr_g, betas=(0.5, 0.9), weight_decay=1e-5)
-        scheduler_g = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_g, T_max=num_epochs, eta_min=3.5e-5)
+        base_lr_g = 1.3e-4 if start_epoch >= (total_planned // 2) else 1.8e-4
+        base_lr_d = 7.0e-5 if start_epoch >= (total_planned // 2) else 9.0e-5
+        sched_t_max = num_epochs
 
-        optimizer_d = torch.optim.AdamW(discriminator.parameters(), lr=base_lr_d, betas=(0.5, 0.9), weight_decay=1e-5)
-        scheduler_d = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_d, T_max=num_epochs, eta_min=1.8e-5)
+    optimizer_g = torch.optim.AdamW(gen_params, lr=base_lr_g, betas=(0.5, 0.9), weight_decay=1e-5)
+    scheduler_g = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_g, T_max=sched_t_max, eta_min=3.5e-5)
+
+    optimizer_d = torch.optim.AdamW(discriminator.parameters(), lr=base_lr_d, betas=(0.5, 0.9), weight_decay=1e-5)
+    scheduler_d = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_d, T_max=sched_t_max, eta_min=1.8e-5)
 
     base_model_dir = os.environ.get("MODEL_CHECKPOINT_DIR", os.path.join(src_root, ".models", "vae_model"))
     target_model_dir = base_model_dir if base_model_dir.startswith("/") else os.path.join(src_root, base_model_dir)
@@ -206,10 +191,7 @@ def main():
                         print("⚠️ [NOTE] Nuova TemporalClassAuxiliaryHead inizializzata da zero.", flush=True)
 
             if rank == 0:
-                if start_epoch >= 35 and args.freeze_lr:
-                    print(f"🔒 [FROZEN LR] Learning Rate congelato: G-LR={base_lr_g:.2e}, D-LR={base_lr_d:.2e} (Zero Decay)", flush=True)
-                else:
-                    print(f"🚀 [WARM-RESTART] Scheduler attivo su {num_epochs} epoche (G-LR: {base_lr_g:.2e})", flush=True)
+                print(f"🚀 [WARM-RESTART] Scheduler attivo su {num_epochs} epoche (G-LR: {base_lr_g:.2e} -> eta_min: 3.5e-5)", flush=True)
         else:
             if rank == 0:
                 print(f"❌ [CRITICAL] Checkpoint non trovato: {ckpt_candidate}", flush=True)
@@ -227,19 +209,16 @@ def main():
 
     if rank == 0:
         print("==========================================================", flush=True)
-        print(f"🏁 Dual RVQ-GAN Frozen-LR Training (DDP, GPUs: {world_size})", flush=True)
-        print(f"   • Range Epoche: [{start_epoch} -> {end_epoch - 1}]", flush=True)
+        print(f"🔬 Dual RVQ-GAN Loss Dissection & Gradient Diagnostics (DDP, GPUs: {world_size})", flush=True)
+        print(f"   • Epoche: [{start_epoch} -> {end_epoch - 1}]", flush=True)
         print(f"   • Pesi Loss Fissi: ClsWeight={args.cls_weight}, DistillWeight={args.codebook_distill_weight}", flush=True)
-        print(f"   • G-LR: {base_lr_g:.2e} (Decay: {'OFF (Costante)' if (start_epoch >= 35 and args.freeze_lr) else 'Cosine'})", flush=True)
-        print(f"   • EMA Stabilization (decay=0.999 per epoca >= 25): Attiva", flush=True)
-        print(f"   • Dynamic Octave Weight (1/1: 0.25x, 1/3: 0.5x, others: 1.0x): Attivo", flush=True)
+        print(f"   • Output Log Esteso: RecMel, RecOct, CrossMel, CosAlign, GradNorms", flush=True)
         print("==========================================================\n", flush=True)
 
     optimizer_g.zero_grad(set_to_none=True)
     optimizer_d.zero_grad(set_to_none=True)
 
     for epoch in range(start_epoch, end_epoch):
-        # A partire da metà training stabilizziamo i centroidi del codebook
         if epoch >= (total_planned // 2):
             mel_vae.module.quantizer.set_decay(0.999)
 
@@ -251,6 +230,15 @@ def main():
 
         epoch_loss_g = 0.0
         running_loss_g = 0.0
+        
+        # Accumulatori per diagnosi componenti
+        running_rec_mel = 0.0
+        running_rec_oct = 0.0
+        running_cross = 0.0
+        running_align = 0.0
+        running_vq = 0.0
+        running_adv = 0.0
+
         epoch_start_time = time.time()
         step_start_time = time.time()
 
@@ -359,7 +347,17 @@ def main():
 
                 loss_d_scaled.backward()
 
+            # Diagnostica norme gradienti prima del clip
+            norm_g_oct = 0.0
+            norm_g_mel = 0.0
             if (step + 1) % ACCUMULATION_STEPS == 0 or (step + 1) == total_steps:
+                grads_oct = [p.grad.detach() for p in octave_vae.parameters() if p.grad is not None]
+                if grads_oct:
+                    norm_g_oct = torch.norm(torch.stack([torch.norm(g, 2) for g in grads_oct]), 2).item()
+                grads_mel = [p.grad.detach() for p in mel_vae.parameters() if p.grad is not None]
+                if grads_mel:
+                    norm_g_mel = torch.norm(torch.stack([torch.norm(g, 2) for g in grads_mel]), 2).item()
+
                 torch.nn.utils.clip_grad_norm_(gen_params, max_norm=1.0)
                 optimizer_g.step()
                 optimizer_g.zero_grad(set_to_none=True)
@@ -377,6 +375,13 @@ def main():
 
             epoch_loss_g += current_loss_g
             running_loss_g += current_loss_g
+            
+            running_rec_mel += loss_rec_mel.item()
+            running_rec_oct += loss_rec_oct.item()
+            running_cross += loss_cross.item()
+            running_align += (3.0 * loss_align_cos).item()
+            running_vq += loss_vq.item()
+            running_adv += (cur_disc_weight * loss_adv_total).item() if use_discriminator else 0.0
 
             if (step + 1) % print_freq == 0 or (step + 1) == total_steps:
                 unique_c, pct_u, perp = compute_codebook_diagnostics(indices_mel, num_embeddings)
@@ -393,12 +398,26 @@ def main():
                     percent = ((step + 1) / total_steps) * 100
                     avg_g = running_loss_g / print_freq
                     d_val = loss_d_total.item() if use_discriminator else 0.0
-                    print(f" ⏱️  Epoch [{epoch:03d}/{end_epoch-1:03d}] | Progress: {percent:5.1f}% | "
-                          f"G-Loss: {avg_g:.4f} | D-Loss: {d_val:.4f} | "
-                          f"ClsLoss: {loss_cls.item():.3f} (Acc Mel: {acc_mel:.1f}%, Oct: {acc_oct:.1f}%) | "
-                          f"Distill: {loss_codebook_distill.item():.3f} | "
-                          f"L1 Match: {token_match_l1:4.1f}% | LR: {current_lr:.2e} | {elapsed:.1f}s", flush=True)
+                    
+                    # Medie componenti
+                    m_rec_mel = running_rec_mel / print_freq
+                    m_rec_oct = running_rec_oct / print_freq
+                    m_cross = running_cross / print_freq
+                    m_align = running_align / print_freq
+                    m_vq = running_vq / print_freq
+                    m_adv = running_adv / print_freq
+
+                    print(f" ⏱️ Ep [{epoch:02d}] {percent:4.1f}% | G: {avg_g:.3f} | "
+                          f"[RecM: {m_rec_mel:.3f} | RecOct: {m_rec_oct:.3f} | Cross: {m_cross:.3f} | Cos: {m_align:.3f} | VQ: {m_vq:.3f} | Adv: {m_adv:.3f}] | "
+                          f"Cls: {loss_cls.item():.3f} | L1: {token_match_l1:4.1f}% | ||g_oct||: {norm_g_oct:.2f} | LR: {current_lr:.1e} | {elapsed:.1f}s", flush=True)
+
                 running_loss_g = 0.0
+                running_rec_mel = 0.0
+                running_rec_oct = 0.0
+                running_cross = 0.0
+                running_align = 0.0
+                running_vq = 0.0
+                running_adv = 0.0
                 step_start_time = time.time()
 
         scheduler_g.step()
