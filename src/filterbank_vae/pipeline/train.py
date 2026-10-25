@@ -56,6 +56,7 @@ def parse_args():
     parser.add_argument("--cls_weight", type=float, default=CLS_WEIGHT)
     parser.add_argument("--codebook_distill_weight", type=float, default=CODEBOOK_DISTILL_WEIGHT)
     parser.add_argument("--entropy_weight", type=float, default=ENTROPY_WEIGHT)
+    parser.add_argument("--warm_restart", action="store_true", default=True, help="Supporto compatibilità warm restart")
     parser.add_argument("--freeze_lr", action="store_true", default=True, help="Blocca il learning rate al valore di epoca 35 senza farlo scendere")
     return parser.parse_args()
 
