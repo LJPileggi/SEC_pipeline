@@ -41,7 +41,7 @@ ENTROPY_WEIGHT = float(os.environ.get("ENTROPY_WEIGHT", 0.01))
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Distributed Dual RVQ-GAN Reproducible Training: Dual-Phase Annealing & Stable Floor")
+    parser = argparse.ArgumentParser(description="Distributed Dual RVQ-GAN High-Resolution Bottleneck (8x144) Training")
     parser.add_argument("--start_epoch", type=int, default=int(os.environ.get("START_EPOCH", 0)))
     parser.add_argument("--epochs", type=int, default=int(os.environ.get("NUM_EPOCHS", DEFAULT_EPOCHS)))
     parser.add_argument("--total_planned_epochs", type=int, default=int(os.environ.get("TOTAL_PLANNED_EPOCHS", 50)))
@@ -62,7 +62,6 @@ def get_reproducible_lr_factor(current_epoch, total_epochs=50, split_epoch=35):
     Funzione deterministica per la curva LR:
     - Fase 1 (0 -> 34): Cosine Annealing da 1.0 (2.0e-4) fino a ~0.475 (9.5e-5).
     - Fase 2 (35 -> 49): Warm-Bump al 65% (1.3e-4) con discesa morbida fino al floor di 0.175 (3.5e-5).
-    Garantisce la medesima traiettoria sia partendo da 0 sia riprendendo da 35.
     """
     if current_epoch < split_epoch:
         progress = float(current_epoch) / float(max(1, split_epoch))
@@ -165,9 +164,6 @@ def main():
 
     gen_params = list(mel_vae.parameters()) + list(octave_vae.parameters()) + list(aux_cls_head.parameters())
 
-    # -------------------------------------------------------------------------
-    # SCHEDULER UNIFICATO E DETERMINISTICO BASATO SU EPOCA ASSOLUTA
-    # -------------------------------------------------------------------------
     initial_lr_g = 2.0e-4
     initial_lr_d = 1.0e-4
 
@@ -208,7 +204,6 @@ def main():
                     if rank == 0:
                         print("⚠️ [NOTE] Nuova TemporalClassAuxiliaryHead inizializzata da zero.", flush=True)
 
-            # Allinea lo scheduler globale all'indice esatto dell'epoca da cui si riparte
             for _ in range(start_epoch):
                 scheduler_g.step()
                 scheduler_d.step()
@@ -233,9 +228,9 @@ def main():
 
     if rank == 0:
         print("==========================================================", flush=True)
-        print(f"🏁 Dual RVQ-GAN Unified Reproducible Training (DDP, GPUs: {world_size})", flush=True)
+        print(f"🏁 Dual RVQ-GAN High-Res [8x144] Bottleneck Training (DDP, GPUs: {world_size})", flush=True)
         print(f"   • Range Epoche: [{start_epoch} -> {end_epoch - 1}] (Pianificate totali: {total_planned})", flush=True)
-        print(f"   • Curva LR: Dual-Phase Deterministica (Fase 1: 0-34, Fase 2: 35-49 floor 3.5e-5)", flush=True)
+        print(f"   • Griglia Latente: 8 Bande Frequenza x 144 Step Tempo (Downsampling 8x)", flush=True)
         print(f"   • Pesi Loss Costanti: Cls={args.cls_weight}, Distill={args.codebook_distill_weight}, CosAlign=3.0", flush=True)
         print(f"   • Codebook EMA Schedule: decay=0.99 (ep < 25), decay=0.999 (ep >= 25)", flush=True)
         print("==========================================================\n", flush=True)
@@ -244,7 +239,6 @@ def main():
     optimizer_d.zero_grad(set_to_none=True)
 
     for epoch in range(start_epoch, end_epoch):
-        # Stabilizzazione deterministica del Codebook EMA
         if epoch >= 25:
             mel_vae.module.quantizer.set_decay(0.999)
         else:
@@ -305,7 +299,8 @@ def main():
                 logits_mel_t = aux_cls_head(z_q_mel)
                 logits_oct_t = aux_cls_head(z_q_oct)
 
-                targets_t = class_labels.unsqueeze(1).expand(-1, 72)
+                # Target temporale allineato a 144 step
+                targets_t = class_labels.unsqueeze(1).expand(-1, 144)
                 loss_cls_mel = F.cross_entropy(logits_mel_t, targets_t)
                 loss_cls_oct = F.cross_entropy(logits_oct_t, targets_t)
                 loss_cls = 0.5 * (loss_cls_mel + loss_cls_oct)
@@ -408,6 +403,11 @@ def main():
             if (step + 1) % print_freq == 0 or (step + 1) == total_steps:
                 unique_c, pct_u, perp = compute_codebook_diagnostics(indices_mel, num_embeddings)
                 token_match_l1 = (indices_mel[:, 0] == indices_oct[:, 0]).float().mean().item() * 100.0
+
+                pred_cls_mel = torch.mean(logits_mel_t, dim=-1).argmax(dim=-1)
+                pred_cls_oct = torch.mean(logits_oct_t, dim=-1).argmax(dim=-1)
+                acc_mel = (pred_cls_mel == class_labels).float().mean().item() * 100.0
+                acc_oct = (pred_cls_oct == class_labels).float().mean().item() * 100.0
 
                 current_lr = scheduler_g.get_last_lr()[0]
                 if rank == 0:

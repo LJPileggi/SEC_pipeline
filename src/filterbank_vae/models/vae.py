@@ -7,9 +7,8 @@ DEFAULT_BOTTLENECK_TYPE = "rvq_2d"
 
 class TemporalClassAuxiliaryHead(nn.Module):
     """
-    Testa ausiliaria di supervisione semantica spazio-temporale.
-    Esegue pooling sulle 4 bande frequenziali preservando i 72 step temporali.
-    Forza l'encoder a mantenere token coerenti con la classe lungo tutta la clip.
+    Testa ausiliaria di supervisione semantica spazio-temporale su griglia [8, 144].
+    Esegue pooling sulle 8 bande frequenziali preservando i 144 step temporali.
     """
     def __init__(self, latent_dim=256, num_classes=22, dropout=0.1):
         super().__init__()
@@ -29,12 +28,12 @@ class TemporalClassAuxiliaryHead(nn.Module):
         self.classifier = nn.Conv1d(hidden_dim, num_classes, kernel_size=1)
 
     def forward(self, z_q):
-        avg_f = torch.mean(z_q, dim=2)  # [B, D, 72]
-        max_f = torch.amax(z_q, dim=2)  # [B, D, 72]
-        feat = torch.cat([avg_f, max_f], dim=1)  # [B, 2D, 72]
+        avg_f = torch.mean(z_q, dim=2)  # [B, D, 144]
+        max_f = torch.amax(z_q, dim=2)  # [B, D, 144]
+        feat = torch.cat([avg_f, max_f], dim=1)  # [B, 2D, 144]
 
         h = self.temporal_conv(feat)
-        return self.classifier(h)  # [B, num_classes, 72]
+        return self.classifier(h)  # [B, num_classes, 144]
 
 
 ClassAuxiliaryHead = TemporalClassAuxiliaryHead
@@ -210,6 +209,13 @@ class ResidualVectorQuantizerEMA(nn.Module):
 
 
 class MelEncoder(nn.Module):
+    """
+    Downsampling da [64, 1152] a [8, 144] (Downsampling 8x simmetrico):
+    - down1: 64x1152 -> 32x576 (stride=2)
+    - down2: 32x576  -> 16x288 (stride=2)
+    - down3: 16x288  -> 8x144  (stride=2)
+    - down4: 8x144   -> 8x144  (stride=1, preserva la griglia fine)
+    """
     def __init__(self, in_channels=1, base_channels=64, latent_dim=256):
         super().__init__()
         self.init_conv = nn.Conv2d(in_channels, base_channels, kernel_size=3, padding=1)
@@ -224,7 +230,7 @@ class MelEncoder(nn.Module):
         self.down3 = nn.Conv2d(base_channels * 4, base_channels * 4, kernel_size=3, stride=2, padding=1)
 
         self.res4 = ResBlock(base_channels * 4, base_channels * 4)
-        self.down4 = nn.Conv2d(base_channels * 4, base_channels * 4, kernel_size=3, stride=2, padding=1)
+        self.down4 = nn.Conv2d(base_channels * 4, base_channels * 4, kernel_size=3, stride=1, padding=1)
 
         self.attn = AttentionBlock(base_channels * 4, num_heads=4)
         self.proj = nn.Conv2d(base_channels * 4, latent_dim, kernel_size=1)
@@ -240,12 +246,19 @@ class MelEncoder(nn.Module):
 
 
 class MelDecoder(nn.Module):
+    """
+    Upsampling da [8, 144] a [64, 1152] (Upsampling 8x simmetrico):
+    - up1: 8x144   -> 8x144   (stride=1)
+    - up2: 8x144   -> 16x288  (stride=2)
+    - up3: 16x288  -> 32x576  (stride=2)
+    - up4: 32x576  -> 64x1152 (stride=2)
+    """
     def __init__(self, out_channels=1, base_channels=64, latent_dim=256):
         super().__init__()
         self.proj_in = nn.Conv2d(latent_dim, base_channels * 4, kernel_size=1)
         self.attn = AttentionBlock(base_channels * 4, num_heads=4)
 
-        self.up1 = nn.ConvTranspose2d(base_channels * 4, base_channels * 4, kernel_size=4, stride=2, padding=1)
+        self.up1 = nn.ConvTranspose2d(base_channels * 4, base_channels * 4, kernel_size=3, stride=1, padding=1)
         self.res1 = ResBlock(base_channels * 4, base_channels * 4)
 
         self.up2 = nn.ConvTranspose2d(base_channels * 4, base_channels * 2, kernel_size=4, stride=2, padding=1)
@@ -288,6 +301,15 @@ class MelVQVAE(nn.Module):
 
 
 class OctaveEncoder(nn.Module):
+    """
+    Downsampling da [320, 1152] a [8, 144]:
+    - down1: 320x1152 -> 160x576 (stride=2)
+    - down2: 160x576  -> 80x288  (stride=2)
+    - down3: 80x288   -> 40x144  (stride=2)
+    - down4: 40x144   -> 20x144  (stride=(2, 1), preserva il tempo a 144)
+    - down5: 20x144   -> 10x144  (stride=(2, 1), preserva il tempo a 144)
+    - align_pool: (8, 144) esatto
+    """
     def __init__(self, in_channels=1, base_channels=64, latent_dim=256):
         super().__init__()
         self.init_conv = nn.Conv2d(in_channels, base_channels, kernel_size=3, padding=1)
@@ -302,12 +324,12 @@ class OctaveEncoder(nn.Module):
         self.down3 = nn.Conv2d(base_channels * 4, base_channels * 4, kernel_size=3, stride=2, padding=1)
 
         self.res4 = ResBlock(base_channels * 4, base_channels * 4)
-        self.down4 = nn.Conv2d(base_channels * 4, base_channels * 4, kernel_size=3, stride=2, padding=1)
+        self.down4 = nn.Conv2d(base_channels * 4, base_channels * 4, kernel_size=3, stride=(2, 1), padding=1)
 
         self.res5 = ResBlock(base_channels * 4, base_channels * 4)
         self.down5 = nn.Conv2d(base_channels * 4, base_channels * 4, kernel_size=3, stride=(2, 1), padding=1)
 
-        self.align_pool = nn.AdaptiveAvgPool2d((4, 72))
+        self.align_pool = nn.AdaptiveAvgPool2d((8, 144))
         self.res_final = ResBlock(base_channels * 4, base_channels * 4)
 
         self.attn = AttentionBlock(base_channels * 4, num_heads=4)
@@ -326,6 +348,15 @@ class OctaveEncoder(nn.Module):
 
 
 class OctaveDecoder(nn.Module):
+    """
+    Upsampling simmetrico da [8, 144] a [320, 1152]:
+    - up5: 8x144   -> 16x144  (stride=(2, 1))
+    - up4: 16x144  -> 32x144  (stride=(2, 1))
+    - up3: 32x144  -> 64x288  (stride=2)
+    - up2: 64x288  -> 128x576 (stride=2)
+    - up1: 128x576 -> 256x1152 (stride=2)
+    Interpolazione finale garantita su (320, 1152).
+    """
     def __init__(self, out_channels=1, base_channels=64, latent_dim=256, target_freq=320, target_time=1152):
         super().__init__()
         self.target_freq = target_freq
@@ -337,7 +368,7 @@ class OctaveDecoder(nn.Module):
         self.up5 = nn.ConvTranspose2d(base_channels * 4, base_channels * 4, kernel_size=(4, 3), stride=(2, 1), padding=(1, 1))
         self.res5 = ResBlock(base_channels * 4, base_channels * 4)
 
-        self.up4 = nn.ConvTranspose2d(base_channels * 4, base_channels * 4, kernel_size=4, stride=2, padding=1)
+        self.up4 = nn.ConvTranspose2d(base_channels * 4, base_channels * 4, kernel_size=(4, 3), stride=(2, 1), padding=(1, 1))
         self.res4 = ResBlock(base_channels * 4, base_channels * 4)
 
         self.up3 = nn.ConvTranspose2d(base_channels * 4, base_channels * 4, kernel_size=4, stride=2, padding=1)
