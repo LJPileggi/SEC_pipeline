@@ -3,7 +3,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=8
-#SBATCH --time=10:00:00
+#SBATCH --time=12:00:00
 #SBATCH --mem=128G
 #SBATCH --gres=gpu:4
 #SBATCH -p boost_usr_prod
@@ -13,9 +13,9 @@
 #SBATCH --signal=B:TERM@60
 
 START_EPOCH=${1:-0}
-NUM_EPOCHS=${2:-50}
+NUM_EPOCHS=${2:-75}
 BOTTLENECK_TYPE=${3:-"rvq_2d"}
-TOTAL_PLANNED_EPOCHS=${4:-50}
+TOTAL_PLANNED_EPOCHS=${4:-75}
 WARM_RESTART=${5:-"true"}
 
 PROJECT_DIR="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline"

@@ -25,30 +25,37 @@ from filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
 from filterbank_vae.pipeline.spectral import OnlineSpectrogramPipeline, AcousticStructuralLoss, feature_matching_loss
 from filterbank_vae.models.vae import MelVQVAE, OctaveVQVAE, DiscriminatorWithFeatures, ClassAuxiliaryHead, DEFAULT_BOTTLENECK_TYPE
 
-DEFAULT_EPOCHS = 50
+DEFAULT_EPOCHS = 75
+TOTAL_PLANNED_EPOCHS = 75
+SPLIT_EPOCH = 50
 LOCAL_BATCH_SIZE = 8
 ACCUMULATION_STEPS = 2
 LATENT_DIM = 256
 NUM_EMBEDDINGS = 1024
 NUM_QUANTIZERS = 4
+COMMITMENT_COST = float(os.environ.get("COMMITMENT_COST", 0.05))
 DISC_START_EPOCH = int(os.environ.get("DISC_START_EPOCH", 5))
 DISC_WEIGHT = float(os.environ.get("DISC_WEIGHT", 0.05))
 
-# PESI FISSI COSTANTI: Nessun curriculum dinamico che sbilancia l'equilibrio
+# PESI FISSI COSTANTI RISCALATI PER GRIGLIA AD ALTA DENSITÀ [8x144] SU 75 EPOCHE
 CLS_WEIGHT = float(os.environ.get("CLS_WEIGHT", 1.0))
+COS_ALIGN_WEIGHT = float(os.environ.get("COS_ALIGN_WEIGHT", 6.0))
 CODEBOOK_DISTILL_WEIGHT = float(os.environ.get("CODEBOOK_DISTILL_WEIGHT", 1.0))
 ENTROPY_WEIGHT = float(os.environ.get("ENTROPY_WEIGHT", 0.01))
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Distributed Dual RVQ-GAN High-Resolution Bottleneck (8x144) Training")
+    parser = argparse.ArgumentParser(description="Distributed Dual RVQ-GAN High-Density [8x144] Calibrated 75-Epoch Training")
     parser.add_argument("--start_epoch", type=int, default=int(os.environ.get("START_EPOCH", 0)))
     parser.add_argument("--epochs", type=int, default=int(os.environ.get("NUM_EPOCHS", DEFAULT_EPOCHS)))
-    parser.add_argument("--total_planned_epochs", type=int, default=int(os.environ.get("TOTAL_PLANNED_EPOCHS", 50)))
+    parser.add_argument("--total_planned_epochs", type=int, default=int(os.environ.get("TOTAL_PLANNED_EPOCHS", TOTAL_PLANNED_EPOCHS)))
+    parser.add_argument("--split_epoch", type=int, default=int(os.environ.get("SPLIT_EPOCH", SPLIT_EPOCH)))
     parser.add_argument("--bottleneck_type", type=str, default=DEFAULT_BOTTLENECK_TYPE)
     parser.add_argument("--latent_dim", type=int, default=LATENT_DIM)
     parser.add_argument("--num_embeddings", type=int, default=NUM_EMBEDDINGS)
     parser.add_argument("--num_quantizers", type=int, default=NUM_QUANTIZERS)
+    parser.add_argument("--commitment_cost", type=float, default=COMMITMENT_COST)
+    parser.add_argument("--cos_align_weight", type=float, default=COS_ALIGN_WEIGHT)
     parser.add_argument("--cls_weight", type=float, default=CLS_WEIGHT)
     parser.add_argument("--codebook_distill_weight", type=float, default=CODEBOOK_DISTILL_WEIGHT)
     parser.add_argument("--entropy_weight", type=float, default=ENTROPY_WEIGHT)
@@ -57,11 +64,11 @@ def parse_args():
     return parser.parse_args()
 
 
-def get_reproducible_lr_factor(current_epoch, total_epochs=50, split_epoch=35):
+def get_reproducible_lr_factor(current_epoch, total_epochs=75, split_epoch=50):
     """
-    Funzione deterministica per la curva LR:
-    - Fase 1 (0 -> 34): Cosine Annealing da 1.0 (2.0e-4) fino a ~0.475 (9.5e-5).
-    - Fase 2 (35 -> 49): Warm-Bump al 65% (1.3e-4) con discesa morbida fino al floor di 0.175 (3.5e-5).
+    Funzione deterministica per la curva LR riscalata a 75 epoche:
+    - Fase 1 (0 -> 49): Cosine Annealing da 1.0 (2.0e-4) fino a ~0.475 (9.5e-5).
+    - Fase 2 (50 -> 74): Warm-Bump al 65% (1.3e-4) con discesa morbida fino al floor di 0.175 (3.5e-5).
     """
     if current_epoch < split_epoch:
         progress = float(current_epoch) / float(max(1, split_epoch))
@@ -119,9 +126,12 @@ def main():
     num_epochs = args.epochs
     end_epoch = start_epoch + num_epochs
     total_planned = args.total_planned_epochs
+    split_epoch = args.split_epoch
     latent_dim = args.latent_dim
     num_embeddings = args.num_embeddings
     num_quantizers = args.num_quantizers
+    commitment_cost = args.commitment_cost
+    cos_align_weight = args.cos_align_weight
 
     rank, world_size = setup_environ_vars(slurm=True)
     device = setup_distributed_environment(rank, world_size, slurm=True)
@@ -148,7 +158,8 @@ def main():
         base_channels=64,
         latent_dim=latent_dim,
         num_embeddings=num_embeddings,
-        num_quantizers=num_quantizers
+        num_quantizers=num_quantizers,
+        commitment_cost=commitment_cost
     ).to(device)
 
     octave_vae = OctaveVQVAE(
@@ -156,6 +167,7 @@ def main():
         latent_dim=latent_dim,
         num_embeddings=num_embeddings,
         num_quantizers=num_quantizers,
+        commitment_cost=commitment_cost,
         shared_quantizer=mel_vae.quantizer
     ).to(device)
 
@@ -170,13 +182,13 @@ def main():
     optimizer_g = torch.optim.AdamW(gen_params, lr=initial_lr_g, betas=(0.5, 0.9), weight_decay=1e-5)
     scheduler_g = torch.optim.lr_scheduler.LambdaLR(
         optimizer_g,
-        lr_lambda=lambda ep: get_reproducible_lr_factor(ep, total_epochs=total_planned, split_epoch=35)
+        lr_lambda=lambda ep: get_reproducible_lr_factor(ep, total_epochs=total_planned, split_epoch=split_epoch)
     )
 
     optimizer_d = torch.optim.AdamW(discriminator.parameters(), lr=initial_lr_d, betas=(0.5, 0.9), weight_decay=1e-5)
     scheduler_d = torch.optim.lr_scheduler.LambdaLR(
         optimizer_d,
-        lr_lambda=lambda ep: get_reproducible_lr_factor(ep, total_epochs=total_planned, split_epoch=35)
+        lr_lambda=lambda ep: get_reproducible_lr_factor(ep, total_epochs=total_planned, split_epoch=split_epoch)
     )
 
     base_model_dir = os.environ.get("MODEL_CHECKPOINT_DIR", os.path.join(src_root, ".models", "vae_model"))
@@ -228,19 +240,21 @@ def main():
 
     if rank == 0:
         print("==========================================================", flush=True)
-        print(f"🏁 Dual RVQ-GAN High-Res [8x144] Bottleneck Training (DDP, GPUs: {world_size})", flush=True)
+        print(f"🏁 Dual RVQ-GAN High-Density [8x144] Calibrated 75-Epoch Training (DDP, GPUs: {world_size})", flush=True)
         print(f"   • Range Epoche: [{start_epoch} -> {end_epoch - 1}] (Pianificate totali: {total_planned})", flush=True)
-        print(f"   • Griglia Latente: 8 Bande Frequenza x 144 Step Tempo (Downsampling 8x)", flush=True)
-        print(f"   • Pesi Loss Costanti: Cls={args.cls_weight}, Distill={args.codebook_distill_weight}, CosAlign=3.0", flush=True)
-        print(f"   • Codebook EMA Schedule: decay=0.99 (ep < 25), decay=0.999 (ep >= 25)", flush=True)
+        print(f"   • Split Epoca (Warm-Bump LR): Epoca {split_epoch}", flush=True)
+        print(f"   • Griglia Latente: 8 Bande Frequenza x 144 Step Tempo (1152 Token Totali)", flush=True)
+        print(f"   • Parametri RVQ Compensati: commitment_cost={commitment_cost}, CosAlign={cos_align_weight}", flush=True)
+        print(f"   • Schedule EMA Mobile: decay=0.99 (ep < {split_epoch}), decay=0.995 (ep >= {split_epoch})", flush=True)
         print("==========================================================\n", flush=True)
 
     optimizer_g.zero_grad(set_to_none=True)
     optimizer_d.zero_grad(set_to_none=True)
 
     for epoch in range(start_epoch, end_epoch):
-        if epoch >= 25:
-            mel_vae.module.quantizer.set_decay(0.999)
+        # Transizione EMA a decay=0.995 sincronizzata con lo split di Fase 2 (epoca 50)
+        if epoch >= split_epoch:
+            mel_vae.module.quantizer.set_decay(0.995)
         else:
             mel_vae.module.quantizer.set_decay(0.99)
 
@@ -274,9 +288,10 @@ def main():
             raw_audio = raw_audio.to(device, non_blocking=True)
             class_labels = class_labels.to(device, non_blocking=True)
 
-            if epoch < 10:
+            # Curriculum degradazione distribuito armoniosamente su 75 epoche
+            if epoch < 15:
                 fraction_id = int(np.random.choice([6, 12, 16]))
-            elif epoch < 25:
+            elif epoch < 35:
                 fraction_id = int(np.random.choice([3, 6, 12, 16, 24]))
             else:
                 fraction_id = int(np.random.choice([1, 3, 6, 12, 16, 24, 32]))
@@ -318,10 +333,11 @@ def main():
                 cross_mel_recon = mel_vae.module.decoder(z_q_oct)
                 loss_cross = acoustic_loss_fn(cross_mel_recon, x_mel_target)
 
+                # Bilanciamento: Allineamento Coseno (6.0) domina su Commitment (0.05)
                 loss_g_base = (loss_rec_mel + loss_rec_oct) + \
                               loss_vq + \
                               (args.cls_weight * loss_cls) + \
-                              (3.0 * loss_align_cos) + \
+                              (cos_align_weight * loss_align_cos) + \
                               (args.codebook_distill_weight * loss_codebook_distill) + \
                               (args.entropy_weight * loss_entropy) + \
                               (1.0 * loss_cross)
@@ -396,7 +412,7 @@ def main():
             running_rec_mel += loss_rec_mel.item()
             running_rec_oct += loss_rec_oct.item()
             running_cross += loss_cross.item()
-            running_align += (3.0 * loss_align_cos).item()
+            running_align += (cos_align_weight * loss_align_cos).item()
             running_vq += loss_vq.item()
             running_adv += (cur_disc_weight * loss_adv_total).item() if use_discriminator else 0.0
 
@@ -461,6 +477,8 @@ def main():
                     'num_embeddings': num_embeddings,
                     'num_quantizers': num_quantizers,
                     'num_classes': num_classes,
+                    'commitment_cost': commitment_cost,
+                    'cos_align_weight': cos_align_weight
                 }, checkpoint_path)
                 print(f"💾 Checkpoint Dual RVQ-GAN salvato in: {checkpoint_path}", flush=True)
 

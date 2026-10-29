@@ -76,7 +76,7 @@ class ResBlock(nn.Module):
 
 
 class VectorQuantizerEMA(nn.Module):
-    def __init__(self, num_embeddings=1024, embedding_dim=256, commitment_cost=0.25, decay=0.99, epsilon=1e-5, threshold_dead=1.0):
+    def __init__(self, num_embeddings=1024, embedding_dim=256, commitment_cost=0.05, decay=0.99, epsilon=1e-5, threshold_dead=1.0):
         super().__init__()
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
@@ -165,7 +165,7 @@ class VectorQuantizerEMA(nn.Module):
 
 
 class ResidualVectorQuantizerEMA(nn.Module):
-    def __init__(self, num_quantizers=4, num_embeddings=1024, embedding_dim=256, commitment_cost=0.25, decay=0.99):
+    def __init__(self, num_quantizers=4, num_embeddings=1024, embedding_dim=256, commitment_cost=0.05, decay=0.99):
         super().__init__()
         self.num_quantizers = num_quantizers
         self.num_embeddings = num_embeddings
@@ -283,13 +283,14 @@ class MelDecoder(nn.Module):
 
 
 class MelVQVAE(nn.Module):
-    def __init__(self, base_channels=64, latent_dim=256, num_embeddings=1024, num_quantizers=4):
+    def __init__(self, base_channels=64, latent_dim=256, num_embeddings=1024, num_quantizers=4, commitment_cost=0.05):
         super().__init__()
         self.encoder = MelEncoder(in_channels=1, base_channels=base_channels, latent_dim=latent_dim)
         self.quantizer = ResidualVectorQuantizerEMA(
             num_quantizers=num_quantizers,
             num_embeddings=num_embeddings,
-            embedding_dim=latent_dim
+            embedding_dim=latent_dim,
+            commitment_cost=commitment_cost
         )
         self.decoder = MelDecoder(out_channels=1, base_channels=base_channels, latent_dim=latent_dim)
 
@@ -398,7 +399,7 @@ class OctaveDecoder(nn.Module):
 
 
 class OctaveVQVAE(nn.Module):
-    def __init__(self, base_channels=64, latent_dim=256, num_embeddings=1024, num_quantizers=4, shared_quantizer=None):
+    def __init__(self, base_channels=64, latent_dim=256, num_embeddings=1024, num_quantizers=4, commitment_cost=0.05, shared_quantizer=None):
         super().__init__()
         self.encoder = OctaveEncoder(in_channels=1, base_channels=base_channels, latent_dim=latent_dim)
         if shared_quantizer is not None:
@@ -407,7 +408,8 @@ class OctaveVQVAE(nn.Module):
             self.quantizer = ResidualVectorQuantizerEMA(
                 num_quantizers=num_quantizers,
                 num_embeddings=num_embeddings,
-                embedding_dim=latent_dim
+                embedding_dim=latent_dim,
+                commitment_cost=commitment_cost
             )
         self.decoder = OctaveDecoder(out_channels=1, base_channels=base_channels, latent_dim=latent_dim)
 
