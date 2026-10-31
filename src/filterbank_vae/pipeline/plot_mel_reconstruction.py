@@ -188,15 +188,15 @@ def main():
                 )
                 
                 npz_path = os.path.join(arrays_dir, f"{base_name}.npz")
-                np.savez_compressed(
-                    npz_path,
-                    pristine=pristine_np,
-                    cond=cond_np,
-                    recon=recon_cross_np,
-                    recon_intra=recon_intra_np,
-                    recon_oct=recon_oct_np,
-                    l2_diff=l2_diff
-                )
+                # np.savez_compressed(
+                #     npz_path,
+                #     pristine=pristine_np,
+                #     cond=cond_np,
+                #     recon=recon_cross_np,
+                #     recon_intra=recon_intra_np,
+                #     recon_oct=recon_oct_np,
+                #     l2_diff=l2_diff
+                # )
                 
                 mae_cross = float(np.abs(pristine_np - recon_cross_np).mean())
                 mae_intra = float(np.abs(pristine_np - recon_intra_np).mean())
