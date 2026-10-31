@@ -12,7 +12,7 @@
 #SBATCH --error=%x_%j.err
 #SBATCH --signal=B:TERM@60
 
-FRACTION=${1:-32}
+FRACTION=${1:-3}
 SAMPLES_PER_CLASS=${2:-50}
 
 PROJECT_DIR="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline"

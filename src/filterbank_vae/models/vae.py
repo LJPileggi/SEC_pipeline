@@ -7,8 +7,8 @@ DEFAULT_BOTTLENECK_TYPE = "rvq_2d"
 
 class TemporalClassAuxiliaryHead(nn.Module):
     """
-    Testa ausiliaria di supervisione semantica spazio-temporale su griglia [8, 144].
-    Esegue pooling sulle 8 bande frequenziali preservando i 144 step temporali.
+    Testa ausiliaria di supervisione semantica spazio-temporale su griglia [16, 144].
+    Esegue pooling sulle 16 bande frequenziali preservando i 144 step temporali.
     """
     def __init__(self, latent_dim=256, num_classes=22, dropout=0.1):
         super().__init__()
@@ -76,7 +76,7 @@ class ResBlock(nn.Module):
 
 
 class VectorQuantizerEMA(nn.Module):
-    def __init__(self, num_embeddings=1024, embedding_dim=256, commitment_cost=0.05, decay=0.99, epsilon=1e-5, threshold_dead=1.0):
+    def __init__(self, num_embeddings=1024, embedding_dim=256, commitment_cost=0.25, decay=0.99, epsilon=1e-5, threshold_dead=1.0):
         super().__init__()
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
@@ -165,7 +165,7 @@ class VectorQuantizerEMA(nn.Module):
 
 
 class ResidualVectorQuantizerEMA(nn.Module):
-    def __init__(self, num_quantizers=4, num_embeddings=1024, embedding_dim=256, commitment_cost=0.05, decay=0.99):
+    def __init__(self, num_quantizers=4, num_embeddings=1024, embedding_dim=256, commitment_cost=0.25, decay=0.99):
         super().__init__()
         self.num_quantizers = num_quantizers
         self.num_embeddings = num_embeddings
@@ -210,11 +210,11 @@ class ResidualVectorQuantizerEMA(nn.Module):
 
 class MelEncoder(nn.Module):
     """
-    Downsampling da [64, 1152] a [8, 144] (Downsampling 8x simmetrico):
+    Downsampling da [64, 1152] a [16, 144] (Preserva 16 bande frequenziali!):
     - down1: 64x1152 -> 32x576 (stride=2)
     - down2: 32x576  -> 16x288 (stride=2)
-    - down3: 16x288  -> 8x144  (stride=2)
-    - down4: 8x144   -> 8x144  (stride=1, preserva la griglia fine)
+    - down3: 16x288  -> 16x144 (stride=(1, 2), preserva le 16 bande)
+    - down4: 16x144  -> 16x144 (stride=1, raffinamento residuo)
     """
     def __init__(self, in_channels=1, base_channels=64, latent_dim=256):
         super().__init__()
@@ -227,7 +227,7 @@ class MelEncoder(nn.Module):
         self.down2 = nn.Conv2d(base_channels * 2, base_channels * 4, kernel_size=3, stride=2, padding=1)
 
         self.res3 = ResBlock(base_channels * 4, base_channels * 4)
-        self.down3 = nn.Conv2d(base_channels * 4, base_channels * 4, kernel_size=3, stride=2, padding=1)
+        self.down3 = nn.Conv2d(base_channels * 4, base_channels * 4, kernel_size=3, stride=(1, 2), padding=1)
 
         self.res4 = ResBlock(base_channels * 4, base_channels * 4)
         self.down4 = nn.Conv2d(base_channels * 4, base_channels * 4, kernel_size=3, stride=1, padding=1)
@@ -247,9 +247,9 @@ class MelEncoder(nn.Module):
 
 class MelDecoder(nn.Module):
     """
-    Upsampling da [8, 144] a [64, 1152] (Upsampling 8x simmetrico):
-    - up1: 8x144   -> 8x144   (stride=1)
-    - up2: 8x144   -> 16x288  (stride=2)
+    Upsampling simmetrico da [16, 144] a [64, 1152]:
+    - up1: 16x144  -> 16x144  (stride=1)
+    - up2: 16x144  -> 16x288  (stride=(1, 2))
     - up3: 16x288  -> 32x576  (stride=2)
     - up4: 32x576  -> 64x1152 (stride=2)
     """
@@ -261,11 +261,11 @@ class MelDecoder(nn.Module):
         self.up1 = nn.ConvTranspose2d(base_channels * 4, base_channels * 4, kernel_size=3, stride=1, padding=1)
         self.res1 = ResBlock(base_channels * 4, base_channels * 4)
 
-        self.up2 = nn.ConvTranspose2d(base_channels * 4, base_channels * 2, kernel_size=4, stride=2, padding=1)
-        self.res2 = ResBlock(base_channels * 2, base_channels * 2)
+        self.up2 = nn.ConvTranspose2d(base_channels * 4, base_channels * 4, kernel_size=(3, 4), stride=(1, 2), padding=1)
+        self.res2 = ResBlock(base_channels * 4, base_channels * 2)
 
-        self.up3 = nn.ConvTranspose2d(base_channels * 2, base_channels, kernel_size=4, stride=2, padding=1)
-        self.res3 = ResBlock(base_channels, base_channels)
+        self.up3 = nn.ConvTranspose2d(base_channels * 2, base_channels * 2, kernel_size=4, stride=2, padding=1)
+        self.res3 = ResBlock(base_channels * 2, base_channels)
 
         self.up4 = nn.ConvTranspose2d(base_channels, base_channels, kernel_size=4, stride=2, padding=1)
         self.res4 = ResBlock(base_channels, base_channels)
@@ -283,7 +283,7 @@ class MelDecoder(nn.Module):
 
 
 class MelVQVAE(nn.Module):
-    def __init__(self, base_channels=64, latent_dim=256, num_embeddings=1024, num_quantizers=4, commitment_cost=0.05):
+    def __init__(self, base_channels=64, latent_dim=256, num_embeddings=1024, num_quantizers=4, commitment_cost=0.25):
         super().__init__()
         self.encoder = MelEncoder(in_channels=1, base_channels=base_channels, latent_dim=latent_dim)
         self.quantizer = ResidualVectorQuantizerEMA(
@@ -303,13 +303,12 @@ class MelVQVAE(nn.Module):
 
 class OctaveEncoder(nn.Module):
     """
-    Downsampling da [320, 1152] a [8, 144]:
+    Downsampling da [320, 1152] a [16, 144]:
     - down1: 320x1152 -> 160x576 (stride=2)
     - down2: 160x576  -> 80x288  (stride=2)
     - down3: 80x288   -> 40x144  (stride=2)
-    - down4: 40x144   -> 20x144  (stride=(2, 1), preserva il tempo a 144)
-    - down5: 20x144   -> 10x144  (stride=(2, 1), preserva il tempo a 144)
-    - align_pool: (8, 144) esatto
+    - down4: 40x144   -> 20x144  (stride=(2, 1))
+    - align_pool: (16, 144) esatto
     """
     def __init__(self, in_channels=1, base_channels=64, latent_dim=256):
         super().__init__()
@@ -328,9 +327,7 @@ class OctaveEncoder(nn.Module):
         self.down4 = nn.Conv2d(base_channels * 4, base_channels * 4, kernel_size=3, stride=(2, 1), padding=1)
 
         self.res5 = ResBlock(base_channels * 4, base_channels * 4)
-        self.down5 = nn.Conv2d(base_channels * 4, base_channels * 4, kernel_size=3, stride=(2, 1), padding=1)
-
-        self.align_pool = nn.AdaptiveAvgPool2d((8, 144))
+        self.align_pool = nn.AdaptiveAvgPool2d((16, 144))
         self.res_final = ResBlock(base_channels * 4, base_channels * 4)
 
         self.attn = AttentionBlock(base_channels * 4, num_heads=4)
@@ -342,19 +339,17 @@ class OctaveEncoder(nn.Module):
         h = self.down2(self.res2(h))
         h = self.down3(self.res3(h))
         h = self.down4(self.res4(h))
-        h = self.down5(self.res5(h))
-        h = self.res_final(self.align_pool(h))
+        h = self.res_final(self.align_pool(self.res5(h)))
         h = self.attn(h)
         return self.proj(h)
 
 
 class OctaveDecoder(nn.Module):
     """
-    Upsampling simmetrico da [8, 144] a [320, 1152]:
-    - up5: 8x144   -> 16x144  (stride=(2, 1))
-    - up4: 16x144  -> 32x144  (stride=(2, 1))
-    - up3: 32x144  -> 64x288  (stride=2)
-    - up2: 64x288  -> 128x576 (stride=2)
+    Upsampling simmetrico da [16, 144] a [320, 1152]:
+    - up4: 16x144  -> 32x144   (stride=(2, 1))
+    - up3: 32x144  -> 64x288   (stride=2)
+    - up2: 64x288  -> 128x576  (stride=2)
     - up1: 128x576 -> 256x1152 (stride=2)
     Interpolazione finale garantita su (320, 1152).
     """
@@ -365,9 +360,6 @@ class OctaveDecoder(nn.Module):
 
         self.proj_in = nn.Conv2d(latent_dim, base_channels * 4, kernel_size=1)
         self.attn = AttentionBlock(base_channels * 4, num_heads=4)
-
-        self.up5 = nn.ConvTranspose2d(base_channels * 4, base_channels * 4, kernel_size=(4, 3), stride=(2, 1), padding=(1, 1))
-        self.res5 = ResBlock(base_channels * 4, base_channels * 4)
 
         self.up4 = nn.ConvTranspose2d(base_channels * 4, base_channels * 4, kernel_size=(4, 3), stride=(2, 1), padding=(1, 1))
         self.res4 = ResBlock(base_channels * 4, base_channels * 4)
@@ -386,7 +378,6 @@ class OctaveDecoder(nn.Module):
     def forward(self, z):
         h = self.proj_in(z)
         h = self.attn(h)
-        h = self.res5(self.up5(h))
         h = self.res4(self.up4(h))
         h = self.res3(self.up3(h))
         h = self.res2(self.up2(h))
@@ -399,7 +390,7 @@ class OctaveDecoder(nn.Module):
 
 
 class OctaveVQVAE(nn.Module):
-    def __init__(self, base_channels=64, latent_dim=256, num_embeddings=1024, num_quantizers=4, commitment_cost=0.05, shared_quantizer=None):
+    def __init__(self, base_channels=64, latent_dim=256, num_embeddings=1024, num_quantizers=4, commitment_cost=0.25, shared_quantizer=None):
         super().__init__()
         self.encoder = OctaveEncoder(in_channels=1, base_channels=base_channels, latent_dim=latent_dim)
         if shared_quantizer is not None:

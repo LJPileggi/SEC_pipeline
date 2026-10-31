@@ -14,7 +14,6 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 import numpy as np
 
-# ESATTAMENTE DUE LIVELLI: da pipeline/ a filterbank_vae/, da filterbank_vae/ alla radice src/
 current_dir = os.path.dirname(os.path.abspath(__file__))
 src_root = os.path.abspath(os.path.join(current_dir, "..", ".."))
 if src_root not in sys.path:
@@ -22,7 +21,7 @@ if src_root not in sys.path:
 
 from utils import setup_environ_vars, setup_distributed_environment, cleanup_distributed_environment, get_config_from_yaml
 from filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
-from filterbank_vae.pipeline.spectral import OnlineSpectrogramPipeline, AcousticStructuralLoss, feature_matching_loss
+from filterbank_vae.pipeline.spectral import OnlineSpectrogramPipeline, feature_matching_loss
 from filterbank_vae.models.vae import MelVQVAE, OctaveVQVAE, DiscriminatorWithFeatures, ClassAuxiliaryHead, DEFAULT_BOTTLENECK_TYPE
 
 DEFAULT_EPOCHS = 75
@@ -33,19 +32,53 @@ ACCUMULATION_STEPS = 2
 LATENT_DIM = 256
 NUM_EMBEDDINGS = 1024
 NUM_QUANTIZERS = 4
-COMMITMENT_COST = float(os.environ.get("COMMITMENT_COST", 0.05))
-DISC_START_EPOCH = int(os.environ.get("DISC_START_EPOCH", 5))
-DISC_WEIGHT = float(os.environ.get("DISC_WEIGHT", 0.05))
 
-# PESI FISSI COSTANTI RISCALATI PER GRIGLIA AD ALTA DENSITÀ [8x144] SU 75 EPOCHE
+# IPERPARAMETRI CALIBRATI V2 (Anti-Blur & Anti-Overlap)
+COMMITMENT_COST = float(os.environ.get("COMMITMENT_COST", 0.25))
+DISC_START_EPOCH = int(os.environ.get("DISC_START_EPOCH", 5))
+DISC_WEIGHT = float(os.environ.get("DISC_WEIGHT", 0.50)) # Rialzato di 10x per forzare armoniche nitide
+FM_WEIGHT = float(os.environ.get("FM_WEIGHT", 1.0))
+
 CLS_WEIGHT = float(os.environ.get("CLS_WEIGHT", 1.0))
 COS_ALIGN_WEIGHT = float(os.environ.get("COS_ALIGN_WEIGHT", 6.0))
-CODEBOOK_DISTILL_WEIGHT = float(os.environ.get("CODEBOOK_DISTILL_WEIGHT", 1.0))
-ENTROPY_WEIGHT = float(os.environ.get("ENTROPY_WEIGHT", 0.01))
+CODEBOOK_DISTILL_WEIGHT = float(os.environ.get("CODEBOOK_DISTILL_WEIGHT", 1.5))
+ENTROPY_WEIGHT = float(os.environ.get("ENTROPY_WEIGHT", 0.02))
+
+
+class MultiScaleAcousticLoss(nn.Module):
+    """
+    Funzione di costo acustica anti-sfocatura:
+    1) L1 su spettrogramma;
+    2) Gradient/Edge Loss orizzontale (tempo) e verticale (frequenza) per preservare fronti d'onda e pettini;
+    3) Log-Spectral Difference per penalizzare l'appiattimento nelle bande deboli.
+    """
+    def __init__(self, l1_weight=1.0, grad_weight=1.5, log_mag_weight=0.5):
+        super().__init__()
+        self.l1_weight = l1_weight
+        self.grad_weight = grad_weight
+        self.log_mag_weight = log_mag_weight
+
+    def forward(self, pred, target):
+        loss_l1 = F.l1_loss(pred, target)
+
+        diff_f_target = target[:, :, 1:, :] - target[:, :, :-1, :]
+        diff_f_pred = pred[:, :, 1:, :] - pred[:, :, :-1, :]
+        loss_grad_f = F.l1_loss(diff_f_pred, diff_f_target)
+
+        diff_t_target = target[:, :, :, 1:] - target[:, :, :, :-1]
+        diff_t_pred = pred[:, :, :, 1:] - pred[:, :, :, :-1]
+        loss_grad_t = F.l1_loss(diff_t_pred, diff_t_target)
+
+        eps = 1e-4
+        log_pred = torch.log(torch.clamp(pred, min=0.0) + eps)
+        log_target = torch.log(torch.clamp(target, min=0.0) + eps)
+        loss_log = F.l1_loss(log_pred, log_target)
+
+        return self.l1_weight * loss_l1 + self.grad_weight * (loss_grad_f + loss_grad_t) + self.log_mag_weight * loss_log
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Distributed Dual RVQ-GAN High-Density [8x144] Calibrated 75-Epoch Training")
+    parser = argparse.ArgumentParser(description="Distributed Dual RVQ-GAN Calibrated V2 (Grid 16x144, High-Disc, MultiScale Loss)")
     parser.add_argument("--start_epoch", type=int, default=int(os.environ.get("START_EPOCH", 0)))
     parser.add_argument("--epochs", type=int, default=int(os.environ.get("NUM_EPOCHS", DEFAULT_EPOCHS)))
     parser.add_argument("--total_planned_epochs", type=int, default=int(os.environ.get("TOTAL_PLANNED_EPOCHS", TOTAL_PLANNED_EPOCHS)))
@@ -59,17 +92,12 @@ def parse_args():
     parser.add_argument("--cls_weight", type=float, default=CLS_WEIGHT)
     parser.add_argument("--codebook_distill_weight", type=float, default=CODEBOOK_DISTILL_WEIGHT)
     parser.add_argument("--entropy_weight", type=float, default=ENTROPY_WEIGHT)
-    parser.add_argument("--warm_restart", action="store_true", default=True, help="Supporto compatibilità flag run script")
-    parser.add_argument("--freeze_lr", action="store_true", default=False, help="Flag compatibilità retroattiva")
+    parser.add_argument("--disc_weight", type=float, default=DISC_WEIGHT)
+    parser.add_argument("--warm_restart", action="store_true", default=True)
     return parser.parse_args()
 
 
 def get_reproducible_lr_factor(current_epoch, total_epochs=75, split_epoch=50):
-    """
-    Funzione deterministica per la curva LR riscalata a 75 epoche:
-    - Fase 1 (0 -> 49): Cosine Annealing da 1.0 (2.0e-4) fino a ~0.475 (9.5e-5).
-    - Fase 2 (50 -> 74): Warm-Bump al 65% (1.3e-4) con discesa morbida fino al floor di 0.175 (3.5e-5).
-    """
     if current_epoch < split_epoch:
         progress = float(current_epoch) / float(max(1, split_epoch))
         factor = 0.475 + 0.525 * 0.5 * (1.0 + math.cos(progress * math.pi))
@@ -80,9 +108,23 @@ def get_reproducible_lr_factor(current_epoch, total_epochs=75, split_epoch=50):
     return factor
 
 
-def compute_cosine_alignment_loss(z_e_oct, z_e_mel):
-    cos_sim = F.cosine_similarity(z_e_oct, z_e_mel, dim=1)
-    return torch.mean(1.0 - cos_sim)
+def compute_frequency_weighted_cosine_loss(z_e_oct, z_e_mel):
+    """
+    Allineamento Coseno pesato in frequenza su griglia [B, D, 16, 144].
+    Bande 0..7 (basse/medie): peso 1.0.
+    Bande 8..15 (alte/transienti): peso 2.5 per contrastare il disallineamento evidenziato nei test.
+    """
+    cos_sim = F.cosine_similarity(z_e_oct, z_e_mel, dim=1) # [B, 16, 144]
+    diff = 1.0 - cos_sim
+
+    H = diff.shape[1]
+    weights = torch.ones(H, device=diff.device)
+    split_h = H // 2
+    weights[split_h:] = 2.5 # enfasi alte frequenze
+    weights = weights.view(1, H, 1)
+
+    weighted_diff = diff * weights
+    return torch.mean(weighted_diff)
 
 
 def compute_codebook_distillation_loss(quantizer, z_e_oct, z_e_mel, temperature=0.1):
@@ -132,6 +174,7 @@ def main():
     num_quantizers = args.num_quantizers
     commitment_cost = args.commitment_cost
     cos_align_weight = args.cos_align_weight
+    disc_weight = args.disc_weight
 
     rank, world_size = setup_environ_vars(slurm=True)
     device = setup_distributed_environment(rank, world_size, slurm=True)
@@ -195,64 +238,30 @@ def main():
     target_model_dir = base_model_dir if base_model_dir.startswith("/") else os.path.join(src_root, base_model_dir)
     os.makedirs(target_model_dir, exist_ok=True)
 
-    if start_epoch > 0:
-        prev_epoch = start_epoch - 1
-        ckpt_candidate = os.path.join(target_model_dir, f"dual_vae_epoch_{prev_epoch}.pt")
-        if not os.path.exists(ckpt_candidate) and os.environ.get("MODELS_GLOBAL"):
-            ckpt_candidate = os.path.join(os.environ.get("MODELS_GLOBAL"), f"dual_vae_epoch_{prev_epoch}.pt")
-
-        if os.path.exists(ckpt_candidate):
-            if rank == 0:
-                print(f"🔄 [RESUMPTION] Caricamento pesi modello da: {ckpt_candidate}", flush=True)
-            checkpoint = torch.load(ckpt_candidate, map_location=device)
-            mel_vae.load_state_dict(checkpoint['mel_vae_state_dict'], strict=False)
-            octave_vae.load_state_dict(checkpoint['octave_vae_state_dict'], strict=False)
-            if 'discriminator_state_dict' in checkpoint:
-                discriminator.load_state_dict(checkpoint['discriminator_state_dict'], strict=False)
-            if 'aux_cls_head_state_dict' in checkpoint:
-                try:
-                    aux_cls_head.load_state_dict(checkpoint['aux_cls_head_state_dict'], strict=True)
-                except Exception:
-                    if rank == 0:
-                        print("⚠️ [NOTE] Nuova TemporalClassAuxiliaryHead inizializzata da zero.", flush=True)
-
-            for _ in range(start_epoch):
-                scheduler_g.step()
-                scheduler_d.step()
-
-            current_lr_g = scheduler_g.get_last_lr()[0]
-            if rank == 0:
-                print(f"🚀 [ALIGNED-RESTART] Sincronizzazione scheduler a Epoca {start_epoch} (G-LR: {current_lr_g:.2e})", flush=True)
-        else:
-            if rank == 0:
-                print(f"❌ [CRITICAL] Checkpoint non trovato: {ckpt_candidate}", flush=True)
-            sys.exit(1)
-
     mel_vae = nn.parallel.DistributedDataParallel(mel_vae, device_ids=[rank], output_device=rank, find_unused_parameters=True)
     octave_vae = nn.parallel.DistributedDataParallel(octave_vae, device_ids=[rank], output_device=rank, find_unused_parameters=True)
     aux_cls_head = nn.parallel.DistributedDataParallel(aux_cls_head, device_ids=[rank], output_device=rank)
     discriminator = nn.parallel.DistributedDataParallel(discriminator, device_ids=[rank], output_device=rank, find_unused_parameters=True, broadcast_buffers=False)
 
-    acoustic_loss_fn = AcousticStructuralLoss(alpha=1.0, beta=0.5).to(device)
+    acoustic_loss_fn = MultiScaleAcousticLoss(l1_weight=1.0, grad_weight=1.5, log_mag_weight=0.5).to(device)
 
     total_steps = len(dataloader)
     print_freq = max(1, total_steps // 10)
 
     if rank == 0:
         print("==========================================================", flush=True)
-        print(f"🏁 Dual RVQ-GAN High-Density [8x144] Calibrated 75-Epoch Training (DDP, GPUs: {world_size})", flush=True)
+        print(f"🏁 Dual RVQ-GAN V2 (Grid: [16x144]=2304 tokens, Commitment: {commitment_cost}, DiscW: {disc_weight})", flush=True)
         print(f"   • Range Epoche: [{start_epoch} -> {end_epoch - 1}] (Pianificate totali: {total_planned})", flush=True)
-        print(f"   • Split Epoca (Warm-Bump LR): Epoca {split_epoch}", flush=True)
-        print(f"   • Griglia Latente: 8 Bande Frequenza x 144 Step Tempo (1152 Token Totali)", flush=True)
-        print(f"   • Parametri RVQ Compensati: commitment_cost={commitment_cost}, CosAlign={cos_align_weight}", flush=True)
-        print(f"   • Schedule EMA Mobile: decay=0.99 (ep < {split_epoch}), decay=0.995 (ep >= {split_epoch})", flush=True)
-        print("==========================================================\n", flush=True)
+        print(f"   • Discriminator Start: Epoca {DISC_START_EPOCH} | Weight: {disc_weight} (Anti-blur enforcement)", flush=True)
+        print(f"   • Loss Acustica: MultiScale (L1 + Gradienti Tempo/Freq + Log-Spectral)", flush=True)
+        print(f"   • Allineamento Coseno: Frequency-Weighted (Bande Alte x2.5)", flush=True)
+        print("==========================================================
+", flush=True)
 
     optimizer_g.zero_grad(set_to_none=True)
     optimizer_d.zero_grad(set_to_none=True)
 
     for epoch in range(start_epoch, end_epoch):
-        # Transizione EMA a decay=0.995 sincronizzata con lo split di Fase 2 (epoca 50)
         if epoch >= split_epoch:
             mel_vae.module.quantizer.set_decay(0.995)
         else:
@@ -266,7 +275,6 @@ def main():
 
         epoch_loss_g = 0.0
         running_loss_g = 0.0
-
         running_rec_mel = 0.0
         running_rec_oct = 0.0
         running_cross = 0.0
@@ -280,7 +288,7 @@ def main():
         use_discriminator = (epoch >= DISC_START_EPOCH)
         if use_discriminator:
             ramp_factor = min(1.0, float(epoch - DISC_START_EPOCH + 1) / 3.0)
-            cur_disc_weight = DISC_WEIGHT * ramp_factor
+            cur_disc_weight = disc_weight * ramp_factor
         else:
             cur_disc_weight = 0.0
 
@@ -288,7 +296,6 @@ def main():
             raw_audio = raw_audio.to(device, non_blocking=True)
             class_labels = class_labels.to(device, non_blocking=True)
 
-            # Curriculum degradazione distribuito armoniosamente su 75 epoche
             if epoch < 15:
                 fraction_id = int(np.random.choice([6, 12, 16]))
             elif epoch < 35:
@@ -297,7 +304,6 @@ def main():
                 fraction_id = int(np.random.choice([1, 3, 6, 12, 16, 24, 32]))
 
             x_mel_target, x_octave_pchip = spectral_pipeline(raw_audio, format_id=1, fraction_id=fraction_id, device=device)
-
             oct_rec_weight = 0.25 if fraction_id == 1 else (0.5 if fraction_id == 3 else 1.0)
 
             # ------------------------------------------------------------------
@@ -314,13 +320,12 @@ def main():
                 logits_mel_t = aux_cls_head(z_q_mel)
                 logits_oct_t = aux_cls_head(z_q_oct)
 
-                # Target temporale allineato a 144 step
                 targets_t = class_labels.unsqueeze(1).expand(-1, 144)
                 loss_cls_mel = F.cross_entropy(logits_mel_t, targets_t)
                 loss_cls_oct = F.cross_entropy(logits_oct_t, targets_t)
                 loss_cls = 0.5 * (loss_cls_mel + loss_cls_oct)
 
-                loss_align_cos = compute_cosine_alignment_loss(z_e_oct, z_e_mel.detach())
+                loss_align_cos = compute_frequency_weighted_cosine_loss(z_e_oct, z_e_mel.detach())
 
                 loss_codebook_distill = compute_codebook_distillation_loss(
                     mel_vae.module.quantizer, z_e_oct, z_e_mel, temperature=0.1
@@ -333,14 +338,7 @@ def main():
                 cross_mel_recon = mel_vae.module.decoder(z_q_oct)
                 loss_cross = acoustic_loss_fn(cross_mel_recon, x_mel_target)
 
-                # Bilanciamento: Allineamento Coseno (6.0) domina su Commitment (0.05)
-                loss_g_base = (loss_rec_mel + loss_rec_oct) + \
-                              loss_vq + \
-                              (args.cls_weight * loss_cls) + \
-                              (cos_align_weight * loss_align_cos) + \
-                              (args.codebook_distill_weight * loss_codebook_distill) + \
-                              (args.entropy_weight * loss_entropy) + \
-                              (1.0 * loss_cross)
+                loss_g_base = (loss_rec_mel + loss_rec_oct) +                               loss_vq +                               (args.cls_weight * loss_cls) +                               (cos_align_weight * loss_align_cos) +                               (args.codebook_distill_weight * loss_codebook_distill) +                               (args.entropy_weight * loss_entropy) +                               (1.5 * loss_cross)
 
                 loss_adv_total = torch.tensor(0.0, device=device)
                 loss_fm_total = torch.tensor(0.0, device=device)
@@ -360,7 +358,7 @@ def main():
                     loss_adv_cross = -torch.mean(pred_fake_cross)
                     loss_adv_total = 0.5 * (loss_adv_mel + loss_adv_cross)
 
-                    loss_g_total = loss_g_base + (0.5 * loss_fm_total) + (cur_disc_weight * loss_adv_total)
+                    loss_g_total = loss_g_base + (FM_WEIGHT * loss_fm_total) + (cur_disc_weight * loss_adv_total)
                 else:
                     loss_g_total = loss_g_base
 
@@ -420,17 +418,11 @@ def main():
                 unique_c, pct_u, perp = compute_codebook_diagnostics(indices_mel, num_embeddings)
                 token_match_l1 = (indices_mel[:, 0] == indices_oct[:, 0]).float().mean().item() * 100.0
 
-                pred_cls_mel = torch.mean(logits_mel_t, dim=-1).argmax(dim=-1)
-                pred_cls_oct = torch.mean(logits_oct_t, dim=-1).argmax(dim=-1)
-                acc_mel = (pred_cls_mel == class_labels).float().mean().item() * 100.0
-                acc_oct = (pred_cls_oct == class_labels).float().mean().item() * 100.0
-
                 current_lr = scheduler_g.get_last_lr()[0]
                 if rank == 0:
                     elapsed = time.time() - step_start_time
                     percent = ((step + 1) / total_steps) * 100
                     avg_g = running_loss_g / print_freq
-                    d_val = loss_d_total.item() if use_discriminator else 0.0
 
                     m_rec_mel = running_rec_mel / print_freq
                     m_rec_oct = running_rec_oct / print_freq
@@ -440,8 +432,8 @@ def main():
                     m_adv = running_adv / print_freq
 
                     print(f" ⏱️ Ep [{epoch:02d}] {percent:4.1f}% | G: {avg_g:.3f} | "
-                          f"[RecM: {m_rec_mel:.3f} | RecOct: {m_rec_oct:.3f} | Cross: {m_cross:.3f} | Cos: {m_align:.3f} | VQ: {m_vq:.3f} | Adv: {m_adv:.3f}] | "
-                          f"Cls: {loss_cls.item():.3f} | L1: {token_match_l1:4.1f}% | ||g_oct||: {norm_g_oct:.2f} | LR: {current_lr:.1e} | {elapsed:.1f}s", flush=True)
+                          f"[RecM: {m_rec_mel:.3f} | Cross: {m_cross:.3f} | Cos: {m_align:.3f} | VQ: {m_vq:.3f} | Adv: {m_adv:.3f}] | "
+                          f"L1: {token_match_l1:4.1f}% | Perpl: {perp:.1f} | ||g_oct||: {norm_g_oct:.2f} | LR: {current_lr:.1e} | {elapsed:.1f}s", flush=True)
 
                 running_loss_g = 0.0
                 running_rec_mel = 0.0
