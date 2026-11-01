@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import argparse
 import torch
 import numpy as np
 import matplotlib
@@ -20,62 +21,75 @@ from filterbank_vae.models.vae import MelVQVAE, OctaveVQVAE, DEFAULT_BOTTLENECK_
 BOTTLENECK_TYPE = os.environ.get("BOTTLENECK_TYPE", DEFAULT_BOTTLENECK_TYPE)
 LATENT_DIM = int(os.environ.get("LATENT_DIM", 256))
 NUM_EMBEDDINGS = int(os.environ.get("NUM_EMBEDDINGS", 1024))
+NUM_QUANTIZERS = int(os.environ.get("NUM_QUANTIZERS", 4))
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Multi-Panel Visual Reconstruction Diagnostics (Grid 16x144)")
+    parser.add_argument("--fraction", type=int, default=int(os.environ.get("TARGET_FRACTION", "32")))
+    parser.add_argument("--samples_per_class", type=int, default=3)
+    parser.add_argument("--checkpoint", type=str, default="")
+    return parser.parse_args()
+
 
 def plot_full_diagnostic(pristine_mel, recon_mel_intra, recon_mel_cross, 
                          cond_oct, recon_oct_intra, emb_diff_map,
                          class_name, sample_idx, fraction, tok_acc, save_path):
-    fig, axes = plt.subplots(6, 1, figsize=(11, 14), sharex=False)
+    fig, axes = plt.subplots(6, 1, figsize=(11, 15), sharex=False)
     
-    # Range dinamico Mel
     vmin_mel = float(min(pristine_mel.min(), recon_mel_cross.min(), recon_mel_intra.min()))
     vmax_mel = float(max(pristine_mel.max(), recon_mel_cross.max(), recon_mel_intra.max()))
     
-    # Range dinamico Octave
     vmin_oct = float(min(cond_oct.min(), recon_oct_intra.min()))
     vmax_oct = float(max(cond_oct.max(), recon_oct_intra.max()))
 
     # 1. Pristine Mel
-    im0 = axes[0].imshow(pristine_mel, origin='lower', aspect='auto', cmap='magma', vmin=vmin_mel, vmax=vmax_mel)
-    axes[0].set_title(f"Class: {class_name} | #{sample_idx} - Pristine Mel ($X_0$)", fontsize=10, fontweight='bold')
+    im0 = axes[0].imshow(pristine_mel, origin="lower", aspect="auto", cmap="magma", vmin=vmin_mel, vmax=vmax_mel)
+    axes[0].set_title(f"Class: {class_name} | #{sample_idx} - Pristine Mel ($X_0$)", fontsize=10, fontweight="bold")
     axes[0].set_ylabel("Mel (64)", fontsize=8)
     fig.colorbar(im0, ax=axes[0], fraction=0.015, pad=0.01)
 
     # 2. Pure Mel Autoencoding
-    im1 = axes[1].imshow(recon_mel_intra, origin='lower', aspect='auto', cmap='magma', vmin=vmin_mel, vmax=vmax_mel)
+    im1 = axes[1].imshow(recon_mel_intra, origin="lower", aspect="auto", cmap="magma", vmin=vmin_mel, vmax=vmax_mel)
     axes[1].set_title("Intra Mel Reconstruction (MelEnc -> Codebook -> MelDec)", fontsize=10)
     axes[1].set_ylabel("Mel (64)", fontsize=8)
     fig.colorbar(im1, ax=axes[1], fraction=0.015, pad=0.01)
 
     # 3. Cross-Domain Restored Mel
-    im2 = axes[2].imshow(recon_mel_cross, origin='lower', aspect='auto', cmap='magma', vmin=vmin_mel, vmax=vmax_mel)
-    axes[2].set_title("Cross-Domain Restored Mel (OctaveEnc -> Codebook -> MelDec)", fontsize=10)
+    im2 = axes[2].imshow(recon_mel_cross, origin="lower", aspect="auto", cmap="magma", vmin=vmin_mel, vmax=vmax_mel)
+    axes[2].set_title(f"Cross-Domain Restored Mel (Octave 1/{fraction} -> Codebook -> MelDec)", fontsize=10, fontweight="bold")
     axes[2].set_ylabel("Mel (64)", fontsize=8)
     fig.colorbar(im2, ax=axes[2], fraction=0.015, pad=0.01)
 
     # 4. Input Filterbank PCHIP
-    im3 = axes[3].imshow(cond_oct, origin='lower', aspect='auto', cmap='viridis', vmin=vmin_oct, vmax=vmax_oct)
+    im3 = axes[3].imshow(cond_oct, origin="lower", aspect="auto", cmap="viridis", vmin=vmin_oct, vmax=vmax_oct)
     axes[3].set_title(f"Input Degraded Filterbank 1/{fraction} Octave (PCHIP 320 Bands)", fontsize=10)
     axes[3].set_ylabel("Octave (320)", fontsize=8)
     fig.colorbar(im3, ax=axes[3], fraction=0.015, pad=0.01)
 
     # 5. Octave Autoencoding
-    im4 = axes[4].imshow(recon_oct_intra, origin='lower', aspect='auto', cmap='viridis', vmin=vmin_oct, vmax=vmax_oct)
+    im4 = axes[4].imshow(recon_oct_intra, origin="lower", aspect="auto", cmap="viridis", vmin=vmin_oct, vmax=vmax_oct)
     axes[4].set_title("Intra Octave Reconstruction (OctaveEnc -> Codebook -> OctaveDec)", fontsize=10)
     axes[4].set_ylabel("Octave (320)", fontsize=8)
     fig.colorbar(im4, ax=axes[4], fraction=0.015, pad=0.01)
 
-    # 6. Mappa Differenza L2 tra Embeddings Quantizzati (4 x 72)
-    im5 = axes[5].imshow(emb_diff_map, origin='lower', aspect='auto', cmap='inferno')
-    axes[5].set_title(f"Latent Difference $\|z_q^{{mel}} - z_q^{{oct}}\|_2$ (Grid 4x72) | Token Match: {tok_acc:.1f}%", fontsize=10, fontweight='bold')
-    axes[5].set_xlabel("Latent Time Steps (72)", fontsize=9)
-    axes[5].set_ylabel("Freq Lat (4)", fontsize=8)
+    # 6. Mappa Differenza L2 tra Embeddings Quantizzati [16 x 144]
+    H_lat, W_lat = emb_diff_map.shape
+    im5 = axes[5].imshow(emb_diff_map, origin="lower", aspect="auto", cmap="inferno")
+    axes[5].set_title(f"Latent Difference $\|z_q^{{mel}} - z_q^{{oct}}\|_2$ (Grid {H_lat}x{W_lat}) | Level-1 Token Match: {tok_acc:.1f}%", fontsize=10, fontweight="bold")
+    axes[5].set_xlabel(f"Latent Time Steps ({W_lat})", fontsize=9)
+    axes[5].set_ylabel(f"Freq Lat ({H_lat})", fontsize=8)
     fig.colorbar(im5, ax=axes[5], fraction=0.015, pad=0.01)
 
     plt.tight_layout()
     plt.savefig(save_path, dpi=90, format="jpg", pil_kwargs={"quality": 85})
     plt.close()
 
-def resolve_checkpoint_path():
+
+def resolve_checkpoint_path(ckpt_arg=""):
+    if ckpt_arg and os.path.exists(ckpt_arg):
+        return ckpt_arg
+
     ckpt_env = os.environ.get("CHECKPOINT_PATH", "")
     if ckpt_env and os.path.exists(ckpt_env):
         return ckpt_env
@@ -101,31 +115,50 @@ def resolve_checkpoint_path():
 
     return None
 
+
 def main():
+    args = parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     classes_list, _, _, _, sampling_rate, _, _, _, _, _, _ = get_config_from_yaml("config0.yaml")
     
-    samples_per_class = 3
-    target_fraction = int(os.environ.get("TARGET_FRACTION", "3"))
+    samples_per_class = args.samples_per_class
+    target_fraction = args.fraction
     
     weights_path = os.environ.get("LOCAL_CLAP_WEIGHTS_PATH", ".clap_weights/CLAP_weights_2023.pth")
     spectral_pipeline = OnlineSpectrogramPipeline(weights_path=weights_path, sample_rate=sampling_rate, device=device).to(device)
     
-    checkpoint_path = resolve_checkpoint_path()
+    checkpoint_path = resolve_checkpoint_path(args.checkpoint)
     if checkpoint_path is None or not os.path.exists(checkpoint_path):
         print("❌ Nessun checkpoint Dual VQ-VAE trovato.")
         sys.exit(1)
         
+    print(f"📦 Caricamento checkpoint per visualizzazione: {checkpoint_path}", flush=True)
     checkpoint = torch.load(checkpoint_path, map_location=device)
     
     active_latent_dim = checkpoint.get("latent_dim", LATENT_DIM)
     active_num_embeddings = checkpoint.get("num_embeddings", NUM_EMBEDDINGS)
+    active_num_quantizers = checkpoint.get("num_quantizers", NUM_QUANTIZERS)
+    commitment_cost = checkpoint.get("commitment_cost", 0.25)
     
-    mel_vae = MelVQVAE(base_channels=64, latent_dim=active_latent_dim, num_embeddings=active_num_embeddings).to(device)
-    octave_vae = OctaveVQVAE(base_channels=64, latent_dim=active_latent_dim, num_embeddings=active_num_embeddings, shared_quantizer=mel_vae.quantizer).to(device)
+    mel_vae = MelVQVAE(
+        base_channels=64,
+        latent_dim=active_latent_dim,
+        num_embeddings=active_num_embeddings,
+        num_quantizers=active_num_quantizers,
+        commitment_cost=commitment_cost
+    ).to(device)
+
+    octave_vae = OctaveVQVAE(
+        base_channels=64,
+        latent_dim=active_latent_dim,
+        num_embeddings=active_num_embeddings,
+        num_quantizers=active_num_quantizers,
+        commitment_cost=commitment_cost,
+        shared_quantizer=mel_vae.quantizer
+    ).to(device)
     
-    mel_state = {k.replace('module.', ''): v for k, v in checkpoint['mel_vae_state_dict'].items()}
-    octave_state = {k.replace('module.', ''): v for k, v in checkpoint['octave_vae_state_dict'].items()}
+    mel_state = {k.replace("module.", ""): v for k, v in checkpoint["mel_vae_state_dict"].items()}
+    octave_state = {k.replace("module.", ""): v for k, v in checkpoint["octave_vae_state_dict"].items()}
     
     mel_vae.load_state_dict(mel_state)
     octave_vae.load_state_dict(octave_state)
@@ -151,7 +184,7 @@ def main():
 
     with torch.no_grad():
         for c_name, samples in class_collected.items():
-            print(f"   ▶ Generazione campioni diagnostici per: {c_name}")
+            print(f"   ▶ Generazione campioni diagnostici per: {c_name}", flush=True)
             summary_metrics[c_name] = []
             
             for s_idx, (audio_tensor, _) in enumerate(samples):
@@ -159,18 +192,13 @@ def main():
                 
                 x_0_pristine, x_oct_pchip = spectral_pipeline(audio_batch, format_id=1, fraction_id=target_fraction, device=device)
                 
-                # 1. Mel Intra
                 recon_intra, _, z_e_mel, z_q_mel, indices_mel = mel_vae(x_0_pristine)
-                
-                # 2. Octave Intra
                 recon_oct, _, z_e_oct, z_q_oct, indices_oct = octave_vae(x_oct_pchip)
-
-                # 3. Mel Cross
                 recon_cross = mel_vae.decoder(z_q_oct)
                 
-                # Mappa di differenza L2 tra gli embeddings [4, 72]
+                # Differenza L2 su griglia latente [H, W] (16, 144)
                 l2_diff = torch.norm(z_q_mel - z_q_oct, p=2, dim=1).squeeze(0).cpu().numpy()
-                tok_match = float((indices_mel == indices_oct).float().mean().item() * 100.0)
+                tok_match = float((indices_mel[:, 0] == indices_oct[:, 0]).float().mean().item() * 100.0)
 
                 pristine_np = np.nan_to_num(x_0_pristine.squeeze().cpu().numpy(), nan=0.0).astype(np.float32)
                 cond_np = np.nan_to_num(x_oct_pchip.squeeze().cpu().numpy(), nan=0.0).astype(np.float32)
@@ -186,17 +214,6 @@ def main():
                     cond_np, recon_oct_np, l2_diff,
                     c_name, s_idx+1, target_fraction, tok_match, img_path
                 )
-                
-                npz_path = os.path.join(arrays_dir, f"{base_name}.npz")
-                # np.savez_compressed(
-                #     npz_path,
-                #     pristine=pristine_np,
-                #     cond=cond_np,
-                #     recon=recon_cross_np,
-                #     recon_intra=recon_intra_np,
-                #     recon_oct=recon_oct_np,
-                #     l2_diff=l2_diff
-                # )
                 
                 mae_cross = float(np.abs(pristine_np - recon_cross_np).mean())
                 mae_intra = float(np.abs(pristine_np - recon_intra_np).mean())
@@ -215,8 +232,10 @@ def main():
         json.dump(summary_metrics, f, indent=2)
 
     test_dataset.close()
-    print(f"\n🎉 Plot completi a 6 pannelli salvati in: {output_dir}")
-    print(f"📊 Riepilogo diagnostico salvato in: {summary_path}")
+    print(f"\n🎉 Plot completi a 6 pannelli salvati in: {output_dir}", flush=True)
+    print(f"📊 Riepilogo diagnostico salvato in: {summary_path}", flush=True)
+
 
 if __name__ == "__main__":
     main()
+
