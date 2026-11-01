@@ -18,17 +18,16 @@ from filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
 from filterbank_vae.pipeline.spectral import OnlineSpectrogramPipeline
 from filterbank_vae.models.vae import MelVQVAE, OctaveVQVAE, DEFAULT_BOTTLENECK_TYPE
 
-BOTTLENECK_TYPE = os.environ.get("BOTTLENECK_TYPE", DEFAULT_BOTTLENECK_TYPE)
-LATENT_DIM = int(os.environ.get("LATENT_DIM", 256))
-NUM_EMBEDDINGS = int(os.environ.get("NUM_EMBEDDINGS", 1024))
-NUM_QUANTIZERS = int(os.environ.get("NUM_QUANTIZERS", 4))
+DEFAULT_LATENT_DIM = 256
+DEFAULT_NUM_EMBEDDINGS = 1024
+DEFAULT_NUM_QUANTIZERS = 4
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Multi-Panel Visual Reconstruction Diagnostics (Grid 16x144)")
-    parser.add_argument("--fraction", type=int, default=int(os.environ.get("TARGET_FRACTION", "32")))
+    parser = argparse.ArgumentParser(description="Multi-Panel Visual Reconstruction Diagnostics (Calibrated Grid 16x144)")
+    parser.add_argument("--fraction", type=int, default=int(os.environ.get("TARGET_FRACTION", "3")))
     parser.add_argument("--samples_per_class", type=int, default=3)
-    parser.add_argument("--checkpoint", type=str, default="")
+    parser.add_argument("--checkpoint", type=str, default=os.environ.get("CHECKPOINT_PATH", ""))
     return parser.parse_args()
 
 
@@ -73,10 +72,10 @@ def plot_full_diagnostic(pristine_mel, recon_mel_intra, recon_mel_cross,
     axes[4].set_ylabel("Octave (320)", fontsize=8)
     fig.colorbar(im4, ax=axes[4], fraction=0.015, pad=0.01)
 
-    # 6. Mappa Differenza L2 tra Embeddings Quantizzati [16 x 144]
+    # 6. Mappa Differenza L2 tra Embeddings Quantizzati
     H_lat, W_lat = emb_diff_map.shape
     im5 = axes[5].imshow(emb_diff_map, origin="lower", aspect="auto", cmap="inferno")
-    axes[5].set_title(f"Latent Difference $\|z_q^{{mel}} - z_q^{{oct}}\|_2$ (Grid {H_lat}x{W_lat}) | Level-1 Token Match: {tok_acc:.1f}%", fontsize=10, fontweight="bold")
+    axes[5].set_title(f"Latent Difference $\|z_q^{{mel}} - z_q^{{oct}}\|_2$ (Grid {H_lat}x{W_lat}) | Token Match: {tok_acc:.1f}%", fontsize=10, fontweight="bold")
     axes[5].set_xlabel(f"Latent Time Steps ({W_lat})", fontsize=9)
     axes[5].set_ylabel(f"Freq Lat ({H_lat})", fontsize=8)
     fig.colorbar(im5, ax=axes[5], fraction=0.015, pad=0.01)
@@ -109,8 +108,9 @@ def resolve_checkpoint_path(ckpt_arg=""):
             if os.path.exists(candidate_file):
                 return candidate_file
         
-        pts = sorted([f for f in os.listdir(d) if f.startswith("dual_vae_epoch_") and f.endswith(".pt")])
+        pts = [f for f in os.listdir(d) if f.startswith("dual_vae_epoch_") and f.endswith(".pt")]
         if pts:
+            pts.sort(key=lambda x: int(x.replace("dual_vae_epoch_", "").replace(".pt", "")))
             return os.path.join(d, pts[-1])
 
     return None
@@ -129,15 +129,15 @@ def main():
     
     checkpoint_path = resolve_checkpoint_path(args.checkpoint)
     if checkpoint_path is None or not os.path.exists(checkpoint_path):
-        print("❌ Nessun checkpoint Dual VQ-VAE trovato.")
+        print(f"❌ [CRITICAL] Nessun checkpoint Dual VQ-VAE trovato (cercato: {checkpoint_path})", flush=True)
         sys.exit(1)
         
     print(f"📦 Caricamento checkpoint per visualizzazione: {checkpoint_path}", flush=True)
     checkpoint = torch.load(checkpoint_path, map_location=device)
     
-    active_latent_dim = checkpoint.get("latent_dim", LATENT_DIM)
-    active_num_embeddings = checkpoint.get("num_embeddings", NUM_EMBEDDINGS)
-    active_num_quantizers = checkpoint.get("num_quantizers", NUM_QUANTIZERS)
+    active_latent_dim = checkpoint.get("latent_dim", DEFAULT_LATENT_DIM)
+    active_num_embeddings = checkpoint.get("num_embeddings", DEFAULT_NUM_EMBEDDINGS)
+    active_num_quantizers = checkpoint.get("num_quantizers", DEFAULT_NUM_QUANTIZERS)
     commitment_cost = checkpoint.get("commitment_cost", 0.25)
     
     mel_vae = MelVQVAE(
@@ -196,7 +196,7 @@ def main():
                 recon_oct, _, z_e_oct, z_q_oct, indices_oct = octave_vae(x_oct_pchip)
                 recon_cross = mel_vae.decoder(z_q_oct)
                 
-                # Differenza L2 su griglia latente [H, W] (16, 144)
+                # Differenza L2 tra embeddings [16, 144]
                 l2_diff = torch.norm(z_q_mel - z_q_oct, p=2, dim=1).squeeze(0).cpu().numpy()
                 tok_match = float((indices_mel[:, 0] == indices_oct[:, 0]).float().mean().item() * 100.0)
 
@@ -238,4 +238,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -3,7 +3,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
-#SBATCH --time=00:30:00
+#SBATCH --time=00:10:00
 #SBATCH --mem=64G
 #SBATCH --gres=gpu:1
 #SBATCH -p boost_usr_prod
@@ -48,7 +48,6 @@ cleanup_job_scratch() {
         sleep 2
     fi
 
-    # Stage-out prioritario delle cartelle di risultato
     if [ -d "$PROJECT_DIR/results/vae_latent_diagnostics" ]; then
         echo "📦 Stage-out: Sincronizzazione risultati su Lustre..."
         sync
@@ -80,11 +79,13 @@ cp "$CLAP_SCRATCH_WEIGHTS" "$TEMP_DIR/work_dir/weights/CLAP_weights_2023.pth"
 [ -f "$CLAP_BN0_CONSTANTS" ] && cp "$CLAP_BN0_CONSTANTS" "$TEMP_DIR/work_dir/weights/clap_bn0_constants.npz"
 cp "$DATASEC_GLOBAL/RAW_DATASET/raw_wav"/*.h5 "$TEMP_DIR/dataSEC/RAW_DATASET/raw_wav/" 2>/dev/null
 
-LATEST_VAE=$(ls -v "$MODELS_GLOBAL"/dual_vae_epoch_*.pt 2>/dev/null | tail -n 1)
-if [ -z "$LATEST_VAE" ]; then
+# Ordinamento numerico robusto dell'epoca
+LATEST_VAE=$(ls "$MODELS_GLOBAL"/dual_vae_epoch_*.pt 2>/dev/null | awk -F'_' '{print $NF, $0}' | sort -n | tail -n 1 | cut -d' ' -f2-)
+if [ -z "$LATEST_VAE" ] || [ ! -f "$LATEST_VAE" ]; then
     echo "❌ [ERROR] Nessun checkpoint VAE trovato in $MODELS_GLOBAL!"
     exit 1
 fi
+
 echo "📦 Checkpoint selezionato: $LATEST_VAE"
 cp "$LATEST_VAE" "$TEMP_DIR/models/vae_model/target_dual_vae.pt"
 
@@ -93,6 +94,7 @@ export NODE_TEMP_BASE_DIR="/tmp_data/dataSEC"
 export LOCAL_CLAP_WEIGHTS_PATH="/tmp_data/work_dir/weights/CLAP_weights_2023.pth"
 export LOCAL_CLAP_BN0_CONSTANTS_PATH="/tmp_data/work_dir/weights/clap_bn0_constants.npz"
 export CHECKPOINT_PATH="/tmp_data/models/vae_model/target_dual_vae.pt"
+export LATENT_DIM=256
 export NUMBA_CACHE_DIR="/tmp_data/numba_cache"
 export PYTHONUNBUFFERED=1
 export PYTORCH_ALLOC_CONF=expandable_segments:True

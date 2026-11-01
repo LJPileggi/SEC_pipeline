@@ -18,17 +18,17 @@ from filterbank_diffusion.data.dataset import DistributedAudioRAWDataset
 from filterbank_vae.pipeline.spectral import OnlineSpectrogramPipeline
 from filterbank_vae.models.vae import MelVQVAE, OctaveVQVAE, DEFAULT_BOTTLENECK_TYPE
 
-LATENT_DIM = 256
-NUM_EMBEDDINGS = 1024
-NUM_QUANTIZERS = 4
+DEFAULT_LATENT_DIM = 256
+DEFAULT_NUM_EMBEDDINGS = 1024
+DEFAULT_NUM_QUANTIZERS = 4
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Latent & Codebook Deep Diagnostics (Grid 16x144)")
+    parser = argparse.ArgumentParser(description="Latent & Codebook Deep Diagnostics (Calibrated Grid 16x144)")
     parser.add_argument("--fraction", type=int, default=32, help="Octave fraction (es. 1, 3, 6, 12, 16, 24, 32)")
     parser.add_argument("--samples_per_class", type=int, default=50, help="Campioni test per classe")
     parser.add_argument("--batch_size", type=int, default=16)
-    parser.add_argument("--checkpoint", type=str, default="")
+    parser.add_argument("--checkpoint", type=str, default=os.environ.get("CHECKPOINT_PATH", ""))
     return parser.parse_args()
 
 
@@ -47,8 +47,9 @@ def resolve_checkpoint(ckpt_arg):
     ]
     for d in candidate_dirs:
         if d and os.path.exists(d):
-            pts = sorted([f for f in os.listdir(d) if f.startswith("dual_vae_epoch_") and f.endswith(".pt")])
+            pts = [f for f in os.listdir(d) if f.startswith("dual_vae_epoch_") and f.endswith(".pt")]
             if pts:
+                pts.sort(key=lambda x: int(x.replace("dual_vae_epoch_", "").replace(".pt", "")))
                 return os.path.join(d, pts[-1])
     return None
 
@@ -64,14 +65,14 @@ def main():
 
     ckpt_path = resolve_checkpoint(args.checkpoint)
     if not ckpt_path or not os.path.exists(ckpt_path):
-        print("❌ [CRITICAL] Nessun checkpoint trovato per la diagnostica.", flush=True)
+        print(f"❌ [CRITICAL] Nessun checkpoint trovato per la diagnostica (cercato: {ckpt_path})", flush=True)
         sys.exit(1)
 
     print(f"📦 Caricamento checkpoint VAE: {ckpt_path}", flush=True)
     checkpoint = torch.load(ckpt_path, map_location=device)
-    active_latent_dim = checkpoint.get("latent_dim", LATENT_DIM)
-    active_num_embeddings = checkpoint.get("num_embeddings", NUM_EMBEDDINGS)
-    active_num_quantizers = checkpoint.get("num_quantizers", NUM_QUANTIZERS)
+    active_latent_dim = checkpoint.get("latent_dim", DEFAULT_LATENT_DIM)
+    active_num_embeddings = checkpoint.get("num_embeddings", DEFAULT_NUM_EMBEDDINGS)
+    active_num_quantizers = checkpoint.get("num_quantizers", DEFAULT_NUM_QUANTIZERS)
     commitment_cost = checkpoint.get("commitment_cost", 0.25)
 
     mel_vae = MelVQVAE(
@@ -127,9 +128,9 @@ def main():
             z_e_oct = octave_vae.encoder(x_oct)
             z_q_oct, _, indices_oct = octave_vae.quantizer(z_e_oct, update_ema=False)
 
-            # indices shape: [B, num_quantizers, H, W] -> [B, 4, 16, 144]
-            l1_indices_mel = indices_mel[:, 0, :, :]  # [B, 16, 144]
-            l1_indices_oct = indices_oct[:, 0, :, :]  # [B, 16, 144]
+            # indices shape: [B, num_quantizers, H, W] -> level 1: [B, H, W]
+            l1_indices_mel = indices_mel[:, 0, :, :]
+            l1_indices_oct = indices_oct[:, 0, :, :]
 
             H_lat = z_q_mel.shape[2]  # 16
             macro_bins = H_lat // 4   # 4 righe per macro-banda
@@ -240,3 +241,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
