@@ -255,8 +255,7 @@ def main():
         print(f"   • Discriminator Start: Epoca {DISC_START_EPOCH} | Weight: {disc_weight} (Anti-blur enforcement)", flush=True)
         print(f"   • Loss Acustica: MultiScale (L1 + Gradienti Tempo/Freq + Log-Spectral)", flush=True)
         print(f"   • Allineamento Coseno: Frequency-Weighted (Bande Alte x2.5)", flush=True)
-        print("==========================================================
-", flush=True)
+        print("==========================================================", flush=True)
 
     optimizer_g.zero_grad(set_to_none=True)
     optimizer_d.zero_grad(set_to_none=True)
