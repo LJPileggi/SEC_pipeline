@@ -13,7 +13,7 @@
 #SBATCH --signal=B:TERM@60
 
 NUM_EPOCHS=${1:-25}
-VAE_TARGET_EPOCH=${2:-${VAE_TARGET_EPOCH:-50}}
+VAE_TARGET_EPOCH=${2:-75}
 
 PROJECT_DIR="/leonardo_scratch/large/userexternal/$USER/SEC_pipeline"
 TEMP_DIR="/leonardo_scratch/large/userexternal/$USER/tmp_train_refiner_$SLURM_JOB_ID"
@@ -23,15 +23,23 @@ CLAP_BN0_CONSTANTS="$PROJECT_DIR/.clap_weights/clap_bn0_constants.npz"
 DATASEC_GLOBAL="/leonardo_scratch/large/userexternal/$USER/dataSEC"
 MODELS_GLOBAL="$PROJECT_DIR/.models/vae_model"
 
-# Risoluzione del singolo file di checkpoint VAE desiderato
+# Risoluzione robusta del checkpoint VAE target
 TARGET_FILE=""
-VAE_IDX=$((VAE_TARGET_EPOCH - 1))
-if [ -f "$MODELS_GLOBAL/dual_vae_epoch_${VAE_IDX}.pt" ]; then
-    TARGET_FILE="$MODELS_GLOBAL/dual_vae_epoch_${VAE_IDX}.pt"
-elif [ -f "$MODELS_GLOBAL/dual_vae_epoch_${VAE_TARGET_EPOCH}.pt" ]; then
-    TARGET_FILE="$MODELS_GLOBAL/dual_vae_epoch_${VAE_TARGET_EPOCH}.pt"
+if [ "$VAE_TARGET_EPOCH" == "latest" ]; then
+    TARGET_FILE=$(ls "$MODELS_GLOBAL"/dual_vae_epoch_*.pt 2>/dev/null | awk -F'_' '{print $NF, $0}' | sort -n | tail -n 1 | cut -d' ' -f2-)
 else
-    echo "❌ [ERROR] Impossibile trovare il checkpoint VAE per epoca ${VAE_TARGET_EPOCH} in $MODELS_GLOBAL!"
+    VAE_IDX=$((VAE_TARGET_EPOCH - 1))
+    if [ -f "$MODELS_GLOBAL/dual_vae_epoch_${VAE_IDX}.pt" ]; then
+        TARGET_FILE="$MODELS_GLOBAL/dual_vae_epoch_${VAE_IDX}.pt"
+    elif [ -f "$MODELS_GLOBAL/dual_vae_epoch_${VAE_TARGET_EPOCH}.pt" ]; then
+        TARGET_FILE="$MODELS_GLOBAL/dual_vae_epoch_${VAE_TARGET_EPOCH}.pt"
+    else
+        TARGET_FILE=$(ls "$MODELS_GLOBAL"/dual_vae_epoch_*.pt 2>/dev/null | awk -F'_' '{print $NF, $0}' | sort -n | tail -n 1 | cut -d' ' -f2-)
+    fi
+fi
+
+if [ -z "$TARGET_FILE" ] || [ ! -f "$TARGET_FILE" ]; then
+    echo "❌ [ERROR] Nessun checkpoint VAE valido trovato in $MODELS_GLOBAL!"
     exit 1
 fi
 
@@ -59,7 +67,6 @@ cleanup_job_scratch() {
         sleep 3
     fi
 
-    # Flush I/O su Lustre per consolidare i checkpoint del refiner già salvati
     sync
 
     if [ -d "$TEMP_DIR" ]; then
@@ -79,8 +86,8 @@ trap 'cleanup_job_scratch EXIT'    EXIT
 echo "=========================================================="
 echo "🎯 Refiner Training Launcher"
 echo "   • Refiner Epochs:     $NUM_EPOCHS"
-echo "   • VAE Source Epoch:   $VAE_TARGET_EPOCH"
-echo "   • Single VAE Staged:  $TARGET_FILE"
+echo "   • VAE Target Epoch:   $VAE_TARGET_EPOCH"
+echo "   • VAE Checkpoint:     $TARGET_FILE"
 echo "   • Refiner Save Dir:   $PROJECT_DIR/.models/refiner_model"
 echo "=========================================================="
 

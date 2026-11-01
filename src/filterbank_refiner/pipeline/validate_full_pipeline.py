@@ -20,9 +20,9 @@ from filterbank_vae.pipeline.spectral import OnlineSpectrogramPipeline
 from filterbank_vae.models.vae import MelVQVAE, OctaveVQVAE
 from filterbank_refiner.models.unet_refiner import MelRefinerUNet
 
-LATENT_DIM = int(os.environ.get("LATENT_DIM", 256))
-NUM_EMBEDDINGS = int(os.environ.get("NUM_EMBEDDINGS", 1024))
-NUM_QUANTIZERS = int(os.environ.get("NUM_QUANTIZERS", 4))
+DEFAULT_LATENT_DIM = 256
+DEFAULT_NUM_EMBEDDINGS = 1024
+DEFAULT_NUM_QUANTIZERS = 4
 
 
 def parse_args():
@@ -72,14 +72,33 @@ def main():
     weights_path = os.environ.get("LOCAL_CLAP_WEIGHTS_PATH", ".clap_weights/CLAP_weights_2023.pth")
     spectral_pipeline = OnlineSpectrogramPipeline(weights_path=weights_path, sample_rate=sampling_rate, device=device).to(device)
 
-    # 1. Caricamento VAE
+    # 1. Caricamento VAE dinamico
     if not args.vae_checkpoint or not os.path.exists(args.vae_checkpoint):
         raise FileNotFoundError(f"Checkpoint VAE non trovato: {args.vae_checkpoint}")
 
-    mel_vae = MelVQVAE(base_channels=64, latent_dim=LATENT_DIM, num_embeddings=NUM_EMBEDDINGS, num_quantizers=NUM_QUANTIZERS).to(device)
-    octave_vae = OctaveVQVAE(base_channels=64, latent_dim=LATENT_DIM, num_embeddings=NUM_EMBEDDINGS, num_quantizers=NUM_QUANTIZERS, shared_quantizer=mel_vae.quantizer).to(device)
-
     ckpt_vae = torch.load(args.vae_checkpoint, map_location=device)
+    active_latent_dim = ckpt_vae.get("latent_dim", DEFAULT_LATENT_DIM)
+    active_num_embeddings = ckpt_vae.get("num_embeddings", DEFAULT_NUM_EMBEDDINGS)
+    active_num_quantizers = ckpt_vae.get("num_quantizers", DEFAULT_NUM_QUANTIZERS)
+    commitment_cost = ckpt_vae.get("commitment_cost", 0.25)
+
+    mel_vae = MelVQVAE(
+        base_channels=64,
+        latent_dim=active_latent_dim,
+        num_embeddings=active_num_embeddings,
+        num_quantizers=active_num_quantizers,
+        commitment_cost=commitment_cost
+    ).to(device)
+
+    octave_vae = OctaveVQVAE(
+        base_channels=64,
+        latent_dim=active_latent_dim,
+        num_embeddings=active_num_embeddings,
+        num_quantizers=active_num_quantizers,
+        commitment_cost=commitment_cost,
+        shared_quantizer=mel_vae.quantizer
+    ).to(device)
+
     mel_vae.load_state_dict({k.replace('module.', ''): v for k, v in ckpt_vae['mel_vae_state_dict'].items()})
     octave_vae.load_state_dict({k.replace('module.', ''): v for k, v in ckpt_vae['octave_vae_state_dict'].items()})
     mel_vae.eval()

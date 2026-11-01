@@ -27,10 +27,9 @@ from filterbank_refiner.models.unet_refiner import MelRefinerUNet, RefinerPatchD
 
 DEFAULT_EPOCHS = 25
 LOCAL_BATCH_SIZE = 16
-LATENT_DIM = 256
-NUM_EMBEDDINGS = 1024
-NUM_QUANTIZERS = 4
-ACCUMULATION_STEPS = 1
+DEFAULT_LATENT_DIM = 256
+DEFAULT_NUM_EMBEDDINGS = 1024
+DEFAULT_NUM_QUANTIZERS = 4
 
 
 def parse_args():
@@ -45,13 +44,32 @@ def parse_args():
 
 
 def load_frozen_vae(device, ckpt_path):
-    mel_vae = MelVQVAE(base_channels=64, latent_dim=LATENT_DIM, num_embeddings=NUM_EMBEDDINGS, num_quantizers=NUM_QUANTIZERS).to(device)
-    octave_vae = OctaveVQVAE(base_channels=64, latent_dim=LATENT_DIM, num_embeddings=NUM_EMBEDDINGS, num_quantizers=NUM_QUANTIZERS, shared_quantizer=mel_vae.quantizer).to(device)
-
     if not os.path.exists(ckpt_path):
         raise FileNotFoundError(f"Checkpoint VAE non trovato: {ckpt_path}")
 
     checkpoint = torch.load(ckpt_path, map_location=device)
+    active_latent_dim = checkpoint.get("latent_dim", DEFAULT_LATENT_DIM)
+    active_num_embeddings = checkpoint.get("num_embeddings", DEFAULT_NUM_EMBEDDINGS)
+    active_num_quantizers = checkpoint.get("num_quantizers", DEFAULT_NUM_QUANTIZERS)
+    commitment_cost = checkpoint.get("commitment_cost", 0.25)
+
+    mel_vae = MelVQVAE(
+        base_channels=64,
+        latent_dim=active_latent_dim,
+        num_embeddings=active_num_embeddings,
+        num_quantizers=active_num_quantizers,
+        commitment_cost=commitment_cost
+    ).to(device)
+
+    octave_vae = OctaveVQVAE(
+        base_channels=64,
+        latent_dim=active_latent_dim,
+        num_embeddings=active_num_embeddings,
+        num_quantizers=active_num_quantizers,
+        commitment_cost=commitment_cost,
+        shared_quantizer=mel_vae.quantizer
+    ).to(device)
+
     mel_vae.load_state_dict({k.replace('module.', ''): v for k, v in checkpoint['mel_vae_state_dict'].items()})
     octave_vae.load_state_dict({k.replace('module.', ''): v for k, v in checkpoint['octave_vae_state_dict'].items()})
 
@@ -135,7 +153,7 @@ def main():
 
     if rank == 0:
         print("==========================================================", flush=True)
-        print(f"🚀 Training Residual-GAN Refiner (1-Step Super-Resolution)", flush=True)
+        print("🚀 Training Residual-GAN Refiner (1-Step Super-Resolution)", flush=True)
         print(f"   • U-Net Generator Parametri:    {sum(p.numel() for p in refiner.parameters() if p.requires_grad):,}", flush=True)
         print(f"   • Patch Discriminator Parametri: {sum(p.numel() for p in discriminator.parameters() if p.requires_grad):,}", flush=True)
         print(f"   • Adv Weight: {args.adv_weight} | FM Weight: {args.fm_weight}", flush=True)
@@ -158,9 +176,7 @@ def main():
                 _, _, _, z_q_oct, _ = octave_vae(x_oct_pchip)
                 x_cond = mel_vae.decoder(z_q_oct).detach()
 
-            # ------------------------------------------------------
             # 1. PASSO GENERATORE
-            # ------------------------------------------------------
             optimizer_g.zero_grad(set_to_none=True)
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
                 x_refined = refiner(x_cond)
@@ -182,9 +198,7 @@ def main():
             torch.nn.utils.clip_grad_norm_(refiner.parameters(), max_norm=1.0)
             optimizer_g.step()
 
-            # ------------------------------------------------------
             # 2. PASSO DISCRIMINATORE
-            # ------------------------------------------------------
             optimizer_d.zero_grad(set_to_none=True)
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
                 pred_real_d, _ = discriminator(x_0_pristine)
@@ -236,3 +250,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

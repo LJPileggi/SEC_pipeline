@@ -11,7 +11,7 @@
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
 
-VAE_EPOCH=${1:-50}
+VAE_EPOCH=${1:-75}
 REFINER_EPOCH=${2:-25}
 TASK_MODE=${3:-"both"}
 
@@ -25,27 +25,43 @@ DATASEC_GLOBAL="/leonardo_scratch/large/userexternal/$USER/dataSEC"
 VAE_MODELS_DIR="$PROJECT_DIR/.models/vae_model"
 REFINER_MODELS_DIR="$PROJECT_DIR/.models/refiner_model"
 
-# Risoluzione checkpoint VAE singolo (zero-indexing safe)
-VAE_IDX=$(( VAE_EPOCH - 1 ))
+# Risoluzione robusta checkpoint VAE
 VAE_FILE=""
-if [ -f "$VAE_MODELS_DIR/dual_vae_epoch_${VAE_IDX}.pt" ]; then
-    VAE_FILE="$VAE_MODELS_DIR/dual_vae_epoch_${VAE_IDX}.pt"
-elif [ -f "$VAE_MODELS_DIR/dual_vae_epoch_${VAE_EPOCH}.pt" ]; then
-    VAE_FILE="$VAE_MODELS_DIR/dual_vae_epoch_${VAE_EPOCH}.pt"
+if [ "$VAE_EPOCH" == "latest" ]; then
+    VAE_FILE=$(ls "$VAE_MODELS_DIR"/dual_vae_epoch_*.pt 2>/dev/null | awk -F'_' '{print $NF, $0}' | sort -n | tail -n 1 | cut -d' ' -f2-)
 else
-    echo "❌ [ERROR] Checkpoint VAE per epoca ${VAE_EPOCH} non trovato in $VAE_MODELS_DIR"
+    VAE_IDX=$(( VAE_EPOCH - 1 ))
+    if [ -f "$VAE_MODELS_DIR/dual_vae_epoch_${VAE_IDX}.pt" ]; then
+        VAE_FILE="$VAE_MODELS_DIR/dual_vae_epoch_${VAE_IDX}.pt"
+    elif [ -f "$VAE_MODELS_DIR/dual_vae_epoch_${VAE_EPOCH}.pt" ]; then
+        VAE_FILE="$VAE_MODELS_DIR/dual_vae_epoch_${VAE_EPOCH}.pt"
+    else
+        VAE_FILE=$(ls "$VAE_MODELS_DIR"/dual_vae_epoch_*.pt 2>/dev/null | awk -F'_' '{print $NF, $0}' | sort -n | tail -n 1 | cut -d' ' -f2-)
+    fi
+fi
+
+if [ -z "$VAE_FILE" ] || [ ! -f "$VAE_FILE" ]; then
+    echo "❌ [ERROR] Checkpoint VAE non trovato in $VAE_MODELS_DIR"
     exit 1
 fi
 
-# Risoluzione checkpoint Refiner singolo (zero-indexing safe)
-REF_IDX=$(( REFINER_EPOCH - 1 ))
+# Risoluzione robusta checkpoint Refiner
 REF_FILE=""
-if [ -f "$REFINER_MODELS_DIR/refiner_epoch_${REF_IDX}.pt" ]; then
-    REF_FILE="$REFINER_MODELS_DIR/refiner_epoch_${REF_IDX}.pt"
-elif [ -f "$REFINER_MODELS_DIR/refiner_epoch_${REFINER_EPOCH}.pt" ]; then
-    REF_FILE="$REFINER_MODELS_DIR/refiner_epoch_${REFINER_EPOCH}.pt"
+if [ "$REFINER_EPOCH" == "latest" ]; then
+    REF_FILE=$(ls "$REFINER_MODELS_DIR"/refiner_epoch_*.pt 2>/dev/null | awk -F'_' '{print $NF, $0}' | sort -n | tail -n 1 | cut -d' ' -f2-)
 else
-    echo "❌ [ERROR] Checkpoint Refiner per epoca ${REFINER_EPOCH} non trovato in $REFINER_MODELS_DIR"
+    REF_IDX=$(( REFINER_EPOCH - 1 ))
+    if [ -f "$REFINER_MODELS_DIR/refiner_epoch_${REF_IDX}.pt" ]; then
+        REF_FILE="$REFINER_MODELS_DIR/refiner_epoch_${REF_IDX}.pt"
+    elif [ -f "$REFINER_MODELS_DIR/refiner_epoch_${REFINER_EPOCH}.pt" ]; then
+        REF_FILE="$REFINER_MODELS_DIR/refiner_epoch_${REFINER_EPOCH}.pt"
+    else
+        REF_FILE=$(ls "$REFINER_MODELS_DIR"/refiner_epoch_*.pt 2>/dev/null | awk -F'_' '{print $NF, $0}' | sort -n | tail -n 1 | cut -d' ' -f2-)
+    fi
+fi
+
+if [ -z "$REF_FILE" ] || [ ! -f "$REF_FILE" ]; then
+    echo "❌ [ERROR] Checkpoint Refiner non trovato in $REFINER_MODELS_DIR"
     exit 1
 fi
 

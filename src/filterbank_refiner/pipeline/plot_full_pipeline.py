@@ -19,9 +19,9 @@ from filterbank_vae.pipeline.spectral import OnlineSpectrogramPipeline
 from filterbank_vae.models.vae import MelVQVAE, OctaveVQVAE
 from filterbank_refiner.models.unet_refiner import MelRefinerUNet
 
-LATENT_DIM = int(os.environ.get("LATENT_DIM", 256))
-NUM_EMBEDDINGS = int(os.environ.get("NUM_EMBEDDINGS", 1024))
-NUM_QUANTIZERS = int(os.environ.get("NUM_QUANTIZERS", 4))
+DEFAULT_LATENT_DIM = 256
+DEFAULT_NUM_EMBEDDINGS = 1024
+DEFAULT_NUM_QUANTIZERS = 4
 
 
 def parse_args():
@@ -36,7 +36,7 @@ def parse_args():
 def plot_pipeline_diagnostic(pristine_mel, recon_mel_intra, recon_mel_cross_raw, recon_mel_refined,
                              cond_oct, recon_oct_intra, emb_diff_map,
                              class_name, sample_idx, fraction, tok_acc, save_path):
-    fig, axes = plt.subplots(7, 1, figsize=(11, 16), sharex=False)
+    fig, axes = plt.subplots(7, 1, figsize=(11, 17), sharex=False)
 
     vmin_mel = float(min(pristine_mel.min(), recon_mel_cross_raw.min(), recon_mel_refined.min(), recon_mel_intra.min()))
     vmax_mel = float(max(pristine_mel.max(), recon_mel_cross_raw.max(), recon_mel_refined.max(), recon_mel_intra.max()))
@@ -64,7 +64,7 @@ def plot_pipeline_diagnostic(pristine_mel, recon_mel_intra, recon_mel_cross_raw,
 
     # 4. Refined Mel Residual-GAN
     im3 = axes[3].imshow(recon_mel_refined, origin='lower', aspect='auto', cmap='magma', vmin=vmin_mel, vmax=vmax_mel)
-    axes[3].set_title("3. Stage 2: Refined Mel (Residual-GAN 1-Step Super-Resolution)", fontsize=10, fontweight='bold')
+    axes[3].set_title("3. Stage 2: Refined Mel (Residual-GAN Super-Resolution)", fontsize=10, fontweight='bold')
     axes[3].set_ylabel("Mel (64)", fontsize=8)
     fig.colorbar(im3, ax=axes[3], fraction=0.015, pad=0.01)
 
@@ -80,11 +80,12 @@ def plot_pipeline_diagnostic(pristine_mel, recon_mel_intra, recon_mel_cross_raw,
     axes[5].set_ylabel("Octave (320)", fontsize=8)
     fig.colorbar(im5, ax=axes[5], fraction=0.015, pad=0.01)
 
-    # 7. Mappa Differenza L2 Spazio Latente VAE
+    # 7. Mappa Differenza L2 Spazio Latente VAE (dinamica)
+    H_lat, W_lat = emb_diff_map.shape
     im6 = axes[6].imshow(emb_diff_map, origin='lower', aspect='auto', cmap='inferno')
-    axes[6].set_title(f"VAE Latent Difference $\|z_q^{{mel}} - z_q^{{oct}}\|_2$ | Token Match: {tok_acc:.1f}%", fontsize=10)
-    axes[6].set_xlabel("Latent Time Steps (72)", fontsize=9)
-    axes[6].set_ylabel("Freq Lat (4)", fontsize=8)
+    axes[6].set_title(f"VAE Latent Difference $\|z_q^{{mel}} - z_q^{{oct}}\|_2$ (Grid {H_lat}x{W_lat}) | Level-1 Token Match: {tok_acc:.1f}%", fontsize=10, fontweight='bold')
+    axes[6].set_xlabel(f"Latent Time Steps ({W_lat})", fontsize=9)
+    axes[6].set_ylabel(f"Freq Lat ({H_lat})", fontsize=8)
     fig.colorbar(im6, ax=axes[6], fraction=0.015, pad=0.01)
 
     plt.tight_layout()
@@ -100,9 +101,30 @@ def main():
     weights_path = os.environ.get("LOCAL_CLAP_WEIGHTS_PATH", ".clap_weights/CLAP_weights_2023.pth")
     spectral_pipeline = OnlineSpectrogramPipeline(weights_path=weights_path, sample_rate=sampling_rate, device=device).to(device)
 
-    mel_vae = MelVQVAE(base_channels=64, latent_dim=LATENT_DIM, num_embeddings=NUM_EMBEDDINGS, num_quantizers=NUM_QUANTIZERS).to(device)
-    octave_vae = OctaveVQVAE(base_channels=64, latent_dim=LATENT_DIM, num_embeddings=NUM_EMBEDDINGS, num_quantizers=NUM_QUANTIZERS, shared_quantizer=mel_vae.quantizer).to(device)
+    # Caricamento dinamico parametri VAE
     ckpt_vae = torch.load(args.vae_checkpoint, map_location=device)
+    active_latent_dim = ckpt_vae.get("latent_dim", DEFAULT_LATENT_DIM)
+    active_num_embeddings = ckpt_vae.get("num_embeddings", DEFAULT_NUM_EMBEDDINGS)
+    active_num_quantizers = ckpt_vae.get("num_quantizers", DEFAULT_NUM_QUANTIZERS)
+    commitment_cost = ckpt_vae.get("commitment_cost", 0.25)
+
+    mel_vae = MelVQVAE(
+        base_channels=64,
+        latent_dim=active_latent_dim,
+        num_embeddings=active_num_embeddings,
+        num_quantizers=active_num_quantizers,
+        commitment_cost=commitment_cost
+    ).to(device)
+
+    octave_vae = OctaveVQVAE(
+        base_channels=64,
+        latent_dim=active_latent_dim,
+        num_embeddings=active_num_embeddings,
+        num_quantizers=active_num_quantizers,
+        commitment_cost=commitment_cost,
+        shared_quantizer=mel_vae.quantizer
+    ).to(device)
+
     mel_vae.load_state_dict({k.replace('module.', ''): v for k, v in ckpt_vae['mel_vae_state_dict'].items()})
     octave_vae.load_state_dict({k.replace('module.', ''): v for k, v in ckpt_vae['octave_vae_state_dict'].items()})
     mel_vae.eval()
@@ -128,7 +150,7 @@ def main():
 
     with torch.no_grad():
         for c_name, samples in class_collected.items():
-            print(f"   ▶ Generazione campioni completi per: {c_name}")
+            print(f"   ▶ Generazione campioni completi per: {c_name}", flush=True)
             for s_idx, (audio_tensor, _) in enumerate(samples):
                 audio_batch = audio_tensor.unsqueeze(0).to(device)
                 x_0_pristine, x_oct_pchip = spectral_pipeline(audio_batch, format_id=1, fraction_id=args.target_fraction, device=device)
@@ -141,7 +163,7 @@ def main():
                 recon_refined = refiner(recon_cross_raw)
 
                 l2_diff = torch.norm(z_q_mel - z_q_oct, p=2, dim=1).squeeze(0).cpu().numpy()
-                tok_match = float((indices_mel == indices_oct).float().mean().item() * 100.0)
+                tok_match = float((indices_mel[:, 0] == indices_oct[:, 0]).float().mean().item() * 100.0)
 
                 pristine_np = np.nan_to_num(x_0_pristine.squeeze().cpu().numpy(), nan=0.0).astype(np.float32)
                 recon_intra_np = np.nan_to_num(recon_intra.squeeze().cpu().numpy(), nan=0.0).astype(np.float32)
