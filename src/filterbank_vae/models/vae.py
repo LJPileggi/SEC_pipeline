@@ -5,18 +5,28 @@ import torch.nn.functional as F
 DEFAULT_BOTTLENECK_TYPE = "rvq_2d"
 
 
-class TemporalClassAuxiliaryHead(nn.Module):
+class MultiBandTemporalClassAuxiliaryHead(nn.Module):
     """
     Testa ausiliaria di supervisione semantica spazio-temporale su griglia [16, 144].
-    Esegue pooling sulle 16 bande frequenziali preservando i 144 step temporali.
+    Suddivide le 16 bande latenti in 4 macro-gruppi da 4 bande (sub-bass, mid-low, mid-high, high).
+    Calcola average e max pooling per macro-gruppo, preservando la specificita delle formanti
+    senza annacquare i segnali lungo l'asse delle frequenze.
     """
-    def __init__(self, latent_dim=256, num_classes=22, dropout=0.1):
+    def __init__(self, latent_dim=256, num_classes=22, num_freq_bands=16, num_macro_groups=4, dropout=0.1):
         super().__init__()
-        in_dim = latent_dim * 2  # avg + max su frequenza
+        self.num_macro_groups = num_macro_groups
+        self.bands_per_group = num_freq_bands // num_macro_groups  # 16 // 4 = 4
+        in_dim = latent_dim * 2 * num_macro_groups  # 256 * 2 * 4 = 2048
         hidden_dim = latent_dim
 
+        self.proj_in = nn.Sequential(
+            nn.Conv1d(in_dim, hidden_dim, kernel_size=1),
+            nn.GroupNorm(num_groups=min(32, hidden_dim // 4), num_channels=hidden_dim),
+            nn.SiLU()
+        )
+
         self.temporal_conv = nn.Sequential(
-            nn.Conv1d(in_dim, hidden_dim, kernel_size=3, padding=1),
+            nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, padding=1),
             nn.GroupNorm(num_groups=min(32, hidden_dim // 4), num_channels=hidden_dim),
             nn.SiLU(),
             nn.Dropout(p=dropout),
@@ -28,15 +38,18 @@ class TemporalClassAuxiliaryHead(nn.Module):
         self.classifier = nn.Conv1d(hidden_dim, num_classes, kernel_size=1)
 
     def forward(self, z_q):
-        avg_f = torch.mean(z_q, dim=2)  # [B, D, 144]
-        max_f = torch.amax(z_q, dim=2)  # [B, D, 144]
-        feat = torch.cat([avg_f, max_f], dim=1)  # [B, 2D, 144]
+        B, D, H, W = z_q.shape
+        z_grouped = z_q.view(B, D, self.num_macro_groups, self.bands_per_group, W)
+        avg_g = torch.mean(z_grouped, dim=3)  # [B, D, 4, W]
+        max_g = torch.amax(z_grouped, dim=3)  # [B, D, 4, W]
+        feat = torch.cat([avg_g, max_g], dim=1).view(B, D * 2 * self.num_macro_groups, W)  # [B, 2048, W]
 
-        h = self.temporal_conv(feat)
-        return self.classifier(h)  # [B, num_classes, 144]
+        h = self.proj_in(feat)
+        h = self.temporal_conv(h)
+        return self.classifier(h)  # [B, num_classes, W]
 
 
-ClassAuxiliaryHead = TemporalClassAuxiliaryHead
+ClassAuxiliaryHead = MultiBandTemporalClassAuxiliaryHead
 
 
 class AttentionBlock(nn.Module):
@@ -209,13 +222,6 @@ class ResidualVectorQuantizerEMA(nn.Module):
 
 
 class MelEncoder(nn.Module):
-    """
-    Downsampling da [64, 1152] a [16, 144] (Preserva 16 bande frequenziali!):
-    - down1: 64x1152 -> 32x576 (stride=2)
-    - down2: 32x576  -> 16x288 (stride=2)
-    - down3: 16x288  -> 16x144 (stride=(1, 2), preserva le 16 bande)
-    - down4: 16x144  -> 16x144 (stride=1, raffinamento residuo)
-    """
     def __init__(self, in_channels=1, base_channels=64, latent_dim=256):
         super().__init__()
         self.init_conv = nn.Conv2d(in_channels, base_channels, kernel_size=3, padding=1)
@@ -246,13 +252,6 @@ class MelEncoder(nn.Module):
 
 
 class MelDecoder(nn.Module):
-    """
-    Upsampling simmetrico da [16, 144] a [64, 1152]:
-    - up1: 16x144  -> 16x144  (stride=1)
-    - up2: 16x144  -> 16x288  (stride=(1, 2))
-    - up3: 16x288  -> 32x576  (stride=2)
-    - up4: 32x576  -> 64x1152 (stride=2)
-    """
     def __init__(self, out_channels=1, base_channels=64, latent_dim=256):
         super().__init__()
         self.proj_in = nn.Conv2d(latent_dim, base_channels * 4, kernel_size=1)
@@ -302,14 +301,6 @@ class MelVQVAE(nn.Module):
 
 
 class OctaveEncoder(nn.Module):
-    """
-    Downsampling da [320, 1152] a [16, 144]:
-    - down1: 320x1152 -> 160x576 (stride=2)
-    - down2: 160x576  -> 80x288  (stride=2)
-    - down3: 80x288   -> 40x144  (stride=2)
-    - down4: 40x144   -> 20x144  (stride=(2, 1))
-    - align_pool: (16, 144) esatto
-    """
     def __init__(self, in_channels=1, base_channels=64, latent_dim=256):
         super().__init__()
         self.init_conv = nn.Conv2d(in_channels, base_channels, kernel_size=3, padding=1)
@@ -345,14 +336,6 @@ class OctaveEncoder(nn.Module):
 
 
 class OctaveDecoder(nn.Module):
-    """
-    Upsampling simmetrico da [16, 144] a [320, 1152]:
-    - up4: 16x144  -> 32x144   (stride=(2, 1))
-    - up3: 32x144  -> 64x288   (stride=2)
-    - up2: 64x288  -> 128x576  (stride=2)
-    - up1: 128x576 -> 256x1152 (stride=2)
-    Interpolazione finale garantita su (320, 1152).
-    """
     def __init__(self, out_channels=1, base_channels=64, latent_dim=256, target_freq=320, target_time=1152):
         super().__init__()
         self.target_freq = target_freq
