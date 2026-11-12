@@ -33,16 +33,15 @@ LATENT_DIM = 256
 NUM_EMBEDDINGS = 1024
 NUM_QUANTIZERS = 4
 
-# Iperparametri riequilibrati per griglia 16x144 (Gradient Balance Restoration)
+# Iperparametri riequilibrati per griglia 16x144 (Hyperspherical VQ + Active Distillation)
 COMMITMENT_COST = float(os.environ.get("COMMITMENT_COST", 0.25))
 DISC_START_EPOCH = int(os.environ.get("DISC_START_EPOCH", 5))
-DISC_WEIGHT = float(os.environ.get("DISC_WEIGHT", 0.05))  # Riportato a 0.05 dal 0.50 distruttivo
-FM_WEIGHT = float(os.environ.get("FM_WEIGHT", 0.5))       # Riportato a 0.5
+DISC_WEIGHT = float(os.environ.get("DISC_WEIGHT", 0.05))
+FM_WEIGHT = float(os.environ.get("FM_WEIGHT", 0.5))
 
 CLS_WEIGHT = float(os.environ.get("CLS_WEIGHT", 1.0))
-COS_ALIGN_WEIGHT = float(os.environ.get("COS_ALIGN_WEIGHT", 3.0))  # Riportato a 3.0 uniforme
-CODEBOOK_DISTILL_WEIGHT = float(os.environ.get("CODEBOOK_DISTILL_WEIGHT", 1.0))
-ENTROPY_WEIGHT = float(os.environ.get("ENTROPY_WEIGHT", 0.01))
+COS_ALIGN_WEIGHT = float(os.environ.get("COS_ALIGN_WEIGHT", 3.0))
+CODEBOOK_DISTILL_WEIGHT = float(os.environ.get("CODEBOOK_DISTILL_WEIGHT", 2.0))
 
 
 class AcousticReconstructionLoss(nn.Module):
@@ -80,7 +79,6 @@ def parse_args():
     parser.add_argument("--cos_align_weight", type=float, default=COS_ALIGN_WEIGHT)
     parser.add_argument("--cls_weight", type=float, default=CLS_WEIGHT)
     parser.add_argument("--codebook_distill_weight", type=float, default=CODEBOOK_DISTILL_WEIGHT)
-    parser.add_argument("--entropy_weight", type=float, default=ENTROPY_WEIGHT)
     parser.add_argument("--disc_weight", type=float, default=DISC_WEIGHT)
     parser.add_argument("--warm_restart", action="store_true", default=True)
     return parser.parse_args()
@@ -103,7 +101,8 @@ def compute_uniform_cosine_loss(z_e_oct, z_e_mel):
     return torch.mean(1.0 - cos_sim)
 
 
-def compute_codebook_distillation_loss(quantizer, z_e_oct, z_e_mel, temperature=0.1):
+def compute_codebook_distillation_loss(quantizer, z_e_oct, z_e_mel, temperature=0.07):
+    """Distillazione categorica senza attenuazione T^2 (logit già normalizzati in [-1, 1])."""
     first_stage = quantizer.layers[0]
     sim_mel, _ = first_stage.get_codebook_similarities(z_e_mel.detach())
     sim_oct, _ = first_stage.get_codebook_similarities(z_e_oct)
@@ -111,20 +110,7 @@ def compute_codebook_distillation_loss(quantizer, z_e_oct, z_e_mel, temperature=
     prob_mel = F.softmax(sim_mel / temperature, dim=-1)
     log_prob_oct = F.log_softmax(sim_oct / temperature, dim=-1)
 
-    kl_div = F.kl_div(log_prob_oct, prob_mel, reduction="batchmean") * (temperature ** 2)
-    return kl_div
-
-
-def compute_batch_entropy_loss(quantizer, z_e_oct, num_embeddings=1024, temperature=0.2):
-    first_stage = quantizer.layers[0]
-    sim_oct, _ = first_stage.get_codebook_similarities(z_e_oct)
-    prob_oct = F.softmax(sim_oct / temperature, dim=-1)
-
-    avg_probs = torch.mean(prob_oct, dim=0)
-    entropy = -torch.sum(avg_probs * torch.log(avg_probs + 1e-6))
-    max_entropy = math.log(num_embeddings)
-    loss_entropy = (max_entropy - entropy) / max_entropy
-    return loss_entropy
+    return F.kl_div(log_prob_oct, prob_mel, reduction="batchmean")
 
 
 def compute_codebook_diagnostics(indices, num_embeddings):
@@ -227,10 +213,10 @@ def main():
     if rank == 0:
         print("==========================================================", flush=True)
         print(f" Dual RVQ-GAN Rebalanced (Grid: [16x144]=2304 tokens)", flush=True)
+        print(f"   • Quantizer: L2-Normalized Hyperspherical EMA-RVQ", flush=True)
         print(f"   • Discriminator: Conditional Projection (DiscW: {disc_weight}, FMW: {FM_WEIGHT})", flush=True)
         print(f"   • Auxiliary Classifier: Multi-Band 4-Region Temporal Pooling (Weight: {args.cls_weight})", flush=True)
-        print(f"   • Cosine Alignment: Uniform 1.0x (Weight: {cos_align_weight})", flush=True)
-        print(f"   • Acoustic Loss: L1 + Log-Spectral (No finite difference / Sobel)", flush=True)
+        print(f"   • Cosine Alignment: Uniform 1.0x (Weight: {cos_align_weight}) | DistillW: {args.codebook_distill_weight}", flush=True)
         print("==========================================================", flush=True)
 
     optimizer_g.zero_grad(set_to_none=True)
@@ -251,20 +237,20 @@ def main():
         epoch_loss_g = 0.0
         running_loss_g = 0.0
 
-        # Accumulatori per metriche dettagliate dell'epoca
         sum_rec_mel = 0.0
         sum_rec_oct = 0.0
         sum_cross = 0.0
         sum_align = 0.0
+        sum_distill = 0.0
         sum_vq = 0.0
         sum_cls = 0.0
         sum_adv = 0.0
         sum_fm = 0.0
 
         running_rec_mel = 0.0
-        running_rec_oct = 0.0
         running_cross = 0.0
         running_align = 0.0
+        running_distill = 0.0
         running_vq = 0.0
         running_cls = 0.0
         running_adv = 0.0
@@ -304,7 +290,6 @@ def main():
                 loss_rec_oct = F.l1_loss(recon_oct, x_octave_pchip) * oct_rec_weight
                 loss_vq = vq_loss_mel + vq_loss_oct
 
-                # Supervisione semantica multi-banda sui 144 step temporali
                 logits_mel_t = aux_cls_head(z_q_mel)
                 logits_oct_t = aux_cls_head(z_q_oct)
 
@@ -314,15 +299,10 @@ def main():
                 loss_cls_oct = F.cross_entropy(logits_oct_t, targets_t)
                 loss_cls = 0.5 * (loss_cls_mel + loss_cls_oct)
 
-                # Allineamento Coseno uniforme 1.0x
                 loss_align_cos = compute_uniform_cosine_loss(z_e_oct, z_e_mel.detach())
 
                 loss_codebook_distill = compute_codebook_distillation_loss(
-                    mel_vae.module.quantizer, z_e_oct, z_e_mel, temperature=0.1
-                )
-
-                loss_entropy = compute_batch_entropy_loss(
-                    mel_vae.module.quantizer, z_e_oct, num_embeddings=num_embeddings, temperature=0.2
+                    mel_vae.module.quantizer, z_e_oct, z_e_mel, temperature=0.07
                 )
 
                 cross_mel_recon = mel_vae.module.decoder(z_q_oct)
@@ -333,7 +313,6 @@ def main():
                               (args.cls_weight * loss_cls) + \
                               (cos_align_weight * loss_align_cos) + \
                               (args.codebook_distill_weight * loss_codebook_distill) + \
-                              (args.entropy_weight * loss_entropy) + \
                               (1.0 * loss_cross)
 
                 loss_adv_total = torch.tensor(0.0, device=device)
@@ -403,20 +382,20 @@ def main():
             epoch_loss_g += current_loss_g
             running_loss_g += current_loss_g
 
-            # Accumulo su epoca per salvataggio diagnostico nei checkpoint
             sum_rec_mel += loss_rec_mel.item()
             sum_rec_oct += loss_rec_oct.item()
             sum_cross += loss_cross.item()
             sum_align += loss_align_cos.item()
+            sum_distill += loss_codebook_distill.item()
             sum_vq += loss_vq.item()
             sum_cls += loss_cls.item()
             sum_adv += loss_adv_total.item() if use_discriminator else 0.0
             sum_fm += loss_fm_total.item() if use_discriminator else 0.0
 
             running_rec_mel += loss_rec_mel.item()
-            running_rec_oct += loss_rec_oct.item()
             running_cross += loss_cross.item()
             running_align += (cos_align_weight * loss_align_cos).item()
+            running_distill += (args.codebook_distill_weight * loss_codebook_distill).item()
             running_vq += loss_vq.item()
             running_cls += loss_cls.item()
             running_adv += (cur_disc_weight * loss_adv_total).item() if use_discriminator else 0.0
@@ -434,19 +413,20 @@ def main():
                     m_rec_mel = running_rec_mel / print_freq
                     m_cross = running_cross / print_freq
                     m_align = running_align / print_freq
+                    m_distill = running_distill / print_freq
                     m_vq = running_vq / print_freq
                     m_cls = running_cls / print_freq
                     m_adv = running_adv / print_freq
 
                     print(f"  Ep [{epoch:02d}] {percent:4.1f}% | G: {avg_g:.3f} | "
-                          f"[RecM: {m_rec_mel:.3f} | Cross: {m_cross:.3f} | Cos: {m_align:.3f} | VQ: {m_vq:.3f} | Cls: {m_cls:.3f} | Adv: {m_adv:.3f}] | "
+                          f"[RecM: {m_rec_mel:.3f} | Cross: {m_cross:.3f} | Cos: {m_align:.3f} | Dist: {m_distill:.3f} | VQ: {m_vq:.3f} | Cls: {m_cls:.3f} | Adv: {m_adv:.3f}] | "
                           f"L1: {token_match_l1:4.1f}% | Perpl: {perp:.1f} | ||g_oct||: {norm_g_oct:.2f} | LR: {current_lr:.1e} | {elapsed:.1f}s", flush=True)
 
                 running_loss_g = 0.0
                 running_rec_mel = 0.0
-                running_rec_oct = 0.0
                 running_cross = 0.0
                 running_align = 0.0
+                running_distill = 0.0
                 running_vq = 0.0
                 running_cls = 0.0
                 running_adv = 0.0
@@ -466,6 +446,7 @@ def main():
                 'rec_oct_avg': sum_rec_oct / total_steps,
                 'cross_avg': sum_cross / total_steps,
                 'cos_align_avg': sum_align / total_steps,
+                'distill_avg': sum_distill / total_steps,
                 'vq_loss_avg': sum_vq / total_steps,
                 'cls_loss_avg': sum_cls / total_steps,
                 'adv_loss_avg': sum_adv / total_steps,
@@ -474,7 +455,8 @@ def main():
 
             print(f" Epoch {epoch:03d} terminata in {total_epoch_time:.1f}s ({total_epoch_time/60:.2f} min). Media G-Loss: {avg_epoch_g:.5f}")
             print(f"   Breakdown: RecM: {metrics_summary['rec_mel_avg']:.4f} | Cross: {metrics_summary['cross_avg']:.4f} | "
-                  f"Cos: {metrics_summary['cos_align_avg']:.4f} | Cls: {metrics_summary['cls_loss_avg']:.4f} | Adv: {metrics_summary['adv_loss_avg']:.4f}\n", flush=True)
+                  f"Cos: {metrics_summary['cos_align_avg']:.4f} | Dist: {metrics_summary['distill_avg']:.4f} | "
+                  f"VQ: {metrics_summary['vq_loss_avg']:.4f} | Cls: {metrics_summary['cls_loss_avg']:.4f} | Adv: {metrics_summary['adv_loss_avg']:.4f}\n", flush=True)
 
             if (epoch + 1) % 5 == 0 or epoch == (end_epoch - 1):
                 checkpoint_path = os.path.join(target_model_dir, f"dual_vae_epoch_{epoch}.pt")

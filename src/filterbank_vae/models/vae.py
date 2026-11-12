@@ -132,11 +132,12 @@ class VectorQuantizerEMA(nn.Module):
         encodings = torch.zeros(encoding_indices.shape[0], self.num_embeddings, device=inputs.device, dtype=flat_input.dtype)
         encodings.scatter_(1, encoding_indices, 1)
 
-        quantized = torch.matmul(encodings, self.embedding.to(dtype=flat_input.dtype).t()).view(inputs_permuted.shape)
+        quantized_flat = torch.matmul(encodings, embedding_norm.t())
+        quantized = quantized_flat.view(inputs_permuted.shape)
 
         if self.training and update_ema:
             target_dtype = self.ema_w.dtype
-            flat_input_fp32 = flat_input.to(dtype=target_dtype)
+            flat_input_fp32 = flat_input_norm.to(dtype=target_dtype)
             encodings_fp32 = encodings.to(dtype=target_dtype)
 
             cluster_size = torch.sum(encodings_fp32, dim=0)
@@ -158,12 +159,13 @@ class VectorQuantizerEMA(nn.Module):
                 (self.ema_cluster_size + self.epsilon) / (n + self.num_embeddings * self.epsilon) * n
             )
             normalized_w = self.ema_w / smoothed_cluster_size.unsqueeze(0)
-            self.embedding.data.copy_(normalized_w)
+            self.embedding.data.copy_(F.normalize(normalized_w, p=2, dim=0))
 
-        e_latent_loss = F.mse_loss(inputs_permuted, quantized.detach())
+        inputs_norm_grid = flat_input_norm.view(inputs_permuted.shape)
+        e_latent_loss = F.mse_loss(inputs_norm_grid, quantized.detach())
         loss = self.commitment_cost * e_latent_loss
 
-        quantized = inputs_permuted + (quantized - inputs_permuted).detach()
+        quantized = inputs_norm_grid + (quantized - inputs_norm_grid).detach()
         quantized = quantized.permute(0, 3, 1, 2).contiguous()
 
         return quantized, loss, encoding_indices.view(inputs.shape[0], inputs.shape[2], inputs.shape[3])
@@ -173,7 +175,8 @@ class VectorQuantizerEMA(nn.Module):
         flat_indices = encoding_indices.view(-1, 1)
         encodings = torch.zeros(flat_indices.shape[0], self.num_embeddings, device=encoding_indices.device)
         encodings.scatter_(1, flat_indices, 1)
-        quantized = torch.matmul(encodings, self.embedding.t()).view(B, H, W, self.embedding_dim)
+        embedding_norm = F.normalize(self.embedding, p=2, dim=0)
+        quantized = torch.matmul(encodings, embedding_norm.t()).view(B, H, W, self.embedding_dim)
         return quantized.permute(0, 3, 1, 2).contiguous()
 
 
