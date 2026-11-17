@@ -200,6 +200,37 @@ def main():
     target_model_dir = base_model_dir if base_model_dir.startswith("/") else os.path.join(src_root, base_model_dir)
     os.makedirs(target_model_dir, exist_ok=True)
 
+    if start_epoch > 0:
+        resume_ckpt_path = os.path.join(target_model_dir, f"dual_vae_epoch_{start_epoch - 1}.pt")
+        if not os.path.exists(resume_ckpt_path):
+            raise FileNotFoundError(f"[CRITICAL] Checkpoint di resume non trovato: {resume_ckpt_path}")
+
+        checkpoint = torch.load(resume_ckpt_path, map_location=device)
+        mel_vae.load_state_dict(checkpoint["mel_vae_state_dict"])
+        octave_vae.load_state_dict(checkpoint["octave_vae_state_dict"])
+        aux_cls_head.load_state_dict(checkpoint["aux_cls_head_state_dict"])
+        discriminator.load_state_dict(checkpoint["discriminator_state_dict"])
+
+        if "optimizer_state_dict" in checkpoint:
+            optimizer_g.load_state_dict(checkpoint["optimizer_state_dict"])
+        if "scheduler_state_dict" in checkpoint:
+            scheduler_g.load_state_dict(checkpoint["scheduler_state_dict"])
+
+        if "optimizer_d_state_dict" in checkpoint:
+            optimizer_d.load_state_dict(checkpoint["optimizer_d_state_dict"])
+        if "scheduler_d_state_dict" in checkpoint:
+            scheduler_d.load_state_dict(checkpoint["scheduler_d_state_dict"])
+        else:
+            for _ in range(start_epoch):
+                scheduler_d.step()
+
+        if rank == 0:
+            print(
+                f" [RESUME] Caricato checkpoint: {resume_ckpt_path} "
+                f"(Epoca {checkpoint.get('epoch', start_epoch - 1)}, LR_G: {scheduler_g.get_last_lr()[0]:.2e}, LR_D: {scheduler_d.get_last_lr()[0]:.2e})",
+                flush=True
+            )
+
     mel_vae = nn.parallel.DistributedDataParallel(mel_vae, device_ids=[rank], output_device=rank, find_unused_parameters=True)
     octave_vae = nn.parallel.DistributedDataParallel(octave_vae, device_ids=[rank], output_device=rank, find_unused_parameters=True)
     aux_cls_head = nn.parallel.DistributedDataParallel(aux_cls_head, device_ids=[rank], output_device=rank)
@@ -468,6 +499,8 @@ def main():
                     'discriminator_state_dict': discriminator.module.state_dict(),
                     'optimizer_state_dict': optimizer_g.state_dict(),
                     'scheduler_state_dict': scheduler_g.state_dict(),
+                    'optimizer_d_state_dict': optimizer_d.state_dict(),
+                    'scheduler_d_state_dict': scheduler_d.state_dict(),
                     'loss': avg_epoch_g,
                     'metrics_summary': metrics_summary,
                     'bottleneck_type': DEFAULT_BOTTLENECK_TYPE,
