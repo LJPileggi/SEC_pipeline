@@ -47,22 +47,63 @@ CODEBOOK_DISTILL_WEIGHT = float(os.environ.get("CODEBOOK_DISTILL_WEIGHT", 2.0))
 class AcousticReconstructionLoss(nn.Module):
     """
     Loss acustica: L1 su ampiezza + Log-Spectral L1.
-    Nessun termine di derivate finite numeriche.
+    Supporta riduzione per-campione ('none') per il weighting sulla difficoltà.
     """
     def __init__(self, l1_weight=1.0, log_mag_weight=0.5):
         super().__init__()
         self.l1_weight = l1_weight
         self.log_mag_weight = log_mag_weight
 
-    def forward(self, pred, target):
-        loss_l1 = F.l1_loss(pred, target)
-
+    def forward(self, pred, target, reduction="mean"):
         eps = 1e-4
         log_pred = torch.log(torch.clamp(pred, min=0.0) + eps)
         log_target = torch.log(torch.clamp(target, min=0.0) + eps)
-        loss_log = F.l1_loss(log_pred, log_target)
+
+        if reduction == "none":
+            loss_l1 = F.l1_loss(pred, target, reduction="none").mean(dim=(1, 2, 3))
+            loss_log = F.l1_loss(log_pred, log_target, reduction="none").mean(dim=(1, 2, 3))
+        else:
+            loss_l1 = F.l1_loss(pred, target)
+            loss_log = F.l1_loss(log_pred, log_target)
 
         return self.l1_weight * loss_l1 + self.log_mag_weight * loss_log
+
+
+def focal_cross_entropy(logits, targets, gamma=1.5):
+    """
+    Focal Cross-Entropy per-frame su logits [B, C, W] e targets [B, W].
+    Attenua il gradiente sui frame già risolti e concentra il focus su quelli ambigui.
+    """
+    log_probs = F.log_softmax(logits, dim=1)
+    ce = F.nll_loss(log_probs, targets, reduction="none")  # [B, W]
+    pt = torch.exp(-ce).detach()
+    focal_factor = (1.0 - pt) ** gamma
+    return torch.mean(focal_factor * ce)
+
+
+def compute_sample_difficulty_weights(logits_oct_temp, logits_oct_token, class_labels, w_min=0.65, w_max=1.50):
+    """
+    Calcola pesi per-campione [B] clamped e normalizzati a media 1.0 nel batch,
+    basati sulla difficoltà di classificazione del ramo Octave quantizzato.
+    """
+    with torch.no_grad():
+        combined_logits = 0.5 * (logits_oct_temp.float() + logits_oct_token.float())  # [B, C, W]
+        probs = F.softmax(combined_logits, dim=1)
+        idx = class_labels.view(-1, 1, 1).expand(-1, 1, combined_logits.shape[-1])
+        true_probs = torch.gather(probs, dim=1, index=idx).squeeze(1)  # [B, W]
+        mean_conf = true_probs.mean(dim=-1)  # [B]
+
+        raw_err = 1.0 - mean_conf
+        err_min = raw_err.min()
+        err_max = raw_err.max()
+        span = err_max - err_min
+
+        if span < 1e-3:
+            return torch.ones_like(raw_err)
+
+        scaled = w_min + (w_max - w_min) * ((raw_err - err_min) / (span + 1e-6))
+        weights = scaled / (scaled.mean() + 1e-6)
+        return weights
 
 
 def parse_args():
@@ -101,16 +142,44 @@ def compute_uniform_cosine_loss(z_e_oct, z_e_mel):
     return torch.mean(1.0 - cos_sim)
 
 
-def compute_codebook_distillation_loss(quantizer, z_e_oct, z_e_mel, temperature=0.07):
-    """Distillazione categorica senza attenuazione T^2 (logit già normalizzati in [-1, 1])."""
-    first_stage = quantizer.layers[0]
-    sim_mel, _ = first_stage.get_codebook_similarities(z_e_mel.detach())
-    sim_oct, _ = first_stage.get_codebook_similarities(z_e_oct)
+def compute_codebook_distillation_loss(quantizer, z_e_oct, z_e_mel, temperature=0.07, sample_weights=None):
+    """
+    Distillazione categorica multi-stadio su tutti e 4 i layer RVQ con pesi geometrici
+    decrescenti [1.0, 0.5, 0.25, 0.125] (normalizzati a somma 1.0) e sample weighting opzionale.
+    """
+    raw_stage_weights = [1.0, 0.5, 0.25, 0.125][:len(quantizer.layers)]
+    weight_sum = sum(raw_stage_weights)
+    stage_weights = [w / weight_sum for w in raw_stage_weights]
 
-    prob_mel = F.softmax(sim_mel / temperature, dim=-1)
-    log_prob_oct = F.log_softmax(sim_oct / temperature, dim=-1)
+    B, _, H, W = z_e_oct.shape
+    num_tokens = H * W
 
-    return F.kl_div(log_prob_oct, prob_mel, reduction="batchmean")
+    res_mel = z_e_mel.detach()
+    res_oct = z_e_oct
+    per_sample_distill = torch.zeros(B, device=z_e_oct.device, dtype=torch.float32)
+
+    for s, layer in enumerate(quantizer.layers):
+        sim_mel, _ = layer.get_codebook_similarities(res_mel)
+        sim_oct, _ = layer.get_codebook_similarities(res_oct)
+
+        prob_mel = F.softmax(sim_mel / temperature, dim=-1)
+        log_prob_oct = F.log_softmax(sim_oct / temperature, dim=-1)
+
+        # KL per token [B * H * W] -> media per campione [B]
+        kl_tokens = F.kl_div(log_prob_oct, prob_mel, reduction="none").sum(dim=-1)
+        kl_per_sample = kl_tokens.view(B, num_tokens).mean(dim=-1).float()
+        per_sample_distill = per_sample_distill + stage_weights[s] * kl_per_sample
+
+        if s < len(quantizer.layers) - 1:
+            with torch.no_grad():
+                q_mel_s, _, _ = layer(res_mel, update_ema=False)
+                res_mel = res_mel - q_mel_s
+            q_oct_s, _, _ = layer(res_oct, update_ema=False)
+            res_oct = res_oct - q_oct_s
+
+    if sample_weights is not None:
+        return torch.mean(sample_weights.to(per_sample_distill.dtype) * per_sample_distill)
+    return torch.mean(per_sample_distill)
 
 
 def compute_codebook_diagnostics(indices, num_embeddings):
@@ -243,11 +312,11 @@ def main():
 
     if rank == 0:
         print("==========================================================", flush=True)
-        print(f" Dual RVQ-GAN Rebalanced (Grid: [16x144]=2304 tokens)", flush=True)
-        print(f"   • Quantizer: L2-Normalized Hyperspherical EMA-RVQ", flush=True)
+        print(f" Dual RVQ-GAN Class-Discriminative (Grid: [16x144]=2304 tokens)", flush=True)
+        print(f"   • Quantizer: Class-Purity Weighted Hyperspherical EMA-RVQ", flush=True)
         print(f"   • Discriminator: Conditional Projection (DiscW: {disc_weight}, FMW: {FM_WEIGHT})", flush=True)
-        print(f"   • Auxiliary Classifier: Multi-Band 4-Region Temporal Pooling (Weight: {args.cls_weight})", flush=True)
-        print(f"   • Cosine Alignment: Uniform 1.0x (Weight: {cos_align_weight}) | DistillW: {args.codebook_distill_weight}", flush=True)
+        print(f"   • Auxiliary Classifier: Temporal + Single-Token Focal (Weight: {args.cls_weight})", flush=True)
+        print(f"   • Cosine Alignment: Uniform 1.0x (Weight: {cos_align_weight}) | 4-Stage DistillW: {args.codebook_distill_weight}", flush=True)
         print("==========================================================", flush=True)
 
     optimizer_g.zero_grad(set_to_none=True)
@@ -300,10 +369,11 @@ def main():
             raw_audio = raw_audio.to(device, non_blocking=True)
             class_labels = class_labels.to(device, non_blocking=True)
 
-            if epoch < 15:
-                fraction_id = int(np.random.choice([6, 12, 16]))
-            elif epoch < 35:
-                fraction_id = int(np.random.choice([3, 6, 12, 16, 24]))
+            # Curriculum anticipato: esposizione immediata a 1/3 ottava e spettro completo da epoca 25
+            if epoch < 10:
+                fraction_id = int(np.random.choice([3, 6, 12, 16]))
+            elif epoch < 25:
+                fraction_id = int(np.random.choice([1, 3, 6, 12, 16, 24]))
             else:
                 fraction_id = int(np.random.choice([1, 3, 6, 12, 16, 24, 32]))
 
@@ -314,30 +384,58 @@ def main():
             # 1. PASSO GENERATORE
             # ------------------------------------------------------------------
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                recon_mel, vq_loss_mel, z_e_mel, z_q_mel, indices_mel = mel_vae(x_mel_target)
+                # Quantizzazione iniziale senza EMA per calcolare la purezza di classe dei token
+                recon_mel, vq_loss_mel, z_e_mel, z_q_mel, indices_mel = mel_vae(x_mel_target, update_ema=False)
                 recon_oct, vq_loss_oct, z_e_oct, z_q_oct, indices_oct = octave_vae(x_octave_pchip)
 
                 loss_rec_mel = acoustic_loss_fn(recon_mel, x_mel_target)
                 loss_rec_oct = F.l1_loss(recon_oct, x_octave_pchip) * oct_rec_weight
                 loss_vq = vq_loss_mel + vq_loss_oct
 
-                logits_mel_t = aux_cls_head(z_q_mel)
-                logits_oct_t = aux_cls_head(z_q_oct)
+                logits_mel_temp, logits_mel_tok = aux_cls_head(z_q_mel)
+                logits_oct_temp, logits_oct_tok = aux_cls_head(z_q_oct)
 
-                W_lat = z_q_mel.shape[-1]  # 144
+                # Aggiornamento EMA del codebook pesato sulla purezza di classe locale
+                with torch.no_grad():
+                    H_lat, W_lat = z_q_mel.shape[-2], z_q_mel.shape[-1]  # 16, 144
+                    tok_probs = F.softmax(logits_mel_tok.float(), dim=1)  # [B, C, W]
+                    cls_idx_w = class_labels.view(-1, 1, 1).expand(-1, 1, W_lat)
+                    tok_conf = torch.gather(tok_probs, dim=1, index=cls_idx_w).squeeze(1)  # [B, W]
+                    purity_grid = (0.15 + 0.85 * tok_conf).unsqueeze(1).expand(-1, H_lat, -1)  # [B, 16, 144]
+
+                mel_vae.module.quantizer.update_ema_weighted(z_e_mel, purity_grid)
+
                 targets_t = class_labels.unsqueeze(1).expand(-1, W_lat)
-                loss_cls_mel = F.cross_entropy(logits_mel_t, targets_t)
-                loss_cls_oct = F.cross_entropy(logits_oct_t, targets_t)
+                loss_cls_mel = 0.5 * (
+                    focal_cross_entropy(logits_mel_temp, targets_t, gamma=1.5) +
+                    focal_cross_entropy(logits_mel_tok, targets_t, gamma=1.5)
+                )
+                loss_cls_oct = 0.5 * (
+                    focal_cross_entropy(logits_oct_temp, targets_t, gamma=1.5) +
+                    focal_cross_entropy(logits_oct_tok, targets_t, gamma=1.5)
+                )
                 loss_cls = 0.5 * (loss_cls_mel + loss_cls_oct)
+
+                # Pesi di difficoltà per-campione (attivi dopo il warm-up iniziale)
+                if epoch >= DISC_START_EPOCH:
+                    sample_weights = compute_sample_difficulty_weights(
+                        logits_oct_temp, logits_oct_tok, class_labels, w_min=0.65, w_max=1.50
+                    )
+                else:
+                    sample_weights = None
 
                 loss_align_cos = compute_uniform_cosine_loss(z_e_oct, z_e_mel.detach())
 
                 loss_codebook_distill = compute_codebook_distillation_loss(
-                    mel_vae.module.quantizer, z_e_oct, z_e_mel, temperature=0.07
+                    mel_vae.module.quantizer, z_e_oct, z_e_mel, temperature=0.07, sample_weights=sample_weights
                 )
 
                 cross_mel_recon = mel_vae.module.decoder(z_q_oct)
-                loss_cross = acoustic_loss_fn(cross_mel_recon, x_mel_target)
+                if sample_weights is not None:
+                    loss_cross_per_sample = acoustic_loss_fn(cross_mel_recon, x_mel_target, reduction="none")
+                    loss_cross = torch.mean(sample_weights.to(loss_cross_per_sample.dtype) * loss_cross_per_sample)
+                else:
+                    loss_cross = acoustic_loss_fn(cross_mel_recon, x_mel_target)
 
                 loss_g_base = (loss_rec_mel + loss_rec_oct) + \
                               loss_vq + \

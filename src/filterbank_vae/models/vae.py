@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.distributed as dist
 
 DEFAULT_BOTTLENECK_TYPE = "rvq_2d"
 
@@ -8,9 +9,10 @@ DEFAULT_BOTTLENECK_TYPE = "rvq_2d"
 class MultiBandTemporalClassAuxiliaryHead(nn.Module):
     """
     Testa ausiliaria di supervisione semantica spazio-temporale su griglia [16, 144].
-    Suddivide le 16 bande latenti in 4 macro-gruppi da 4 bande (sub-bass, mid-low, mid-high, high).
-    Calcola average e max pooling per macro-gruppo, preservando la specificita delle formanti
-    senza annacquare i segnali lungo l'asse delle frequenze.
+    Combina:
+      1) Ramo spazio-temporale multi-banda (Conv1d k=3 su 4 macro-gruppi da 4 bande).
+      2) Ramo puntuale single-token (Conv1d k=1 senza contesto temporale) per impedire
+         che il contesto temporale nasconda centroidi promiscui nel codebook.
     """
     def __init__(self, latent_dim=256, num_classes=22, num_freq_bands=16, num_macro_groups=4, dropout=0.1):
         super().__init__()
@@ -37,6 +39,9 @@ class MultiBandTemporalClassAuxiliaryHead(nn.Module):
         )
         self.classifier = nn.Conv1d(hidden_dim, num_classes, kernel_size=1)
 
+        # Ramo locale a singolo frame/token (nessuna mescolanza temporale)
+        self.token_classifier = nn.Conv1d(latent_dim, num_classes, kernel_size=1)
+
     def forward(self, z_q):
         B, D, H, W = z_q.shape
         z_grouped = z_q.view(B, D, self.num_macro_groups, self.bands_per_group, W)
@@ -46,7 +51,14 @@ class MultiBandTemporalClassAuxiliaryHead(nn.Module):
 
         h = self.proj_in(feat)
         h = self.temporal_conv(h)
-        return self.classifier(h)  # [B, num_classes, W]
+        logits_temporal = self.classifier(h)  # [B, num_classes, W]
+
+        # Classificazione puntuale su singolo token normalizzato (media sulle bande frequenziali)
+        z_norm = F.normalize(z_q, p=2, dim=1)
+        token_pool = torch.mean(z_norm, dim=2)  # [B, D, W]
+        logits_token = self.token_classifier(token_pool)  # [B, num_classes, W]
+
+        return logits_temporal, logits_token
 
 
 ClassAuxiliaryHead = MultiBandTemporalClassAuxiliaryHead
@@ -115,7 +127,52 @@ class VectorQuantizerEMA(nn.Module):
         similarities = torch.matmul(flat_input_norm, embedding_norm)
         return similarities, inputs_permuted.shape
 
-    def forward(self, inputs, update_ema=True):
+    def _apply_ema_update(self, flat_input_norm, encodings, purity_weights=None):
+        target_dtype = self.ema_w.dtype
+        flat_input_fp32 = flat_input_norm.detach().to(dtype=target_dtype)
+        encodings_fp32 = encodings.detach().to(dtype=target_dtype)
+
+        if purity_weights is not None:
+            weights_fp32 = purity_weights.detach().reshape(-1, 1).to(device=flat_input_fp32.device, dtype=target_dtype)
+            weighted_encodings = encodings_fp32 * weights_fp32
+        else:
+            weights_fp32 = None
+            weighted_encodings = encodings_fp32
+
+        cluster_size = torch.sum(weighted_encodings, dim=0)
+        dw = torch.matmul(flat_input_fp32.t(), weighted_encodings)
+
+        if dist.is_available() and dist.is_initialized():
+            dist.all_reduce(cluster_size, op=dist.ReduceOp.SUM)
+            dist.all_reduce(dw, op=dist.ReduceOp.SUM)
+
+        self.ema_cluster_size.data.mul_(self.decay).add_(cluster_size, alpha=1 - self.decay)
+        self.ema_w.data.mul_(self.decay).add_(dw, alpha=1 - self.decay)
+
+        dead_codes = self.ema_cluster_size < self.threshold_dead
+        if dead_codes.any():
+            n_dead = dead_codes.sum().item()
+            if weights_fp32 is not None:
+                pure_mask = (weights_fp32.squeeze(-1) > 0.6).nonzero(as_tuple=True)[0]
+                pool = flat_input_fp32[pure_mask] if pure_mask.numel() > 0 else flat_input_fp32
+            else:
+                pool = flat_input_fp32
+
+            rand_indices = torch.randint(0, pool.size(0), (n_dead,), device=pool.device)
+            sampled_latents = pool[rand_indices].t()
+            if dist.is_available() and dist.is_initialized():
+                dist.broadcast(sampled_latents, src=0)
+            self.ema_w.data[:, dead_codes] = sampled_latents
+            self.ema_cluster_size.data[dead_codes] = self.threshold_dead
+
+        n = torch.sum(self.ema_cluster_size)
+        smoothed_cluster_size = (
+            (self.ema_cluster_size + self.epsilon) / (n + self.num_embeddings * self.epsilon) * n
+        )
+        normalized_w = self.ema_w / smoothed_cluster_size.unsqueeze(0)
+        self.embedding.data.copy_(F.normalize(normalized_w, p=2, dim=0))
+
+    def forward(self, inputs, update_ema=True, purity_weights=None):
         inputs_permuted = inputs.permute(0, 2, 3, 1).contiguous()
         flat_input = inputs_permuted.view(-1, self.embedding_dim)
 
@@ -136,30 +193,7 @@ class VectorQuantizerEMA(nn.Module):
         quantized = quantized_flat.view(inputs_permuted.shape)
 
         if self.training and update_ema:
-            target_dtype = self.ema_w.dtype
-            flat_input_fp32 = flat_input_norm.to(dtype=target_dtype)
-            encodings_fp32 = encodings.to(dtype=target_dtype)
-
-            cluster_size = torch.sum(encodings_fp32, dim=0)
-            self.ema_cluster_size.data.mul_(self.decay).add_(cluster_size, alpha=1 - self.decay)
-
-            dw = torch.matmul(flat_input_fp32.t(), encodings_fp32)
-            self.ema_w.data.mul_(self.decay).add_(dw, alpha=1 - self.decay)
-
-            dead_codes = self.ema_cluster_size < self.threshold_dead
-            if dead_codes.any():
-                n_dead = dead_codes.sum().item()
-                rand_indices = torch.randint(0, flat_input_fp32.size(0), (n_dead,), device=inputs.device)
-                sampled_latents = flat_input_fp32[rand_indices].t()
-                self.ema_w.data[:, dead_codes] = sampled_latents
-                self.ema_cluster_size.data[dead_codes] = self.threshold_dead
-
-            n = torch.sum(self.ema_cluster_size)
-            smoothed_cluster_size = (
-                (self.ema_cluster_size + self.epsilon) / (n + self.num_embeddings * self.epsilon) * n
-            )
-            normalized_w = self.ema_w / smoothed_cluster_size.unsqueeze(0)
-            self.embedding.data.copy_(F.normalize(normalized_w, p=2, dim=0))
+            self._apply_ema_update(flat_input_norm, encodings, purity_weights=purity_weights)
 
         inputs_norm_grid = flat_input_norm.view(inputs_permuted.shape)
         e_latent_loss = F.mse_loss(inputs_norm_grid, quantized.detach())
@@ -200,14 +234,14 @@ class ResidualVectorQuantizerEMA(nn.Module):
         for layer in self.layers:
             layer.set_decay(new_decay)
 
-    def forward(self, inputs, update_ema=True):
+    def forward(self, inputs, update_ema=True, purity_weights=None):
         residual = inputs
         quantized_out = torch.zeros_like(inputs)
         total_loss = torch.tensor(0.0, device=inputs.device, dtype=inputs.dtype)
         all_indices = []
 
         for layer in self.layers:
-            q_stage, loss_stage, indices_stage = layer(residual, update_ema=update_ema)
+            q_stage, loss_stage, indices_stage = layer(residual, update_ema=update_ema, purity_weights=purity_weights)
             residual = residual - q_stage
             quantized_out = quantized_out + q_stage
             total_loss = total_loss + loss_stage
@@ -215,6 +249,14 @@ class ResidualVectorQuantizerEMA(nn.Module):
 
         indices = torch.stack(all_indices, dim=1)
         return quantized_out, total_loss, indices
+
+    @torch.no_grad()
+    def update_ema_weighted(self, inputs, purity_weights):
+        """Aggiorna gli EMA dei 4 stadi RVQ pesando i vettori con la purezza di classe."""
+        residual = inputs.detach()
+        for layer in self.layers:
+            q_stage, _, _ = layer(residual, update_ema=True, purity_weights=purity_weights)
+            residual = residual - q_stage
 
     def quantize_code(self, encoding_indices):
         quantized_out = 0.0
@@ -296,9 +338,9 @@ class MelVQVAE(nn.Module):
         )
         self.decoder = MelDecoder(out_channels=1, base_channels=base_channels, latent_dim=latent_dim)
 
-    def forward(self, x):
+    def forward(self, x, update_ema=True, purity_weights=None):
         z_e = self.encoder(x)
-        z_q, vq_loss, indices = self.quantizer(z_e, update_ema=True)
+        z_q, vq_loss, indices = self.quantizer(z_e, update_ema=update_ema, purity_weights=purity_weights)
         recon = self.decoder(z_q)
         return recon, vq_loss, z_e, z_q, indices
 
