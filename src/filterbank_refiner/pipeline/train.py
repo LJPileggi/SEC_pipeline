@@ -26,6 +26,7 @@ from filterbank_vae.models.vae import MelVQVAE, OctaveVQVAE
 from filterbank_refiner.models.unet_refiner import MelRefinerUNet, RefinerPatchDiscriminator
 
 DEFAULT_EPOCHS = 25
+TOTAL_PLANNED_EPOCHS = 25
 LOCAL_BATCH_SIZE = 16
 DEFAULT_LATENT_DIM = 256
 DEFAULT_NUM_EMBEDDINGS = 1024
@@ -34,7 +35,9 @@ DEFAULT_NUM_QUANTIZERS = 4
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Residual-GAN Refiner for Spectrogram Super-Resolution")
-    parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS)
+    parser.add_argument("--start_epoch", type=int, default=int(os.environ.get("START_EPOCH", 0)))
+    parser.add_argument("--epochs", type=int, default=int(os.environ.get("NUM_EPOCHS", DEFAULT_EPOCHS)))
+    parser.add_argument("--total_planned_epochs", type=int, default=int(os.environ.get("TOTAL_PLANNED_EPOCHS", TOTAL_PLANNED_EPOCHS)))
     parser.add_argument("--lr_g", type=float, default=2e-4)
     parser.add_argument("--lr_d", type=float, default=1e-4)
     parser.add_argument("--adv_weight", type=float, default=0.1)
@@ -98,10 +101,16 @@ def high_frequency_gradient_loss(pred, target):
 
 def main():
     args = parse_args()
+    start_epoch = args.start_epoch
+    num_epochs = args.epochs
+    end_epoch = start_epoch + num_epochs
+    total_planned = max(args.total_planned_epochs, end_epoch)
+
     rank, world_size = setup_environ_vars(slurm=True)
     device = setup_distributed_environment(rank, world_size, slurm=True)
 
     classes_list, _, _, _, sampling_rate, _, _, seed, _, _, _ = get_config_from_yaml("config0.yaml")
+    num_classes = len(classes_list)
 
     local_seed = seed + rank
     torch.manual_seed(local_seed)
@@ -117,24 +126,62 @@ def main():
         print(f"❄️ Caricamento Dual VQ-VAE congelato: {args.vae_checkpoint}", flush=True)
     mel_vae, octave_vae = load_frozen_vae(device, args.vae_checkpoint)
 
-    # 1. Generatore U-Net Diretto
+    # 1. Generatore U-Net Diretto (unconditional a inferenza)
     refiner = MelRefinerUNet(in_channels=1, out_channels=1, base_channels=32).to(device)
-    refiner = nn.parallel.DistributedDataParallel(refiner, device_ids=[rank], output_device=rank)
 
-    # 2. Discriminatore PatchGAN
-    discriminator = RefinerPatchDiscriminator(in_channels=1, ndf=32).to(device)
-    discriminator = nn.parallel.DistributedDataParallel(
-        discriminator,
-        device_ids=[rank],
-        output_device=rank,
-        broadcast_buffers=False
-    )
+    # 2. Discriminatore PatchGAN Condizionale (Projection Discriminator)
+    discriminator = RefinerPatchDiscriminator(in_channels=1, ndf=32, num_classes=num_classes).to(device)
 
     optimizer_g = torch.optim.AdamW(refiner.parameters(), lr=args.lr_g, betas=(0.5, 0.9), weight_decay=1e-4)
     optimizer_d = torch.optim.AdamW(discriminator.parameters(), lr=args.lr_d, betas=(0.5, 0.9), weight_decay=1e-4)
 
-    scheduler_g = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_g, T_max=args.epochs, eta_min=1e-6)
-    scheduler_d = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_d, T_max=args.epochs, eta_min=1e-6)
+    scheduler_g = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_g, T_max=total_planned, eta_min=1e-6)
+    scheduler_d = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_d, T_max=total_planned, eta_min=1e-6)
+
+    save_dir = os.environ.get("REFINER_CHECKPOINT_DIR", os.path.join(src_root, ".models", "refiner_model"))
+    os.makedirs(save_dir, exist_ok=True)
+
+    if start_epoch > 0:
+        resume_ckpt_path = os.path.join(save_dir, f"refiner_epoch_{start_epoch - 1}.pt")
+        if not os.path.exists(resume_ckpt_path):
+            raise FileNotFoundError(f"[CRITICAL] Checkpoint Refiner di resume non trovato: {resume_ckpt_path}")
+
+        checkpoint = torch.load(resume_ckpt_path, map_location=device)
+        refiner.load_state_dict({k.replace('module.', ''): v for k, v in checkpoint['refiner_state_dict'].items()})
+        discriminator.load_state_dict({k.replace('module.', ''): v for k, v in checkpoint['discriminator_state_dict'].items()})
+
+        if 'optimizer_g_state_dict' in checkpoint:
+            optimizer_g.load_state_dict(checkpoint['optimizer_g_state_dict'])
+        if 'optimizer_d_state_dict' in checkpoint:
+            optimizer_d.load_state_dict(checkpoint['optimizer_d_state_dict'])
+
+        if 'scheduler_g_state_dict' in checkpoint:
+            scheduler_g.load_state_dict(checkpoint['scheduler_g_state_dict'])
+        else:
+            for _ in range(start_epoch):
+                scheduler_g.step()
+
+        if 'scheduler_d_state_dict' in checkpoint:
+            scheduler_d.load_state_dict(checkpoint['scheduler_d_state_dict'])
+        else:
+            for _ in range(start_epoch):
+                scheduler_d.step()
+
+        if rank == 0:
+            print(
+                f"🔄 [RESUME] Caricato checkpoint Refiner: {resume_ckpt_path} "
+                f"(Epoca {checkpoint.get('epoch', start_epoch - 1)}, LR_G: {scheduler_g.get_last_lr()[0]:.2e}, LR_D: {scheduler_d.get_last_lr()[0]:.2e})",
+                flush=True
+            )
+
+    refiner = nn.parallel.DistributedDataParallel(refiner, device_ids=[rank], output_device=rank)
+    discriminator = nn.parallel.DistributedDataParallel(
+        discriminator,
+        device_ids=[rank],
+        output_device=rank,
+        find_unused_parameters=True,
+        broadcast_buffers=False
+    )
 
     acoustic_loss_fn = AcousticStructuralLoss(alpha=1.0, beta=1.0).to(device)
 
@@ -143,9 +190,7 @@ def main():
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=seed)
     dataloader = DataLoader(dataset, batch_size=LOCAL_BATCH_SIZE, sampler=sampler, num_workers=4, pin_memory=True, drop_last=True)
 
-    save_dir = os.environ.get("REFINER_CHECKPOINT_DIR", os.path.join(src_root, ".models", "refiner_model"))
     if rank == 0:
-        os.makedirs(save_dir, exist_ok=True)
         print(f"📁 Checkpoint salvati in: {save_dir}", flush=True)
 
     total_steps = len(dataloader)
@@ -154,12 +199,13 @@ def main():
     if rank == 0:
         print("==========================================================", flush=True)
         print("🚀 Training Residual-GAN Refiner (1-Step Super-Resolution)", flush=True)
+        print(f"   • Epoche:                       {start_epoch} -> {end_epoch - 1} (su {total_planned} pianificate)", flush=True)
         print(f"   • U-Net Generator Parametri:    {sum(p.numel() for p in refiner.parameters() if p.requires_grad):,}", flush=True)
-        print(f"   • Patch Discriminator Parametri: {sum(p.numel() for p in discriminator.parameters() if p.requires_grad):,}", flush=True)
+        print(f"   • Conditional Patch Discriminator Parametri: {sum(p.numel() for p in discriminator.parameters() if p.requires_grad):,}", flush=True)
         print(f"   • Adv Weight: {args.adv_weight} | FM Weight: {args.fm_weight}", flush=True)
         print("==========================================================\n", flush=True)
 
-    for epoch in range(args.epochs):
+    for epoch in range(start_epoch, end_epoch):
         refiner.train()
         discriminator.train()
         sampler.set_epoch(epoch)
@@ -167,8 +213,9 @@ def main():
         running_d = 0.0
         epoch_start = time.time()
 
-        for step, (raw_audio, _) in enumerate(dataloader):
+        for step, (raw_audio, class_labels) in enumerate(dataloader):
             raw_audio = raw_audio.to(device, non_blocking=True)
+            class_labels = class_labels.to(device, non_blocking=True)
             fraction_id = np.random.choice([1, 3, 6, 12, 16, 24, 32])
 
             with torch.no_grad():
@@ -185,9 +232,9 @@ def main():
                 struct_loss = acoustic_loss_fn(x_refined, x_0_pristine)
                 hf_loss = high_frequency_gradient_loss(x_refined, x_0_pristine)
 
-                pred_fake, feats_fake = discriminator(x_refined)
+                pred_fake, feats_fake = discriminator(x_refined, class_idx=class_labels)
                 with torch.no_grad():
-                    _, feats_real = discriminator(x_0_pristine)
+                    _, feats_real = discriminator(x_0_pristine, class_idx=class_labels)
 
                 fm_loss = feature_matching_loss(feats_real, feats_fake)
                 adv_loss = -torch.mean(pred_fake)
@@ -201,8 +248,8 @@ def main():
             # 2. PASSO DISCRIMINATORE
             optimizer_d.zero_grad(set_to_none=True)
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                pred_real_d, _ = discriminator(x_0_pristine)
-                pred_fake_d, _ = discriminator(x_refined.detach())
+                pred_real_d, _ = discriminator(x_0_pristine, class_idx=class_labels)
+                pred_fake_d, _ = discriminator(x_refined.detach(), class_idx=class_labels)
 
                 loss_d_real = torch.mean(F.relu(1.0 - pred_real_d))
                 loss_d_fake = torch.mean(F.relu(1.0 + pred_fake_d))
@@ -220,7 +267,7 @@ def main():
                 avg_d = running_d / print_freq
                 if rank == 0:
                     percent = ((step + 1) / total_steps) * 100
-                    print(f"⏱️ Epoch [{epoch:02d}/{args.epochs-1:02d}] | Progress: {percent:5.1f}% | "
+                    print(f"⏱️ Epoch [{epoch:02d}/{end_epoch-1:02d}] | Progress: {percent:5.1f}% | "
                           f"G-Loss: {avg_g:.4f} (Adv: {adv_loss.item():.3f}, HF: {hf_loss.item():.4f}) | "
                           f"D-Loss: {avg_d:.4f}", flush=True)
                 running_g = 0.0
@@ -233,7 +280,7 @@ def main():
             elapsed = time.time() - epoch_start
             print(f"📢 Epoch {epoch:02d} completata in {elapsed:.1f}s ({elapsed/60:.2f} min).\n", flush=True)
 
-            if (epoch + 1) % 5 == 0 or epoch == (args.epochs - 1):
+            if (epoch + 1) % 5 == 0 or epoch == (end_epoch - 1):
                 ckpt_path = os.path.join(save_dir, f"refiner_epoch_{epoch}.pt")
                 torch.save({
                     'epoch': epoch,
@@ -241,6 +288,9 @@ def main():
                     'discriminator_state_dict': discriminator.module.state_dict(),
                     'optimizer_g_state_dict': optimizer_g.state_dict(),
                     'optimizer_d_state_dict': optimizer_d.state_dict(),
+                    'scheduler_g_state_dict': scheduler_g.state_dict(),
+                    'scheduler_d_state_dict': scheduler_d.state_dict(),
+                    'num_classes': num_classes,
                 }, ckpt_path)
                 print(f"💾 Checkpoint Refiner salvato in: {ckpt_path}\n", flush=True)
 
@@ -250,4 +300,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

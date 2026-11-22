@@ -87,7 +87,7 @@ class MelRefinerUNet(nn.Module):
         u1 = self.dec1(torch.cat([u1, h1], dim=1))
 
         residual = self.out_conv(F.silu(self.out_norm(u1)))
-        
+
         # Connessione residua globale: la rete predice il differenziale di iperrisoluzione
         return x_cond + residual
 
@@ -99,10 +99,10 @@ class MelRefinerUNet(nn.Module):
 
 class RefinerPatchDiscriminator(nn.Module):
     """
-    Discriminatore multi-scala/patch per spettrogrammi [B, 1, 64, 1152].
-    Estrae feature intermedie per la feature matching loss.
+    Discriminatore multi-scala/patch condizionale con Projection Discriminator
+    allineato a DiscriminatorWithFeatures del VAE per spettrogrammi [B, 1, 64, 1152].
     """
-    def __init__(self, in_channels=1, ndf=32):
+    def __init__(self, in_channels=1, ndf=32, num_classes=22):
         super().__init__()
         self.layer1 = nn.Sequential(
             nn.Conv2d(in_channels, ndf, kernel_size=4, stride=2, padding=1),
@@ -125,7 +125,10 @@ class RefinerPatchDiscriminator(nn.Module):
         )
         self.out_conv = nn.Conv2d(ndf * 4, 1, kernel_size=3, padding=1)
 
-    def forward(self, x):
+        self.class_emb = nn.Embedding(num_classes, ndf * 4)
+        nn.init.normal_(self.class_emb.weight, std=0.02)
+
+    def forward(self, x, class_idx=None):
         features = []
         h = self.layer1(x)
         features.append(h)
@@ -136,4 +139,12 @@ class RefinerPatchDiscriminator(nn.Module):
         h = self.layer4(h)
         features.append(h)
         out = self.out_conv(h)
+
+        if class_idx is not None:
+            h_pool = torch.mean(h, dim=(2, 3))
+            c_vec = self.class_emb(class_idx)
+            scale = 1.0 / (c_vec.shape[-1] ** 0.5)
+            proj_term = (torch.sum(h_pool * c_vec, dim=1, keepdim=True) * scale)[:, :, None, None]
+            out = out + proj_term
+
         return out, features
